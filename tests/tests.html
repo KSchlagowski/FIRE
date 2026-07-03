@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FIRE Companion — testy silnika</title>
+  <style>
+    body { font-family: ui-monospace, Consolas, monospace; background: #0f172a; color: #e2e8f0; padding: 1rem; }
+    .ok { color: #22c55e; }
+    .fail { color: #ef4444; white-space: pre-wrap; }
+    h1 { font-size: 1.1rem; }
+  </style>
+</head>
+<body>
+  <h1>FIRE Companion — testy silnika</h1>
+  <div id="out">Ładowanie…</div>
+  <script type="module">
+    import { runAll } from './test-engine.mjs';
+    const results = runAll();
+    const failed = results.filter(r => !r.ok).length;
+    document.getElementById('out').innerHTML =
+      results.map(r => r.ok
+        ? `<div class="ok">✓ ${r.name}</div>`
+        : `<div class="fail">✗ ${r.name}\n  ${r.error}</div>`
+      ).join('') +
+      `<p>${results.length - failed}/${results.length} testów zaliczonych</p>`;
+  </script>
+</body>
+</html>

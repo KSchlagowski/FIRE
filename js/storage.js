@@ -1,0 +1,133 @@
+// storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
+// migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
+
+export const SCHEMA_VERSION = 1;
+export const KEY = 'fireApp';
+export const BAK = 'fireApp.bak';
+export const APP_TAG = 'fire-companion';
+
+function memoryBacking() {
+  const m = new Map();
+  return {
+    getItem: k => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)),
+    removeItem: k => m.delete(k),
+  };
+}
+
+const defaultBacking = (typeof localStorage !== 'undefined') ? localStorage : memoryBacking();
+
+export function validateState(s) {
+  if (!s || typeof s !== 'object') throw new Error('Stan nie jest obiektem');
+  if (typeof s.version !== 'number') throw new Error('Brak wersji schematu');
+  if (s.version > SCHEMA_VERSION) {
+    throw new Error(`Dane z nowszej wersji aplikacji (v${s.version}) — zaktualizuj aplikację`);
+  }
+  if (!/^\d{4}-\d{2}$/.test(s.anchorMonth || '')) throw new Error('Nieprawidłowy anchorMonth');
+  if (!s.assumptions || typeof s.assumptions.withdrawalRate !== 'number') {
+    throw new Error('Brak założeń');
+  }
+  if (!Array.isArray(s.entries)) throw new Error('Brak listy wpisów');
+  for (const e of s.entries) {
+    if (!/^\d{4}-\d{2}$/.test(e.month) || typeof e.earned !== 'number' || typeof e.spent !== 'number') {
+      throw new Error('Uszkodzony wpis w historii');
+    }
+  }
+  if (!s.housing) throw new Error('Brak sekcji mieszkaniowej');
+  return s;
+}
+
+// Łańcuch migracji: każda wersja podnosi o 1. v1 = identyczność.
+export function migrate(s) {
+  let cur = s;
+  switch (cur.version) {
+    case 1:
+      break;
+    default:
+      throw new Error(`Nieznana wersja schematu: ${cur.version}`);
+  }
+  return cur;
+}
+
+function stripDerived(state) {
+  const { derived, ...rest } = state;
+  return rest;
+}
+
+export function makeStorage(backing = defaultBacking) {
+  return {
+    // → { state, recovered? } | { fresh: true } | { corrupt: true, error }
+    load() {
+      const raw = backing.getItem(KEY);
+      if (raw == null) return { fresh: true };
+      try {
+        return { state: migrate(validateState(JSON.parse(raw))) };
+      } catch (err) {
+        const bak = backing.getItem(BAK);
+        if (bak != null) {
+          try {
+            return { state: migrate(validateState(JSON.parse(bak))), recovered: true };
+          } catch { /* obie kopie padły */ }
+        }
+        return { corrupt: true, error: String(err && err.message || err) };
+      }
+    },
+
+    // .bak zapisywany PRZED każdym zapisem; quota łapana (ostrzeżenie po polsku).
+    save(state) {
+      try {
+        const cur = backing.getItem(KEY);
+        if (cur != null) backing.setItem(BAK, cur);
+        backing.setItem(KEY, JSON.stringify(stripDerived(state)));
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          error: 'Nie udało się zapisać danych (brak miejsca w pamięci przeglądarki). ' +
+            'Wyeksportuj kopię zapasową i wyczyść dane innych stron.',
+          detail: String(err && err.message || err),
+        };
+      }
+    },
+
+    reset() {
+      backing.removeItem(KEY);
+      backing.removeItem(BAK);
+    },
+  };
+}
+
+export const storage = makeStorage();
+
+// ── Eksport / import ────────────────────────────────────────────────────
+
+export function exportJSON(state, now = new Date()) {
+  return JSON.stringify({
+    app: APP_TAG,
+    version: SCHEMA_VERSION,
+    exportedAt: now.toISOString(),
+    state: stripDerived(state),
+  }, null, 2);
+}
+
+export function importPreview(text) {
+  const doc = JSON.parse(text);
+  if (doc.app !== APP_TAG) throw new Error('To nie jest kopia zapasowa FIRE Companion');
+  if (typeof doc.version !== 'number' || doc.version > SCHEMA_VERSION) {
+    throw new Error('Kopia z nowszej wersji aplikacji — najpierw zaktualizuj aplikację');
+  }
+  const state = migrate(validateState(doc.state));
+  const months = state.entries.map(e => e.month).sort();
+  return {
+    state,
+    exportedAt: doc.exportedAt || null,
+    entriesCount: state.entries.length,
+    range: months.length ? { from: months[0], to: months[months.length - 1] } : null,
+    portfolioStart: state.assumptions.portfolioStart,
+    cashStart: state.assumptions.cashStart,
+  };
+}
+
+export function importJSON(text) {
+  return importPreview(text).state;
+}

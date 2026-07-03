@@ -1,0 +1,602 @@
+// engine.js — czysty silnik finansowy FIRE Companion.
+// Zero DOM, zero storage. Wszystkie kwoty w REALNYCH zł, chyba że
+// identyfikator kończy się na "Nominal" (kredyt to kontrakt nominalny).
+
+export const EPS = 0.005;
+export const HORIZON_MONTHS = 720;
+
+// ── Pieniądze ────────────────────────────────────────────────────────────
+
+export function roundGrosze(x) {
+  return Math.round(x * 100) / 100;
+}
+
+// ── Czas: miesiące "YYYY-MM", arytmetyka na indeksach całkowitych ───────
+// Nigdy new Date("YYYY-MM") — pułapka przesunięcia UTC.
+
+export function ymToIdx(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return y * 12 + (m - 1);
+}
+
+export function idxToYm(idx) {
+  const y = Math.floor(idx / 12);
+  const m = (idx % 12) + 1;
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+
+export function monthsBetween(a, b) {
+  return ymToIdx(b) - ymToIdx(a);
+}
+
+export function addMonths(ym, n) {
+  return idxToYm(ymToIdx(ym) + n);
+}
+
+export function isValidYm(ym) {
+  return typeof ym === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(ym);
+}
+
+// "Dzisiejszy miesiąc" wyłącznie z lokalnego czasu.
+export function todayYm(now = new Date()) {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export function lastCompleteMonth(now = new Date()) {
+  return addMonths(todayYm(now), -1);
+}
+
+// Rok planu t = 1, 2, 3… liczony od anchorMonth (wzrosty schodkowe roczne).
+export function planYear(anchor, ym) {
+  return Math.floor(Math.max(0, monthsBetween(anchor, ym)) / 12) + 1;
+}
+
+export function ageAt(birthDate, ym) {
+  const [by, bm] = birthDate.split('-').map(Number);
+  const totalMonths = ymToIdx(ym) - (by * 12 + (bm - 1));
+  return { years: Math.floor(totalMonths / 12), months: totalMonths % 12, totalMonths };
+}
+
+// ── Stopy i konwersje real/nominal ──────────────────────────────────────
+
+export function monthlyRate(annual) {
+  return Math.pow(1 + annual, 1 / 12) - 1;
+}
+
+export function toNominal(real, anchor, ym, infl) {
+  return real * Math.pow(1 + infl, monthsBetween(anchor, ym) / 12);
+}
+
+export function toReal(nominal, anchor, ym, infl) {
+  return nominal / Math.pow(1 + infl, monthsBetween(anchor, ym) / 12);
+}
+
+// Konwencja roczna Excela (arkusz Projekcja): end = (start + wpłaty) × (1+r).
+// Używana tylko do testów parytetu z arkuszem.
+export function yearlyCompound(start, contribYearly, r, years) {
+  let bal = start;
+  for (let i = 0; i < years; i++) bal = (bal + contribYearly) * (1 + r);
+  return bal;
+}
+
+// ── Cel FIRE (ruchomy) ──────────────────────────────────────────────────
+
+export function fireTargetAt(state, ym) {
+  const a = state.assumptions;
+  if (!(a.withdrawalRate > 0)) throw new Error('withdrawalRate musi być > 0');
+  const t = planYear(state.anchorMonth, ym);
+  const living = a.monthlyLivingExpenses * Math.pow(1 + a.expenseGrowthReal, t - 1);
+  const houseOn = !!(state.housing.housePlan && state.housing.housePlan.enabled);
+  // Z domem: cel = tylko koszty życia. Bez domu: czynsz na zawsze (stały realnie).
+  const rent = houseOn ? 0 : (state.housing.currentRentMonthly || 0);
+  return (living + rent) * 12 / a.withdrawalRate;
+}
+
+export function fireTargetsToday(state, nowYm = todayYm()) {
+  const a = state.assumptions;
+  const primary = fireTargetAt(state, nowYm);
+  const houseOn = !!(state.housing.housePlan && state.housing.housePlan.enabled);
+  const rentPart = (state.housing.currentRentMonthly || 0) * 12 / a.withdrawalRate;
+  return {
+    primary,
+    rentingForever: houseOn ? primary + rentPart : primary,
+  };
+}
+
+// ── Kredyt hipoteczny (nominalny) ───────────────────────────────────────
+
+export function mortgagePayment(mtg) {
+  if (!mtg || !(mtg.termYears > 0)) throw new Error('termYears musi być > 0');
+  if (mtg.paymentOverrideMonthly != null) return mtg.paymentOverrideMonthly;
+  const N = Math.round(mtg.termYears * 12);
+  const j = monthlyRate(mtg.rateNominal);
+  if (j === 0) return mtg.principal / N;
+  return mtg.principal * j / (1 - Math.pow(1 + j, -N));
+}
+
+// Jeden miesiąc kredytu. spill = nadpłata ponad spłatę — wraca do inwestycji.
+export function mortgageStep(balNominal, j, payment, overpayNominal = 0) {
+  const interest = balNominal * j;
+  const pay = payment + overpayNominal;
+  let principalPaid = pay - interest;
+  let spill = 0;
+  if (principalPaid >= balNominal - EPS) {
+    spill = Math.max(0, principalPaid - balNominal);
+    principalPaid = balNominal;
+  }
+  let bal = balNominal - principalPaid;
+  if (bal < EPS) bal = 0;
+  return { bal, interest, principalPaid, spill };
+}
+
+export function amortizationSchedule(mtg) {
+  const j = monthlyRate(mtg.rateNominal);
+  const A = mortgagePayment(mtg);
+  const N = Math.round(mtg.termYears * 12);
+  const rows = [];
+  let bal = mtg.principal;
+  for (let i = 0; i < N && bal > 0; i++) {
+    const step = mortgageStep(bal, j, A);
+    bal = step.bal;
+    rows.push({ n: i + 1, balNominal: bal, interest: step.interest, principalPaid: step.principalPaid });
+  }
+  return rows;
+}
+
+// ── Plan fazowy (benchmark, nie stan faktyczny) ─────────────────────────
+// Rata w planie deflowana schodkowo rocznie: A·(1+infl)^−(t−1).
+// Świadomy błąd: benchmark lekko konserwatywny (deflator roczny zamiast miesięcznego).
+
+export function buildPlan(state, horizon = HORIZON_MONTHS) {
+  const a = state.assumptions;
+  const h = state.housing;
+  const hp = h.housePlan;
+  const houseOn = !!(hp && hp.enabled);
+  const a0 = ymToIdx(state.anchorMonth);
+  const A = houseOn ? mortgagePayment(hp.mortgage) : 0;
+  const mStart = houseOn ? ymToIdx(hp.mortgage.startMonth) : Infinity;
+  const mEnd = houseOn ? mStart + Math.round(hp.mortgage.termYears * 12) : Infinity;
+  const moveIn = houseOn && hp.moveInMonth ? ymToIdx(hp.moveInMonth) : Infinity;
+  const bizStart = houseOn && hp.businessStartMonth ? ymToIdx(hp.businessStartMonth) : Infinity;
+  const rows = [];
+  for (let i = 0; i < horizon; i++) {
+    const idx = a0 + i;
+    const ym = idxToYm(idx);
+    const t = Math.floor(i / 12) + 1;
+    const incomeReal = a.monthlyIncome * Math.pow(1 + a.incomeGrowthReal, t - 1)
+      + (idx >= bizStart ? (hp.businessIncomeMonthly || 0) : 0);
+    const livingReal = a.monthlyLivingExpenses * Math.pow(1 + a.expenseGrowthReal, t - 1);
+    const rentReal = (houseOn ? idx < moveIn : true) ? (h.currentRentMonthly || 0) : 0;
+    const inTerm = idx >= mStart && idx < mEnd;
+    const mortgagePaymentReal = inTerm ? A * Math.pow(1 + a.inflationAnnual, -(t - 1)) : 0;
+    const plannedSavings = incomeReal - livingReal - rentReal - mortgagePaymentReal;
+    const targetReal = fireTargetAt(state, ym);
+    const phase = houseOn ? (idx < mStart ? 'saving' : inTerm ? 'debt' : 'invest') : 'invest';
+    rows.push({ ym, t, incomeReal, livingReal, rentReal, mortgagePaymentReal, plannedSavings, targetReal, phase });
+  }
+  return rows;
+}
+
+export function plannedSavingsFor(plan, ym) {
+  const i = ymToIdx(ym) - ymToIdx(plan[0].ym);
+  if (i < 0 || i >= plan.length) return 0;
+  return plan[i].plannedSavings;
+}
+
+// ── Replay długu (pochodna, nigdy nie zapisywana) ───────────────────────
+// Rata planowa zakładana jako płacona także w miesiącach bez wpisu.
+// Nadpłaty z wpisów wchodzą bez konwersji (wpisane "teraz" = nominał teraz).
+
+export function replayDebt(state, uptoYm) {
+  const hp = state.housing.housePlan;
+  const empty = {
+    active: false, started: false, balanceNominal: 0, balanceReal: 0,
+    paidPct: 0, rows: [], byMonth: new Map(),
+  };
+  if (!hp || !hp.enabled) return empty;
+  const mtg = hp.mortgage;
+  const j = monthlyRate(mtg.rateNominal);
+  const A = mortgagePayment(mtg);
+  const start = ymToIdx(mtg.startMonth);
+  const upto = ymToIdx(uptoYm);
+  if (upto < start) return { ...empty, byMonth: new Map() };
+
+  const entriesByMonth = new Map(state.entries.map(e => [ymToIdx(e.month), e]));
+  const overrides = new Map((state.debt.overrides || []).map(o => [ymToIdx(o.month), o.balanceNominal]));
+  let bal = mtg.principal;
+  const rows = [];
+  const byMonth = new Map();
+  for (let idx = start; idx <= upto; idx++) {
+    const balStart = bal;
+    let interest = 0, principalPaid = 0, spill = 0;
+    if (bal > 0) {
+      const e = entriesByMonth.get(idx);
+      const overpay = e ? (e.overpayment || 0) : 0;
+      const step = mortgageStep(bal, j, A, overpay);
+      bal = step.bal;
+      interest = step.interest;
+      principalPaid = step.principalPaid;
+      spill = step.spill;
+    }
+    if (overrides.has(idx)) bal = overrides.get(idx); // korekta ręczna resetuje łańcuch
+    byMonth.set(idx, { balStart, bal, spill });
+    rows.push({ ym: idxToYm(idx), balNominal: bal, interest, principalPaid, spill });
+  }
+  return {
+    active: bal > 0,
+    started: true,
+    balanceNominal: bal,
+    balanceReal: toReal(bal, state.anchorMonth, uptoYm, state.assumptions.inflationAnnual),
+    paidPct: mtg.principal > 0 ? (mtg.principal - bal) / mtg.principal : 0,
+    rows,
+    byMonth,
+  };
+}
+
+// ── Replay sald: gotówka (fundusz na dom) + portfel inwestycyjny ────────
+// Routing wg fazy: przed startem kredytu → gotówka; w długu → gotówka;
+// po spłacie (lub bez planu domu) → portfel. Deficyty drenują najpierw
+// gotówkę, potem portfel. Miesiące bez wpisu: tylko wzrost.
+
+export function replayBalances(state, uptoYm, debtRes = null) {
+  const a = state.assumptions;
+  const a0 = ymToIdx(state.anchorMonth);
+  const upto = ymToIdx(uptoYm);
+  const rPort = monthlyRate(a.realReturnAnnual);
+  const rCash = monthlyRate(a.cashReturnReal || 0);
+  const hp = state.housing.housePlan;
+  const houseOn = !!(hp && hp.enabled);
+  const debt = debtRes || replayDebt(state, uptoYm);
+  const mStart = houseOn ? ymToIdx(hp.mortgage.startMonth) : Infinity;
+  const hsMonth = houseOn ? ymToIdx((hp.houseSpend && hp.houseSpend.month) || hp.mortgage.startMonth) : Infinity;
+  const hsAmount = houseOn && hp.houseSpend ? hp.houseSpend.amount : null;
+  const entriesByMonth = new Map(state.entries.map(e => [ymToIdx(e.month), e]));
+
+  let cash = a.cashStart || 0;
+  let portfolio = a.portfolioStart || 0;
+  let houseUnderfunded = false;
+  let houseSpent = 0;
+  const rows = [];
+
+  for (let idx = a0; idx <= upto; idx++) {
+    const e = entriesByMonth.get(idx);
+    const net = e ? roundGrosze(e.earned - e.spent) : 0;
+    const contribution = e ? roundGrosze(net - (e.overpayment || 0)) : 0;
+    const d = debt.byMonth.get(idx);
+    let phase;
+    if (!houseOn) phase = 'invest';
+    else if (idx < mStart) phase = 'saving';
+    else if (d && d.balStart > EPS) phase = 'debt';
+    else phase = 'invest';
+
+    if (contribution >= 0) {
+      if (phase === 'saving' || phase === 'debt') cash += contribution;
+      else portfolio += contribution;
+    } else {
+      let deficit = -contribution;
+      const fromCash = Math.min(cash, deficit);
+      cash -= fromCash;
+      deficit -= fromCash;
+      portfolio -= deficit;
+    }
+
+    if (d && d.spill > 0) portfolio += d.spill; // nadpłata ponad spłatę wraca do inwestycji
+
+    if (idx === hsMonth) {
+      const amount = hsAmount == null ? cash : hsAmount; // null = "cała gotówka"
+      const fromCash = Math.min(cash, amount);
+      cash -= fromCash;
+      let rest = amount - fromCash;
+      const fromPort = Math.min(portfolio, rest);
+      portfolio -= fromPort;
+      rest -= fromPort;
+      if (rest > EPS) houseUnderfunded = true;
+      houseSpent = amount - rest;
+    }
+
+    cash *= 1 + rCash;
+    portfolio *= 1 + rPort;
+
+    if (e && e.cashOverride != null) cash = e.cashOverride;
+    if (e && e.balanceOverride != null) portfolio = e.balanceOverride;
+
+    rows.push({ ym: idxToYm(idx), cash, portfolio, net, contribution, phase, hasEntry: !!e });
+  }
+  return { cash, portfolio, rows, houseUnderfunded, houseSpent };
+}
+
+// ── Werdykt i seria ─────────────────────────────────────────────────────
+// Skala S = max(|plan|, 500): odtwarza progi ×1.15/×0.6 ze spec dla plan > 500,
+// rozszerza je w sposób ciągły na plan ≤ 0.
+
+export function computeVerdict(net, plan) {
+  const S = Math.max(Math.abs(plan), 500);
+  if (net >= plan + 0.15 * S) return 'crushed';
+  if (net >= plan) return 'on_plan';
+  if (net >= plan - 0.40 * S) return 'behind';
+  return 'hard';
+}
+
+export function isGoodVerdict(v) {
+  return v === 'crushed' || v === 'on_plan';
+}
+
+// Brakujące miesiące są pomijane (nie przerywają i nie wydłużają serii).
+export function computeStreak(entries) {
+  const sorted = [...entries].sort((x, y) => (x.month < y.month ? -1 : 1));
+  let run = 0, best = 0;
+  for (const e of sorted) {
+    if (isGoodVerdict(e.verdict)) { run++; if (run > best) best = run; }
+    else run = 0;
+  }
+  return { current: run, best };
+}
+
+// ── Check-in ────────────────────────────────────────────────────────────
+
+export function applyCheckIn(state, input, now = new Date()) {
+  const { month } = input;
+  if (!isValidYm(month)) throw new Error('Nieprawidłowy miesiąc');
+  const existing = state.entries.find(e => e.month === month);
+  const lastOk = lastCompleteMonth(now);
+  if (ymToIdx(month) > ymToIdx(lastOk)) throw new Error('Miesiąc jeszcze się nie skończył');
+  if (!existing && ymToIdx(month) < ymToIdx(state.anchorMonth)) {
+    throw new Error('Miesiąc sprzed startu planu');
+  }
+  const earned = roundGrosze(Number(input.earned));
+  const spent = roundGrosze(Number(input.spent));
+  const overpayment = roundGrosze(Number(input.overpayment || 0));
+  if (!(earned >= 0) || !(spent >= 0)) throw new Error('Kwoty muszą być liczbami ≥ 0');
+  if (overpayment < 0) throw new Error('Nadpłata nie może być ujemna');
+  if (overpayment > 0) {
+    const debt = replayDebt(state, month);
+    const d = debt.byMonth.get(ymToIdx(month));
+    if (!d || d.balStart <= EPS) throw new Error('Nadpłata możliwa tylko przy aktywnym kredycie');
+  }
+
+  const plan = buildPlan(state);
+  // Snapshot planu zamrożony przy tworzeniu; jawna edycja go odświeża.
+  const plannedSavingsSnapshot = plannedSavingsFor(plan, month);
+  const net = roundGrosze(earned - spent);
+  const entry = {
+    month, earned, spent, overpayment,
+    cashOverride: input.cashOverride != null ? roundGrosze(Number(input.cashOverride)) : null,
+    balanceOverride: input.balanceOverride != null ? roundGrosze(Number(input.balanceOverride)) : null,
+    plannedSavingsSnapshot,
+    verdict: computeVerdict(net, plannedSavingsSnapshot),
+    createdAt: existing ? existing.createdAt : now.toISOString(),
+    updatedAt: existing ? now.toISOString() : null,
+  };
+  if (existing) {
+    state.entries[state.entries.indexOf(existing)] = entry;
+  } else {
+    state.entries.push(entry);
+    state.entries.sort((x, y) => (x.month < y.month ? -1 : 1));
+  }
+  recomputeDerived(state, now);
+  return entry;
+}
+
+export function deleteEntry(state, month, now = new Date()) {
+  const i = state.entries.findIndex(e => e.month === month);
+  if (i >= 0) state.entries.splice(i, 1);
+  recomputeDerived(state, now);
+}
+
+// Re-kotwiczenie po edycji dochodu/wydatków/czynszu: salda przenoszone na
+// nową kotwicę, historia (wpisy, werdykty) pozostaje bez zmian.
+export function reanchor(state, newAnchor, now = new Date()) {
+  if (newAnchor === state.anchorMonth) return;
+  if (ymToIdx(newAnchor) > ymToIdx(state.anchorMonth)) {
+    const upto = addMonths(newAnchor, -1);
+    if (ymToIdx(upto) >= ymToIdx(state.anchorMonth)) {
+      const debt = replayDebt(state, upto);
+      const bal = replayBalances(state, upto, debt);
+      state.assumptions.cashStart = roundGrosze(bal.cash);
+      state.assumptions.portfolioStart = roundGrosze(bal.portfolio);
+    }
+  }
+  state.anchorMonth = newAnchor;
+  recomputeDerived(state, now);
+}
+
+// ── Prognoza ────────────────────────────────────────────────────────────
+
+// Średnia (net − snapshot) z ostatnich min(6, n) wpisów; 0 gdy n < 3
+// (wtedy etykieta "prognoza wg planu").
+export function assumedDelta(entries) {
+  const sorted = [...entries].sort((x, y) => (x.month < y.month ? -1 : 1));
+  const n = sorted.length;
+  if (n < 3) return 0;
+  const last = sorted.slice(-Math.min(6, n));
+  const sum = last.reduce((acc, e) => acc + (e.earned - e.spent) - e.plannedSavingsSnapshot, 0);
+  return sum / last.length;
+}
+
+export function projectFire(state, plan, balances, debtRes, uptoYm) {
+  const a = state.assumptions;
+  const anchor = state.anchorMonth;
+  const a0 = ymToIdx(anchor);
+  const upto = ymToIdx(uptoYm);
+  const delta = assumedDelta(state.entries);
+  const byPlanOnly = state.entries.length < 3;
+  const rPort = monthlyRate(a.realReturnAnnual);
+  const rCash = monthlyRate(a.cashReturnReal || 0);
+  const hp = state.housing.housePlan;
+  const houseOn = !!(hp && hp.enabled);
+  const j = houseOn ? monthlyRate(hp.mortgage.rateNominal) : 0;
+  const A = houseOn ? mortgagePayment(hp.mortgage) : 0;
+  const mStart = houseOn ? ymToIdx(hp.mortgage.startMonth) : Infinity;
+  const hsMonth = houseOn ? ymToIdx((hp.houseSpend && hp.houseSpend.month) || hp.mortgage.startMonth) : Infinity;
+  const hsAmount = houseOn && hp.houseSpend ? hp.houseSpend.amount : null;
+
+  let cash = balances.cash;
+  let portfolio = balances.portfolio;
+  let debtBal = 0;
+  let debtStarted = false;
+  if (houseOn && debtRes.started) {
+    debtBal = debtRes.balanceNominal;
+    debtStarted = true;
+  }
+  let houseDone = houseOn ? upto >= hsMonth : true;
+  let houseShortfall = false;
+
+  const series = balances.rows.map(r => ({
+    ym: r.ym, cash: r.cash, portfolio: r.portfolio,
+    debtReal: (debtRes.byMonth.get(ymToIdx(r.ym)) || { bal: 0 }).bal
+      / Math.pow(1 + a.inflationAnnual, monthsBetween(anchor, r.ym) / 12),
+    target: fireTargetAt(state, r.ym),
+    projected: false,
+  }));
+
+  let fireYm = null;
+  let debtFreeYm = null;
+  if (debtStarted && debtBal <= EPS) debtFreeYm = uptoYm;
+
+  const startIdx = Math.max(upto + 1, a0);
+  for (let idx = startIdx; idx < a0 + plan.length; idx++) {
+    const pm = plan[idx - a0];
+    const ym = pm.ym;
+    if (houseOn && idx >= mStart && !debtStarted) {
+      debtBal = hp.mortgage.principal;
+      debtStarted = true;
+    }
+    const debtActive = houseOn && debtStarted && debtBal > 0;
+    const s = pm.plannedSavings + delta;
+
+    if (debtActive) {
+      // Strategia: cała nadwyżka nadpłaca kredyt (konwersja na nominał).
+      const overpayNominal = s > 0 ? toNominal(s, anchor, ym, a.inflationAnnual) : 0;
+      const step = mortgageStep(debtBal, j, A, overpayNominal);
+      debtBal = step.bal;
+      if (step.spill > 0) portfolio += toReal(step.spill, anchor, ym, a.inflationAnnual);
+      if (s < 0) {
+        let deficit = -s;
+        const fromCash = Math.min(cash, deficit);
+        cash -= fromCash;
+        portfolio -= deficit - fromCash;
+      }
+      if (debtBal <= EPS && !debtFreeYm) { debtBal = 0; debtFreeYm = ym; }
+    } else if (houseOn && idx < mStart) {
+      if (s >= 0) cash += s;
+      else {
+        let deficit = -s;
+        const fromCash = Math.min(cash, deficit);
+        cash -= fromCash;
+        portfolio -= deficit - fromCash;
+      }
+    } else {
+      if (s >= 0) portfolio += s;
+      else {
+        let deficit = -s;
+        const fromCash = Math.min(cash, deficit);
+        cash -= fromCash;
+        portfolio -= deficit - fromCash;
+      }
+    }
+
+    if (houseOn && idx === hsMonth && !houseDone) {
+      const amount = hsAmount == null ? cash : hsAmount;
+      const fromCash = Math.min(cash, amount);
+      cash -= fromCash;
+      let rest = amount - fromCash;
+      const fromPort = Math.min(portfolio, rest);
+      portfolio -= fromPort;
+      rest -= fromPort;
+      if (rest > EPS) houseShortfall = true; // "plan zakłada niedobór wkładu"
+      houseDone = true;
+    }
+
+    cash *= 1 + rCash;
+    portfolio *= 1 + rPort;
+
+    series.push({
+      ym, cash, portfolio,
+      debtReal: toReal(debtBal, anchor, ym, a.inflationAnnual),
+      target: pm.targetReal,
+      projected: true,
+    });
+
+    const houseSettled = !houseOn || (debtStarted && debtBal <= EPS && idx >= hsMonth);
+    if (!fireYm && houseSettled && portfolio >= pm.targetReal - EPS) {
+      fireYm = ym;
+      break;
+    }
+  }
+
+  const reached = fireYm != null;
+  const fireAge = reached ? ageAt(state.profile.birthDate, fireYm) : null;
+  const onTrack = reached && fireAge.totalMonths <= state.assumptions.targetFireAge * 12;
+  return { reached, fireYm, fireAge, debtFreeYm, onTrack, series, delta, byPlanOnly, houseShortfall };
+}
+
+// ── Jeden potok po każdej mutacji ───────────────────────────────────────
+// Pochodne trzymane na state.derived — nigdy nie utrwalane jako prawda.
+
+export function recomputeDerived(state, now = new Date()) {
+  const plan = buildPlan(state);
+  let upto = lastCompleteMonth(now);
+  // Wpisy mogą sięgać dalej niż "ostatni pełny miesiąc" tylko przy cofniętym zegarze — nie wspieramy.
+  const debt = replayDebt(state, upto);
+  const balances = replayBalances(state, upto, debt);
+  const streak = computeStreak(state.entries);
+  const projection = projectFire(state, plan, balances, debt, upto);
+  state.derived = { plan, balances, debt, streak, projection, uptoYm: upto };
+  return state;
+}
+
+// ── Stan początkowy ─────────────────────────────────────────────────────
+
+export function defaultAssumptions() {
+  return {
+    monthlyIncome: 0,
+    monthlyLivingExpenses: 0,
+    cashStart: 0,
+    portfolioStart: 0,
+    cashReturnReal: 0,
+    targetFireAge: 0,
+    withdrawalRate: 0.04,
+    realReturnAnnual: 0.05,
+    expenseGrowthReal: 0.01,
+    incomeGrowthReal: 0.03,
+    inflationAnnual: 0.03,
+  };
+}
+
+export function createState(partial = {}, now = new Date()) {
+  const state = {
+    version: 1,
+    createdAt: now.toISOString(),
+    anchorMonth: todayYm(now),
+    profile: { birthDate: '' },
+    assumptions: defaultAssumptions(),
+    housing: {
+      currentRentMonthly: 0,
+      housePlan: {
+        enabled: false,
+        moveInMonth: null,
+        houseSpend: { month: null, amount: null },
+        businessIncomeMonthly: 0,
+        businessStartMonth: null,
+        mortgage: { startMonth: null, principal: 0, rateNominal: 0, termYears: 0, paymentOverrideMonthly: null },
+      },
+    },
+    debt: { overrides: [] },
+    entries: [],
+    ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null },
+  };
+  deepMerge(state, partial);
+  return state;
+}
+
+function deepMerge(target, src) {
+  for (const k of Object.keys(src)) {
+    if (src[k] && typeof src[k] === 'object' && !Array.isArray(src[k])
+      && target[k] && typeof target[k] === 'object' && !Array.isArray(target[k])) {
+      deepMerge(target[k], src[k]);
+    } else {
+      target[k] = src[k];
+    }
+  }
+  return target;
+}
