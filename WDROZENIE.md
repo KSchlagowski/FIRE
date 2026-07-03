@@ -54,7 +54,7 @@ git push -u origin main
 
 ## Jak wydać aktualizację
 
-1. Zmień pliki lokalnie i sprawdź, że testy przechodzą: `node tests/run-tests.mjs`.
+1. Zmień pliki lokalnie i sprawdź, że testy przechodzą: `node tests/run-tests.js`.
 2. Podbij wersję cache w **`sw.js`** (`fire-v1.0.0` → `fire-v1.0.1`) oraz numer
    wersji w stopce **`index.html`** i w **`js/ui.js`** (`APP_VERSION`).
 3. Jeśli dodałeś **nowy plik** aplikacji — dopisz go do listy `PRECACHE` w `sw.js`!

@@ -1,5 +1,5 @@
 // node tests/run-tests.mjs → kod wyjścia 0 (wszystko zielone) lub 1.
-import { runAll } from './test-engine.mjs';
+import { runAll } from './test-engine.js';
 
 const results = runAll();
 let failed = 0;

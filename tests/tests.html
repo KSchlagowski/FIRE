@@ -15,7 +15,7 @@
   <h1>FIRE Companion — testy silnika</h1>
   <div id="out">Ładowanie…</div>
   <script type="module">
-    import { runAll } from './test-engine.mjs';
+    import { runAll } from './test-engine.js';
     const results = runAll();
     const failed = results.filter(r => !r.ok).length;
     document.getElementById('out').innerHTML =

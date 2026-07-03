@@ -43,7 +43,7 @@ WDROZENIE.md          # przewodnik wdrożenia na GitHub Pages
 ## Testy
 
 ```
-node tests/run-tests.mjs     # kod wyjścia 0 = wszystko zielone
+node tests/run-tests.js     # kod wyjścia 0 = wszystko zielone
 ```
 
 albo otwórz `tests/tests.html` w przeglądarce (przez serwer HTTP, patrz niżej).
@@ -65,7 +65,7 @@ routing dwóch kubełków i odzysk z kopii `.bak`.
 
 ## Checklist wydania
 
-- [ ] `node tests/run-tests.mjs` → 0 błędów
+- [ ] `node tests/run-tests.js` → 0 błędów
 - [ ] Podbita wersja `CACHE` w `sw.js` (np. `fire-v1.0.1`)
 - [ ] Podbita wersja w stopce `index.html` i `APP_VERSION` w `js/ui.js`
 - [ ] Nowe pliki aplikacji dopisane do `PRECACHE` w `sw.js`

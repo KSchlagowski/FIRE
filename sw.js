@@ -42,11 +42,18 @@ self.addEventListener('fetch', event => {
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
 
-  // Nawigacje → index.html z cache (app shell, działa offline).
+  // Nawigacje: cache → sieć → app shell (offline'owy fallback tylko,
+  // gdy nic innego nie ma; nie przechwytuje tests.html / tools).
   if (req.mode === 'navigate') {
-    event.respondWith(
-      caches.match('./index.html').then(hit => hit || fetch(req))
-    );
+    event.respondWith((async () => {
+      const cached = await caches.match(req, { ignoreSearch: true });
+      if (cached) return cached;
+      try {
+        return await fetch(req);
+      } catch {
+        return caches.match('./index.html');
+      }
+    })());
     return;
   }
 

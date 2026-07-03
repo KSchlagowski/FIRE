@@ -1,11 +1,11 @@
-// test-engine.mjs — asercje współdzielone przez przeglądarkę (tests.html)
+// test-engine.js — asercje współdzielone przez przeglądarkę (tests.html)
 // i Node (run-tests.mjs). Zero frameworków.
 
 import * as E from '../js/engine.js';
 import * as F from '../js/format.js';
 import * as S from '../js/storage.js';
 import { coachMessage } from '../js/coach.js';
-import { FIX } from './fixtures.mjs';
+import { FIX } from './fixtures.js';
 
 // ── Mini-harness ────────────────────────────────────────────────────────
 
