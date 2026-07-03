@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>FIRE Companion — generator ikon</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 1.5rem; }
+    canvas { border: 1px solid #334155; margin: .5rem; image-rendering: pixelated; }
+    a.dl { display: inline-block; margin: .5rem; color: #22c55e; }
+  </style>
+</head>
+<body>
+  <h1>Generator ikon (canvas → PNG)</h1>
+  <p>Otwórz ten plik w przeglądarce i kliknij linki, aby pobrać PNG do katalogu <code>icons/</code>.
+  Ikony są już wygenerowane i dodane do repozytorium — użyj tego narzędzia tylko, gdy chcesz je zmienić.</p>
+  <div id="out"></div>
+  <script>
+    function draw(size, contentScale) {
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const g = c.getContext('2d');
+      const cx = size / 2, cy = size / 2;
+      const R = size * 0.36 * contentScale;
+      const th = size * 0.11 * contentScale;
+      const fr = size * 0.155 * contentScale;
+
+      g.fillStyle = '#0f172a';
+      g.fillRect(0, 0, size, size);
+
+      // pierścień: tło + 78% postępu od godziny 12
+      g.lineWidth = th;
+      g.lineCap = 'round';
+      g.strokeStyle = '#334155';
+      g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
+      g.strokeStyle = '#22c55e';
+      g.beginPath(); g.arc(cx, cy, R, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * 0.78); g.stroke();
+
+      // płomień
+      const fcy = cy + fr * 0.45;
+      g.fillStyle = '#f97316';
+      g.beginPath();
+      g.moveTo(cx, cy - fr * 1.85);
+      g.quadraticCurveTo(cx + fr * 0.9, fcy - fr, cx + fr, fcy);
+      g.arc(cx, fcy, fr, 0, Math.PI);
+      g.quadraticCurveTo(cx - fr * 0.9, fcy - fr, cx, cy - fr * 1.85);
+      g.fill();
+      g.fillStyle = '#fdba74';
+      g.beginPath();
+      g.moveTo(cx, cy - fr * 0.55);
+      g.quadraticCurveTo(cx + fr * 0.45, fcy, cx, fcy + fr * 0.6);
+      g.quadraticCurveTo(cx - fr * 0.45, fcy, cx, cy - fr * 0.55);
+      g.fill();
+      return c;
+    }
+
+    const out = document.getElementById('out');
+    for (const [name, size, scale] of [
+      ['icon-192.png', 192, 1],
+      ['icon-512.png', 512, 1],
+      ['icon-maskable-512.png', 512, 0.72],
+    ]) {
+      const c = draw(size, scale);
+      c.style.width = '128px'; c.style.height = '128px';
+      out.appendChild(c);
+      const a = document.createElement('a');
+      a.className = 'dl';
+      a.textContent = '⬇ ' + name;
+      a.download = name;
+      a.href = c.toDataURL('image/png');
+      out.appendChild(a);
+      out.appendChild(document.createElement('br'));
+    }
+  </script>
+</body>
+</html>

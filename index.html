@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="description" content="FIRE Companion — prywatny, offline'owy licznik drogi do wolności finansowej.">
+  <title>FIRE Companion</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <span class="logo">🔥</span>
+      <h1>FIRE Companion</h1>
+      <span id="header-month" class="header-month"></span>
+    </header>
+    <main id="view" aria-live="polite"></main>
+    <footer class="app-footer">FIRE Companion v1.0.0 · dane tylko na tym urządzeniu</footer>
+    <nav id="tabbar" class="tabbar" hidden>
+      <a href="#/" data-route="#/"><span>📊</span>Pulpit</a>
+      <a href="#/history" data-route="#/history"><span>📅</span>Historia</a>
+      <a href="#/plan" data-route="#/plan"><span>⚙️</span>Plan</a>
+      <a href="#/backup" data-route="#/backup"><span>💾</span>Kopia</a>
+    </nav>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -55,6 +55,12 @@ export function formatMonthName(ym) {
   return `${MONTH_NAMES[m - 1]} ${y}`;
 }
 
+// Dopełniacz: "do czerwca 2028", "z końcem lipca 2026".
+export function formatMonthGenitive(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return `${MONTH_NAMES_GENITIVE[m - 1]} ${y}`;
+}
+
 export function parsePLN(str) {
   if (typeof str === 'number') return Math.round(str * 100) / 100;
   if (typeof str !== 'string') return null;
