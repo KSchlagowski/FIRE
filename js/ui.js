@@ -7,7 +7,7 @@ import * as Sim from './simulation.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.7.0';
+export const APP_VERSION = '1.9.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -550,6 +550,55 @@ function dashboardMode() {
   return 'accumulation';
 }
 
+// Czy FIRE jest osiągnięte „tu i teraz": portfel pokrywa cel ORAZ (bez domu lub
+// kredyt + dług rodzinny spłacone). Współdzielone przez hero i kartę celu.
+function fireReachedNow(state, d, nowYm) {
+  const hp = state.housing.housePlan;
+  const targets = E.fireTargetsToday(state, nowYm);
+  const pct = d.balances.portfolio / targets.primary;
+  const famSettled = !(d.family && d.family.started) || d.family.balanceNominal <= 0;
+  return pct >= 1 && (!hp.enabled || (d.debt.started && d.debt.balanceNominal <= 0 && famSettled));
+}
+
+// Wspólny render „ile odkładać, by zdążyć na wiek FIRE" — jeden komunikat dla
+// pulpitu, check-inu i Analizy. rsg = E.requiredSavingsForGoal(state).
+// compact → wersja bannerowa (jedna linia); domyślnie karta z dużą liczbą.
+function goalSavingsHTML(rsg, { compact = false } = {}) {
+  if (!rsg || rsg.status === 'na') return '';
+  const age = esc(rsg.targetAgeYears);
+
+  if (rsg.status === 'infeasible') {
+    return `<div class="banner warn small">Cel wieku ${age} jest poza zasięgiem nawet przy dużych oszczędnościach — zajrzyj do założeń lub wybierz późniejszy wiek.</div>`;
+  }
+
+  if (rsg.status === 'onTrack') {
+    const plan = Fmt.formatPLN(Math.round(rsg.plannedNow));
+    const atAge = rsg.fireAge ? esc(Fmt.formatAgeYM(rsg.fireAge)) : '—';
+    return `<div class="banner success small">Jesteś na dobrej drodze — odkładając <b>${plan}</b>/mies. osiągniesz FIRE w wieku ${atAge} (cel: ${age}). 🔥</div>`;
+  }
+
+  // status === 'need'
+  const req = Math.round(rsg.requiredMonthly);
+  const planPLN = Fmt.formatPLN(Math.round(rsg.plannedNow));
+  const extraPLN = Fmt.formatPLN(Math.ceil(rsg.extraMonthly));
+
+  // Miesiąc budowy: plan zakłada niedobór — nie drukuj „odkładaj −X".
+  if (req <= 0) {
+    const deficit = Fmt.formatPLN(Math.round(-rsg.plannedNow));
+    return `<div class="banner info small">Aby zdążyć na wiek ${age}: to miesiąc budowy (plan zakłada niedobór ${deficit}) — utrzymaj dyscyplinę i dołóż <b>${extraPLN}</b> ponad plan.</div>`;
+  }
+
+  const reqPLN = Fmt.formatPLN(req);
+  if (compact) {
+    return `<div class="banner info small">Aby zdążyć na wiek ${age}: odkładaj <b>${reqPLN}</b>/mies. <span class="muted">(plan ${planPLN} + ${extraPLN})</span></div>`;
+  }
+  return `<div class="card">
+    <div class="muted small">Aby osiągnąć FIRE w wieku ${age}</div>
+    <div class="big">Odkładaj ${reqPLN} / mies.</div>
+    <div class="muted small">plan ${planPLN} + dodatkowo ${extraPLN}</div>
+  </div>`;
+}
+
 function renderDashboard() {
   const d = state.derived;
   const proj = d.projection;
@@ -628,8 +677,7 @@ function renderDashboard() {
   } else {
     const targets = E.fireTargetsToday(state, nowYm);
     const pct = d.balances.portfolio / targets.primary;
-    const famSettled = !(d.family && d.family.started) || d.family.balanceNominal <= 0;
-    const reachedNow = pct >= 1 && (!hp.enabled || (d.debt.started && d.debt.balanceNominal <= 0 && famSettled));
+    const reachedNow = fireReachedNow(state, d, nowYm);
     html += `<div class="card hero">
       ${reachedNow ? '<div class="banner success"><b>🎉 FIRE osiągnięte!</b> Portfel pokrywa Twoje wydatki przy bezpiecznej stopie wypłat.</div>' : ''}
       ${ringSVG(pct)}
@@ -651,6 +699,12 @@ function renderDashboard() {
         <div class="legend"><span><i style="background:var(--accent)"></i>portfel (— historia, ⋯ prognoza)</span><span><i style="background:var(--muted)"></i>cel ruchomy</span></div>
       </div>`;
     }
+  }
+
+  // ── Ile odkładać, by zdążyć na wiek FIRE ──
+  // Nie pokazujemy, gdy FIRE już osiągnięte tu i teraz.
+  if (!fireReachedNow(state, d, nowYm)) {
+    html += goalSavingsHTML(E.requiredSavingsForGoal(state));
   }
 
   // ── Salda zawsze widoczne ──
@@ -744,6 +798,7 @@ function renderCheckin(month) {
       </div>
     </div>
     <div class="banner info small">Plan na ten miesiąc: <b>${Fmt.formatPLN(planned)}</b>${planned < 0 ? ' (miesiąc budowy — plan zakłada niedobór)' : ''}</div>
+    ${m === months[0] ? goalSavingsHTML(E.requiredSavingsForGoal(state), { compact: true }) : ''}
     <div id="ci-error"></div>
     ${field({ id: 'ci-earned', label: 'Zarobione', suffix: 'zł', value: existing ? moneyVal(existing.earned) : '', tipText: 'Wszystkie dochody netto w tym miesiącu.' })}
     ${field({ id: 'ci-spent', label: 'Wydane', suffix: 'zł', value: existing ? moneyVal(existing.spent) : '', hint: 'Razem z czynszem i ratą kredytu.' })}
@@ -851,6 +906,7 @@ function renderCheckinResult(entry, { prevFireYm, wasFirst, prevEntry }) {
     ${proj.reached ? `<div class="kv"><span>Prognoza FIRE</span><b>${Fmt.formatMonthName(proj.fireYm)} ${shift}</b></div>` : ''}
     ${d.streak.current > 0 ? `<div class="kv"><span>Seria</span><b>🔥 ${d.streak.current}</b></div>` : ''}
   </div>
+  ${goalSavingsHTML(E.requiredSavingsForGoal(state), { compact: true })}
   ${reminderTip}
   <div class="coach">💬 ${esc(coach)}</div>
   <a class="btn primary wide" href="#/">Wróć na pulpit</a>`;
@@ -1031,13 +1087,14 @@ function renderAnaliza() {
       ])
       : '';
 
-    body = An.projectionCard({
-      mode: anMode, blocks, series: proj.series, excelRows, houseOn,
-      selectedYear: anYear, fireYm: proj.reached ? proj.fireYm : null,
-      excelStart: d.balances.portfolio, excelContrib,
-      byPlanOnly: proj.byPlanOnly, delta: proj.delta,
-      hasFamily: !!fa,
-    })
+    body = goalSavingsHTML(E.requiredSavingsForGoal(state))
+      + An.projectionCard({
+        mode: anMode, blocks, series: proj.series, excelRows, houseOn,
+        selectedYear: anYear, fireYm: proj.reached ? proj.fireYm : null,
+        excelStart: d.balances.portfolio, excelContrib,
+        byPlanOnly: proj.byPlanOnly, delta: proj.delta,
+        hasFamily: !!fa,
+      })
       + An.withdrawalCard({ w, chartHTML: wChart })
       + An.sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows });
   } else {

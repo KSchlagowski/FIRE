@@ -71,4 +71,11 @@ export const FIX = {
   F21: { monthly: 1000, annualReal: 0.05, months: 24 },
   // Cel: wiek FIRE — poszukiwanie binarne minimalnych dodatkowych oszczędności.
   F22: { cap: 100000 },
+  // Wymagane oszczędności na cel wieku (requiredSavingsForGoal). Trzy gałęzie:
+  // plan wystarcza (onTrack), plan nie wystarcza (need), wiek nieosiągalny.
+  F23: {
+    onTrack: { portfolioStart: 1700000, targetFireAge: 45 },
+    need: { portfolioStart: 100000, targetFireAge: 40 },
+    infeasible: { portfolioStart: 100000, targetFireAge: 27 },
+  },
 };

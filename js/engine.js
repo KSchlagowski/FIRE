@@ -887,6 +887,33 @@ export function solveExtraSavingsForAge(state, targetAgeMonths, { cap = 100000 }
   return { feasible: true, extraMonthly: hi, fireYm: res.fireYm, fireAge: res.fireAge };
 }
 
+// Ile trzeba odkładać miesięcznie, by osiągnąć FIRE w docelowym wieku:
+// baza planu + ewentualna dopłata. Normalizuje wynik solveExtraSavingsForAge
+// do jednego kształtu dla wszystkich ekranów (pulpit, check-in, Analiza).
+// Czysta: buduje własny plan, nic nie mutuje.
+export function requiredSavingsForGoal(state, now = new Date()) {
+  const nowYm = todayYm(now);
+  const targetAgeYears = state.assumptions.targetFireAge;
+  const birthDate = state.profile.birthDate;
+  if (!birthDate || !targetAgeYears) return { status: 'na' };
+  const currentAge = ageAt(birthDate, nowYm).years;
+  if (targetAgeYears <= currentAge) return { status: 'na' };
+
+  const plannedNow = plannedSavingsFor(buildPlan(state), nowYm);
+  const sol = solveExtraSavingsForAge(state, Math.round(targetAgeYears * 12), {}, now);
+  if (!sol.feasible) {
+    return { status: 'infeasible', targetAgeYears, plannedNow,
+             fireYm: sol.fireYm, fireAge: sol.fireAge };
+  }
+  if (sol.extraMonthly === 0) {
+    return { status: 'onTrack', targetAgeYears, plannedNow, extraMonthly: 0,
+             requiredMonthly: plannedNow, fireYm: sol.fireYm, fireAge: sol.fireAge };
+  }
+  return { status: 'need', targetAgeYears, plannedNow, extraMonthly: sol.extraMonthly,
+           requiredMonthly: plannedNow + sol.extraMonthly,
+           fireYm: sol.fireYm, fireAge: sol.fireAge };
+}
+
 // Tabela SWR: cel = roczne wydatki / SWR (roczne wydatki wprost z celu użytkownika).
 export function swrComparison(state, nowYm = todayYm()) {
   const user = state.assumptions.withdrawalRate;

@@ -1178,6 +1178,40 @@ test('F22c: już na dobrej drodze → extraMonthly=0', () => {
   assertTrue(sol.feasible);
 });
 
+// ── F23: wymagane oszczędności na cel wieku (requiredSavingsForGoal) ─────
+
+test('F23a: plan wystarcza → onTrack, extra=0, required=plan', () => {
+  const st = baseState({ anchorMonth: '2026-07', assumptions: {
+    portfolioStart: FIX.F23.onTrack.portfolioStart, targetFireAge: FIX.F23.onTrack.targetFireAge } });
+  const rsg = E.requiredSavingsForGoal(st, NOW);
+  assertEq(rsg.status, 'onTrack');
+  assertEq(rsg.extraMonthly, 0);
+  const plannedNow = E.plannedSavingsFor(E.buildPlan(st), '2026-07');
+  assertClose(rsg.plannedNow, plannedNow, 1e-9);
+  assertClose(rsg.requiredMonthly, plannedNow, 1e-9);
+});
+
+test('F23b: plan nie wystarcza → need, required=plan+extra, dopłata trafia w cel', () => {
+  const st = baseState({ anchorMonth: '2026-07', assumptions: {
+    portfolioStart: FIX.F23.need.portfolioStart, targetFireAge: FIX.F23.need.targetFireAge } });
+  const rsg = E.requiredSavingsForGoal(st, NOW);
+  assertEq(rsg.status, 'need');
+  assertTrue(rsg.extraMonthly > 0, 'wymaga dopłaty');
+  assertClose(rsg.requiredMonthly, rsg.plannedNow + rsg.extraMonthly, 1e-9);
+  // Kontrola: dopłata = extraMonthly sprowadza FIRE najpóźniej do docelowego wieku
+  // (wiąże liczbę z kontraktem solvera solveExtraSavingsForAge).
+  const ctrl = E.projectionWith(st, { extraMonthlySavings: rsg.extraMonthly }, NOW);
+  assertTrue(ctrl.reached, 'osiąga FIRE');
+  assertTrue(ctrl.fireAge.totalMonths <= Math.round(FIX.F23.need.targetFireAge * 12), 'w docelowym wieku');
+});
+
+test('F23c: wiek nieosiągalny nawet przy dużej dopłacie → infeasible', () => {
+  const st = baseState({ anchorMonth: '2026-07', assumptions: {
+    portfolioStart: FIX.F23.infeasible.portfolioStart, targetFireAge: FIX.F23.infeasible.targetFireAge } });
+  const rsg = E.requiredSavingsForGoal(st, NOW);
+  assertEq(rsg.status, 'infeasible');
+});
+
 // ── Statystyki oszczędzania i wykonania planu ───────────────────────────
 
 test('statystyki: stopa oszczędzania (ostatni / 12 mies. / całość)', () => {
