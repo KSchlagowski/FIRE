@@ -21,7 +21,7 @@ pokazuje postęp i mobilizujący komentarz trenera.
 - Werdykty miesiąca: skala `S = max(|plan|, 500)`; ≥ plan+0,15·S → „Ponad plan!”,
   ≥ plan → „W planie”, ≥ plan−0,40·S → „Poniżej planu”, inaczej „Ciężki miesiąc”.
 - Salda nigdy nie są zapisywane jako prawda — zawsze wyliczane od nowa (replay)
-  z historii wpisów; korekty sald to jawne nadpisania w łańcuchu.
+  z historii wpisów. Korekty sald to jawne nadpisania w łańcuchu.
 
 ## Struktura
 
