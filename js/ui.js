@@ -2,10 +2,11 @@
 
 import * as E from './engine.js';
 import * as Fmt from './format.js';
+import * as An from './analysis.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -97,7 +98,7 @@ function formatShort(x) {
 
 // ── Wykres SVG (≤120 punktów po decymacji) ──────────────────────────────
 
-function chartSVG(rows, defs, { height = 170 } = {}) {
+export function chartSVG(rows, defs, { height = 170 } = {}) {
   if (!rows.length) return '';
   const step = Math.ceil(rows.length / 120);
   const pts = rows.filter((_, i) => i % step === 0 || i === rows.length - 1);
@@ -192,6 +193,7 @@ function route() {
     const m = hash.split('/')[2];
     renderCheckin(m && E.isValidYm(m) ? m : null);
   } else if (hash === '#/history') renderHistory();
+  else if (hash === '#/analiza') renderAnaliza();
   else if (hash === '#/plan') renderPlan();
   else if (hash === '#/backup') renderBackup();
   else renderDashboard();
@@ -761,6 +763,114 @@ function renderHistory() {
       toast('Wpis usunięty, wszystko przeliczone.');
     }
   }));
+}
+
+// ── Analiza ─────────────────────────────────────────────────────────────
+// Wyniki liczone przy renderze (nie w recomputeDerived — potrzebne tylko tu).
+
+let anMode = 'yearly';
+let anYear = 1;
+
+function renderAnaliza() {
+  if (!state.derived) E.recomputeDerived(state);
+  const d = state.derived;
+  const a = state.assumptions;
+  const nowYm = E.todayYm();
+  const proj = d.projection;
+  const houseOn = !!(state.housing.housePlan && state.housing.housePlan.enabled);
+
+  const fi = E.fiStats(state, d.balances, d.debt, d.plan, nowYm);
+  const cvg = E.contributionsVsGrowth(state, d.balances);
+  const sav = E.savingsStats(state, d.uptoYm);
+  const pva = E.planVsActualStats(state.entries);
+  const blocks = E.yearlyProjection(state, proj);
+  if (anYear > blocks.length) anYear = 1;
+  const excelContrib = E.plannedSavingsFor(d.plan, nowYm) * 12;
+  const excelRows = E.excelProjection(state, { start: d.balances.portfolio, contribYearly: excelContrib });
+  const w = E.projectWithdrawal(state, { projection: proj });
+
+  // Wrażliwość: pełny przebieg prognozy na wariant (≤ 13 × 720 iteracji).
+  const baseFireYm = proj.reached ? proj.fireYm : null;
+  const vFire = p => (p.reached ? p.fireYm : null);
+  const returnRows = [-0.02, -0.01, 0, 0.01, 0.02].map(dp => ({
+    label: `${Fmt.formatPct(a.realReturnAnnual + dp)}${dp === 0 ? '' : ` (${dp > 0 ? '+' : '−'}${Math.round(Math.abs(dp) * 100)} pp)`}`,
+    fireYm: dp === 0 ? baseFireYm : vFire(E.projectionWith(state, { assumptions: { realReturnAnnual: a.realReturnAnnual + dp } })),
+    isBase: dp === 0,
+  }));
+  const savingsRows = [-1000, -500, 0, 500, 1000].map(x => ({
+    label: x === 0 ? 'wg planu' : `${x > 0 ? '+' : '−'}${Fmt.formatPLN(Math.abs(x))}/mies.`,
+    fireYm: x === 0 ? baseFireYm : vFire(E.projectionWith(state, { extraMonthlySavings: x })),
+    isBase: x === 0,
+  }));
+  const swrRows = E.swrComparison(state, nowYm).map(r => ({
+    ...r,
+    fireYm: r.isUser ? baseFireYm : vFire(E.projectionWith(state, { assumptions: { withdrawalRate: r.swr } })),
+  }));
+
+  // Wykresy (chartSVG skaluje od 0 — skumulowany wykres tylko przy seriach ≥ 0).
+  const cumChart = pva.cumRows.length > 1 && pva.cumRows.every(r => r.cumNet >= 0 && r.cumPlanned >= 0)
+    ? chartSVG(pva.cumRows, [
+      { get: r => r.cumPlanned, cls: 'line-target' },
+      { get: r => r.cumNet, cls: 'line-port' },
+    ])
+    : '';
+  const wChart = w.rows.length > 1
+    ? chartSVG(w.rows, [
+      { get: r => r.endNominal, cls: 'line-proj' },
+      { get: r => r.endReal, cls: 'line-port' },
+    ])
+    : '';
+
+  const ma = houseOn && d.debt.started ? E.mortgageAnalytics(state, d.debt, proj) : null;
+  let debtChart = '';
+  if (ma && d.debt.rows.length > 1) {
+    const histBy = new Map(d.debt.rows.map(r => [r.ym, r.balNominal]));
+    const schedBy = new Map(ma.scheduleRows.map((r, i) => [E.addMonths(ma.lastYm, i + 1), r.balNominal]));
+    const projBy = new Map(proj.series.filter(r => r.projected)
+      .map(r => [r.ym, E.toNominal(r.debtReal, state.anchorMonth, r.ym, a.inflationAnnual)]));
+    const start = E.ymToIdx(d.debt.rows[0].ym);
+    const end = E.ymToIdx(ma.lastYm) + ma.scheduleRows.length;
+    const rows = [];
+    for (let i = start; i <= end; i++) {
+      const ym = E.idxToYm(i);
+      const hist = histBy.get(ym);
+      rows.push({
+        ym,
+        over: hist != null ? hist : (projBy.get(ym) || 0),
+        sched: hist != null ? hist : (schedBy.get(ym) || 0),
+      });
+    }
+    debtChart = rows.length > 1
+      ? chartSVG(rows, [
+        { get: r => r.sched, cls: 'line-debt-dash' },
+        { get: r => r.over, cls: 'line-debt' },
+      ])
+      : '';
+  }
+
+  view().innerHTML = [
+    An.statsCard({ fi, cvg, balances: d.balances, a, nowYm }),
+    An.planPerfCard({ sav, pva, chartHTML: cumChart }),
+    An.projectionCard({
+      mode: anMode, blocks, series: proj.series, excelRows, houseOn,
+      selectedYear: anYear, fireYm: proj.reached ? proj.fireYm : null,
+      excelStart: d.balances.portfolio, excelContrib,
+      byPlanOnly: proj.byPlanOnly, delta: proj.delta,
+    }),
+    An.withdrawalCard({ w, chartHTML: wChart }),
+    An.sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows }),
+    ma ? An.mortgageCard({ ma, chartHTML: debtChart }) : '',
+  ].join('');
+
+  $$('[data-anmode]').forEach(el => el.addEventListener('click', () => {
+    anMode = el.dataset.anmode;
+    renderAnaliza();
+  }));
+  const yearSel = $('#an-year');
+  if (yearSel) yearSel.addEventListener('change', () => {
+    anYear = Number(yearSel.value) || 1;
+    renderAnaliza();
+  });
 }
 
 // ── Plan i założenia ────────────────────────────────────────────────────

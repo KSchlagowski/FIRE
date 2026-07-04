@@ -554,6 +554,251 @@ test('re-anchor: salda przeniesione, historia bez zmian', () => {
   assertEq(st.entries.length, 1, 'wpis został');
 });
 
+// ── F13: Faza wypłat ────────────────────────────────────────────────────
+
+test('F13a: Faza wypłat — parytet Excela (lata 1/2/35, R nominalne 8,15%)', () => {
+  const f = FIX.F13;
+  const st = baseState();
+  const w = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: f.startReal });
+  assertClose(w.nominalRate, f.nominalRate, 1e-9);
+  const y1 = w.rows[0];
+  assertClose(y1.withdrawalNominal, f.year1.withdrawalNominal, f.eps);
+  assertClose(y1.growthNominal, f.year1.growthNominal, f.eps);
+  assertClose(y1.endNominal, f.year1.endNominal, f.eps);
+  assertClose(y1.endReal, f.year1.endReal, f.eps);
+  assertClose(y1.endNominal / (1 + f.infl), y1.endReal, 1e-6, 'tożsamość nominal/real (rok 1)');
+  assertClose(w.rows[1].endNominal, f.year2.endNominal, f.eps);
+  assertEq(w.rows.length, 35);
+  assertClose(w.rows[34].endNominal, f.year35EndNominal, f.eps);
+  assertEq(w.depletedYear, null);
+});
+
+test('F13b: domyślny start = fireYm z portfelem z serii', () => {
+  const st = baseState({ assumptions: { portfolioStart: 1700000 } });
+  E.recomputeDerived(st, NOW);
+  const proj = st.derived.projection;
+  assertTrue(proj.reached, 'FIRE osiągalne');
+  const w = E.projectWithdrawal(st, { projection: proj });
+  assertEq(w.hypothetical, false);
+  assertEq(w.startYm, proj.fireYm);
+  const row = proj.series.find(r => r.ym === proj.fireYm);
+  assertClose(w.rows[0].startReal, row.portfolio, 1e-9);
+});
+
+test('F13c: r=0 → wyczerpanie dokładnie w roku 10', () => {
+  const f = FIX.F13.depletionR0;
+  const st = baseState({ assumptions: { realReturnAnnual: 0 } });
+  const w = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: f.startReal });
+  assertEq(w.depletedYear, f.years);
+  assertEq(w.rows.length, f.years);
+  assertClose(w.rows[f.years - 1].endReal, 0, 1e-9);
+});
+
+test('F13d: FIRE poza horyzontem → scenariusz modelowy (hypothetical)', () => {
+  const st = baseState({ assumptions: { monthlyIncome: 6100 } });
+  E.recomputeDerived(st, NOW);
+  assertEq(st.derived.projection.reached, false);
+  const w = E.projectWithdrawal(st, { projection: st.derived.projection });
+  assertEq(w.hypothetical, true);
+  assertClose(w.rows[0].startReal, E.fireTargetAt(st, w.startYm), 1e-9, 'start od dzisiejszego celu');
+});
+
+// ── F14: Projekcja roczna (model aplikacji) ─────────────────────────────
+
+test('F14a: tożsamość rezydualna + rok 1 = 154 290,31 + rekonsyliacja z serią', () => {
+  const f = FIX.F14;
+  const st = baseState({ assumptions: { portfolioStart: f.start } });
+  E.recomputeDerived(st, NOW);
+  const blocks = E.yearlyProjection(st, st.derived.projection);
+  for (const b of blocks) {
+    assertClose(b.portEnd - b.portStart - b.flowPortfolio, b.growthPortfolio, 1e-9, `rok ${b.t}:`);
+  }
+  const b1 = blocks[0];
+  assertEq(b1.months, 12);
+  assertEq(b1.projected, 'full');
+  assertClose(b1.portStart, f.start, 1e-9);
+  assertClose(b1.flowPortfolio, f.monthlyContrib * 12, 0.01);
+  assertClose(b1.portEnd, f.year1End, f.eps);
+  const series = st.derived.projection.series;
+  assertClose(blocks[blocks.length - 1].portEnd, series[series.length - 1].portfolio, 1e-9, 'rekonsyliacja:');
+});
+
+test('F14b: częściowy rok końcowy kończy się w fireYm', () => {
+  const st = baseState({ assumptions: { portfolioStart: 1700000 } });
+  E.recomputeDerived(st, NOW);
+  const proj = st.derived.projection;
+  const blocks = E.yearlyProjection(st, proj);
+  const last = blocks[blocks.length - 1];
+  assertTrue(proj.reached);
+  assertEq(last.ymTo, proj.fireYm);
+  assertTrue(last.months <= 12, 'blok częściowy');
+  assertEq(last.reached, true);
+  assertTrue(blocks.slice(0, -1).every(b => !b.reached), 'FIRE tylko w ostatnim bloku');
+});
+
+test('F14c: przepływy domu i długu przy stopach 0% (arytmetyka całkowita)', () => {
+  const st = f8State();
+  st.entries.push(entry('2026-02', 8000, 6000)); // kontrybucja 2000 → gotówka
+  E.recomputeDerived(st, NOW);
+  const blocks = E.yearlyProjection(st, st.derived.projection);
+  const b1 = blocks[0]; // 2026-01..2026-12: pół historii, pół prognozy
+  assertEq(b1.projected, 'part');
+  assertClose(b1.flowCash, 2000, 1e-9);
+  assertClose(b1.cashEnd, 5000 + 2000, 1e-9);
+  // Prognoza: lip nadpłata 3000 → dług 2000; sie spill 2000 → portfel; wrz–gru +3000/mies.
+  assertClose(b1.flowPortfolio, 2000 + 4 * 3000, 1e-9);
+  assertClose(b1.portEnd, 20000 + 14000, 1e-9);
+  assertClose(b1.growthPortfolio, 0, 1e-9, 'r=0 → wzrost 0:');
+  assertClose(b1.debtRealEnd, 0, 1e-9);
+});
+
+// ── F15: parytet arkusza Projekcja + wrażliwość ─────────────────────────
+
+test('F15: excelProjection — rok 20 z F1, rok 22 osiąga cel rosnący 1%', () => {
+  const f1 = FIX.F1;
+  const st = baseState({ assumptions: { expenseGrowthReal: 0.01 } });
+  const rows = E.excelProjection(st, { start: f1.start, contribYearly: f1.contribYearly, years: 25 });
+  assertClose(rows[19].endBal, f1.expectedYear20, f1.eps);
+  const y22 = rows[21];
+  assertClose(y22.endBal, FIX.F15.excelYear22.end, 0.5);
+  assertClose(y22.target, FIX.F15.excelYear22.target, 0.5);
+  assertEq(y22.reached, FIX.F15.excelYear22.reached);
+  assertEq(rows[20].reached, false, 'rok 21 jeszcze nie:');
+});
+
+test('F15a: projectionWith nie mutuje stanu', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  st.entries.push(entry('2026-01', 10000, 6000, { plannedSavingsSnapshot: 4000 }));
+  E.recomputeDerived(st, NOW);
+  const before = JSON.stringify(st);
+  E.projectionWith(st, { assumptions: { realReturnAnnual: 0.07, withdrawalRate: 0.035 }, extraMonthlySavings: 1000 }, NOW);
+  assertEq(JSON.stringify(st), before);
+});
+
+test('F15b: bez nadpisań wynik = prognoza bazowa', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  E.recomputeDerived(st, NOW);
+  const p = E.projectionWith(st, {}, NOW);
+  assertEq(p.reached, true);
+  assertEq(p.fireYm, st.derived.projection.fireYm);
+});
+
+test('F15c: monotoniczność (±1 pp zwrotu, +1000 zł oszczędności)', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  E.recomputeDerived(st, NOW);
+  const base = st.derived.projection.fireYm;
+  const up = E.projectionWith(st, { assumptions: { realReturnAnnual: 0.06 } }, NOW).fireYm;
+  const down = E.projectionWith(st, { assumptions: { realReturnAnnual: 0.04 } }, NOW).fireYm;
+  const extra = E.projectionWith(st, { extraMonthlySavings: 1000 }, NOW).fireYm;
+  assertTrue(E.ymToIdx(up) <= E.ymToIdx(base), 'wyższy zwrot nie później');
+  assertTrue(E.ymToIdx(down) >= E.ymToIdx(base), 'niższy zwrot nie wcześniej');
+  assertTrue(E.ymToIdx(extra) <= E.ymToIdx(base), 'wyższe oszczędności nie później');
+});
+
+// ── F16: tabela SWR ─────────────────────────────────────────────────────
+
+test('F16: tabela SWR (2,4 mln / ~2,057 mln / 1,8 mln)', () => {
+  const st = baseState();
+  const rows = E.swrComparison(st, '2026-07');
+  assertEq(rows.length, 3, 'WR użytkownika = 4% → bez dodatkowego wiersza:');
+  for (const fx of FIX.F16.rows) {
+    const r = rows.find(x => Math.abs(x.swr - fx.swr) < 1e-9);
+    assertClose(r.target, fx.target, 0.01, `SWR ${fx.swr}:`);
+  }
+  assertClose(rows[0].diffVs4pct, FIX.F16.diff3pct, 0.01);
+  assertClose(rows[1].diffVs4pct, FIX.F16.diff35pct, 0.01);
+  assertClose(rows[2].multiplier, 25, 1e-9);
+  assertTrue(rows[2].isUser, 'flaga isUser na 4%');
+  const rows2 = E.swrComparison(baseState({ assumptions: { withdrawalRate: 0.045 } }), '2026-07');
+  assertEq(rows2.length, 4, 'nietypowe WR → dodatkowy wiersz:');
+  assertEq(rows2[3].label, 'Twoje ustawienie');
+});
+
+// ── F17: Coast FIRE i analityka kredytu ─────────────────────────────────
+
+test('F17a: Coast FIRE = 729 911,95 zł', () => {
+  const st = baseState();
+  E.recomputeDerived(st, NOW);
+  const fi = E.fiStats(st, st.derived.balances, st.derived.debt, st.derived.plan, '2026-07');
+  assertClose(fi.coast.number, FIX.F17.coast, FIX.F17.eps);
+  assertEq(fi.coast.reached, false);
+  assertEq(fi.coast.fireAgeYm, '2045-01');
+  assertClose(fi.target, 1800000, 0.01);
+  assertClose(fi.monthlyExpenses, 6000, 0.01);
+});
+
+function f17State() {
+  return baseState({
+    anchorMonth: '2026-01',
+    housing: {
+      housePlan: housePlan({
+        moveInMonth: '2026-01',
+        houseSpend: { month: '2026-01', amount: 0 },
+        mortgage: { startMonth: '2026-01', principal: 1100000, rateNominal: 0.07, termYears: 15 },
+      }),
+    },
+  });
+}
+
+test('F17b: kredyt bez nadpłat — Σodsetek kontraktu, oszczędność ≈ 0', () => {
+  const st = f17State();
+  E.recomputeDerived(st, NOW);
+  const ma = E.mortgageAnalytics(st, st.derived.debt, st.derived.projection);
+  assertClose(ma.contractTotalInterest, FIX.F17.contractInterest, FIX.F17.eps);
+  assertClose(ma.interestSavedSoFar, 0, FIX.F17.eps);
+  assertEq(ma.monthsAheadOfContract, 0);
+  assertEq(ma.contractPayoffYm, '2040-12');
+  assertClose(ma.paidInterest + ma.scheduleOnlyRemainingInterest, ma.contractTotalInterest, FIX.F17.eps);
+  assertEq(ma.overpaidTotal, 0);
+});
+
+test('F17c: nadpłata → oszczędność odsetek i szybsza spłata', () => {
+  const st = f17State();
+  st.entries.push(entry('2026-03', 60000, 6000, { overpayment: 50000 }));
+  E.recomputeDerived(st, NOW);
+  const ma = E.mortgageAnalytics(st, st.derived.debt, st.derived.projection);
+  assertTrue(ma.interestSavedSoFar > 0, 'oszczędność > 0');
+  assertTrue(ma.monthsAheadOfContract >= 1, 'spłata szybciej o ≥ 1 mies.');
+  assertClose(ma.overpaidTotal, 50000, 0.01);
+});
+
+// ── Statystyki oszczędzania i wykonania planu ───────────────────────────
+
+test('statystyki: stopa oszczędzania (ostatni / 12 mies. / całość)', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 10000, 6000));
+  st.entries.push(entry('2026-02', 10000, 8000));
+  const s = E.savingsStats(st, '2026-06');
+  assertEq(s.overall.n, 2);
+  assertClose(s.overall.net, 6000, 0.01);
+  assertClose(s.overall.rate, 0.3, 1e-9);
+  assertEq(s.last.n, 1);
+  assertClose(s.last.rate, 0.2, 1e-9, 'ostatni = luty:');
+  assertClose(s.trailing12.net, s.overall.net, 1e-9);
+  assertEq(E.savingsStats(baseState(), '2026-06').overall.rate, null, 'brak wpisów → rate null');
+});
+
+test('statystyki: wykonanie planu na zamrożonych snapshotach', () => {
+  const es = [
+    entry('2026-01', 10000, 6000, { plannedSavingsSnapshot: 4000, verdict: 'on_plan' }),
+    entry('2026-02', 10000, 5000, { plannedSavingsSnapshot: 4000, verdict: 'crushed' }),
+    entry('2026-03', 10000, 8000, { plannedSavingsSnapshot: 4000, verdict: 'hard' }),
+  ];
+  const p = E.planVsActualStats(es);
+  assertEq(p.n, 3);
+  assertClose(p.cumNet, 11000, 0.01);
+  assertClose(p.cumPlanned, 12000, 0.01);
+  assertClose(p.cumDelta, -1000, 0.01);
+  assertEq(p.verdicts.crushed, 1);
+  assertEq(p.verdicts.on_plan, 1);
+  assertEq(p.verdicts.hard, 1);
+  assertEq(p.verdicts.behind, 0);
+  assertEq(p.cumRows.length, 3);
+  assertClose(p.cumRows[2].cumNet, 11000, 0.01);
+  assertEq(p.best.ym, '2026-02');
+  assertEq(p.worst.ym, '2026-03');
+});
+
 // ── Trener ──────────────────────────────────────────────────────────────
 
 test('coach: deterministyczny wybór + cel na kolejny miesiąc', () => {

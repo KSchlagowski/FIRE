@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (47 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (64 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -129,7 +129,11 @@ Excel yearly-compounding parity (year-20 = 1 931 853,86 zł), monthly engine vs
 annuity-due closed form, mortgage annuity (≈9 755,8 zł/mo, 180 steps → 0), FIRE
 targets + renting-forever contrast, 3-phase plan (incl. negative build months),
 verdict tiers, streak, replay determinism, projection, format/parse, storage
-(.bak recovery, migration, version reject), and two-bucket routing.
+(.bak recovery, migration, version reject), and two-bucket routing. F13–F17
+cover the Analiza screen: withdrawal-phase Excel parity (year-35 nominal
+8 724 696,89 zł, depletion, nominal rate 8,15%), yearly projection residual
+identity + reconciliation, `excelProjection` parity, `projectionWith`
+purity/monotonicity, SWR table, Coast FIRE, and mortgage analytics.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

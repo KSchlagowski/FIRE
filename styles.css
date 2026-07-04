@@ -356,3 +356,42 @@ details.section summary { cursor: pointer; font-weight: 600; min-height: 40px; d
 table.preview { width: 100%; border-collapse: collapse; font-size: .85rem; }
 table.preview td { padding: .3rem 0; border-bottom: 1px solid var(--line); }
 table.preview td:last-child { text-align: right; font-weight: 600; }
+
+/* ── Analiza ── */
+.table-scroll { overflow-x: auto; margin-top: .5rem; }
+table.data { border-collapse: collapse; font-size: .78rem; white-space: nowrap; }
+table.data th, table.data td { padding: .3rem .5rem; text-align: right; border-bottom: 1px solid var(--line); }
+table.data th { color: var(--muted); font-weight: 600; }
+table.data th:first-child, table.data td:first-child {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: var(--card);
+}
+table.data tr.proj td { color: var(--muted); }
+table.data tr.reached td { color: var(--accent); font-weight: 600; }
+table.data tr.depleted td { color: var(--danger); }
+
+.seg { display: flex; gap: .25rem; background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: .2rem; margin: .5rem 0; }
+.seg button { flex: 1; min-height: 40px; border: none; background: transparent; border-radius: 8px; color: var(--muted); font-size: .85rem; }
+.seg button.on { background: var(--card); color: var(--text); font-weight: 600; }
+
+.formula {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: .75rem;
+  background: var(--card2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: .4rem .5rem;
+  margin: .35rem 0;
+  overflow-x: auto;
+}
+
+.vbar-row { display: flex; align-items: center; gap: .5rem; margin: .25rem 0; font-size: .78rem; }
+.vbar-row .vbar-label { flex: 0 0 8rem; }
+.vbar-row .vbar-count { flex: 0 0 1.5rem; text-align: right; color: var(--muted); }
+.vbar { flex: 1; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.vbar > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.vbar > i.v-behind, .vbar > i.v-hard { background: var(--flame); }
+
+.chart .line-debt-dash { stroke: var(--muted); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }

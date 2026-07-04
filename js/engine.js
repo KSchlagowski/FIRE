@@ -263,6 +263,7 @@ export function replayBalances(state, uptoYm, debtRes = null) {
     const net = e ? roundGrosze(e.earned - e.spent) : 0;
     const contribution = e ? roundGrosze(net - (e.overpayment || 0)) : 0;
     const d = debt.byMonth.get(idx);
+    let flowCash = 0, flowPortfolio = 0; // przepływy (bez wzrostu i bez korekt sald)
     let phase;
     if (!houseOn) phase = 'invest';
     else if (idx < mStart) phase = 'saving';
@@ -270,17 +271,19 @@ export function replayBalances(state, uptoYm, debtRes = null) {
     else phase = 'invest';
 
     if (contribution >= 0) {
-      if (phase === 'saving' || phase === 'debt') cash += contribution;
-      else portfolio += contribution;
+      if (phase === 'saving' || phase === 'debt') { cash += contribution; flowCash += contribution; }
+      else { portfolio += contribution; flowPortfolio += contribution; }
     } else {
       let deficit = -contribution;
       const fromCash = Math.min(cash, deficit);
       cash -= fromCash;
       deficit -= fromCash;
       portfolio -= deficit;
+      flowCash -= fromCash;
+      flowPortfolio -= deficit;
     }
 
-    if (d && d.spill > 0) portfolio += d.spill; // nadpłata ponad spłatę wraca do inwestycji
+    if (d && d.spill > 0) { portfolio += d.spill; flowPortfolio += d.spill; } // nadpłata ponad spłatę wraca do inwestycji
 
     if (idx === hsMonth) {
       const amount = hsAmount == null ? cash : hsAmount; // null = "cała gotówka"
@@ -292,15 +295,19 @@ export function replayBalances(state, uptoYm, debtRes = null) {
       rest -= fromPort;
       if (rest > EPS) houseUnderfunded = true;
       houseSpent = amount - rest;
+      flowCash -= fromCash;
+      flowPortfolio -= fromPort;
     }
 
     cash *= 1 + rCash;
     portfolio *= 1 + rPort;
 
+    // Korekty sald to NIE przepływ — ich efekt ląduje w rezydualnym "wzroście".
+    const override = !!(e && (e.cashOverride != null || e.balanceOverride != null));
     if (e && e.cashOverride != null) cash = e.cashOverride;
     if (e && e.balanceOverride != null) portfolio = e.balanceOverride;
 
-    rows.push({ ym: idxToYm(idx), cash, portfolio, net, contribution, phase, hasEntry: !!e });
+    rows.push({ ym: idxToYm(idx), cash, portfolio, net, contribution, phase, hasEntry: !!e, flowCash, flowPortfolio, override });
   }
   return { cash, portfolio, rows, houseUnderfunded, houseSpent };
 }
@@ -443,6 +450,7 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
 
   const series = balances.rows.map(r => ({
     ym: r.ym, cash: r.cash, portfolio: r.portfolio,
+    flowCash: r.flowCash, flowPortfolio: r.flowPortfolio, override: r.override,
     debtReal: (debtRes.byMonth.get(ymToIdx(r.ym)) || { bal: 0 }).bal
       / Math.pow(1 + a.inflationAnnual, monthsBetween(anchor, r.ym) / 12),
     target: fireTargetAt(state, r.ym),
@@ -463,35 +471,46 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
     }
     const debtActive = houseOn && debtStarted && debtBal > 0;
     const s = pm.plannedSavings + delta;
+    let flowCash = 0, flowPortfolio = 0;
 
     if (debtActive) {
       // Strategia: cała nadwyżka nadpłaca kredyt (konwersja na nominał).
       const overpayNominal = s > 0 ? toNominal(s, anchor, ym, a.inflationAnnual) : 0;
       const step = mortgageStep(debtBal, j, A, overpayNominal);
       debtBal = step.bal;
-      if (step.spill > 0) portfolio += toReal(step.spill, anchor, ym, a.inflationAnnual);
+      if (step.spill > 0) {
+        const spillReal = toReal(step.spill, anchor, ym, a.inflationAnnual);
+        portfolio += spillReal;
+        flowPortfolio += spillReal;
+      }
       if (s < 0) {
         let deficit = -s;
         const fromCash = Math.min(cash, deficit);
         cash -= fromCash;
         portfolio -= deficit - fromCash;
+        flowCash -= fromCash;
+        flowPortfolio -= deficit - fromCash;
       }
       if (debtBal <= EPS && !debtFreeYm) { debtBal = 0; debtFreeYm = ym; }
     } else if (houseOn && idx < mStart) {
-      if (s >= 0) cash += s;
+      if (s >= 0) { cash += s; flowCash += s; }
       else {
         let deficit = -s;
         const fromCash = Math.min(cash, deficit);
         cash -= fromCash;
         portfolio -= deficit - fromCash;
+        flowCash -= fromCash;
+        flowPortfolio -= deficit - fromCash;
       }
     } else {
-      if (s >= 0) portfolio += s;
+      if (s >= 0) { portfolio += s; flowPortfolio += s; }
       else {
         let deficit = -s;
         const fromCash = Math.min(cash, deficit);
         cash -= fromCash;
         portfolio -= deficit - fromCash;
+        flowCash -= fromCash;
+        flowPortfolio -= deficit - fromCash;
       }
     }
 
@@ -505,13 +524,15 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
       rest -= fromPort;
       if (rest > EPS) houseShortfall = true; // "plan zakłada niedobór wkładu"
       houseDone = true;
+      flowCash -= fromCash;
+      flowPortfolio -= fromPort;
     }
 
     cash *= 1 + rCash;
     portfolio *= 1 + rPort;
 
     series.push({
-      ym, cash, portfolio,
+      ym, cash, portfolio, flowCash, flowPortfolio, override: false,
       debtReal: toReal(debtBal, anchor, ym, a.inflationAnnual),
       target: pm.targetReal,
       projected: true,
@@ -528,6 +549,296 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
   const fireAge = reached ? ageAt(state.profile.birthDate, fireYm) : null;
   const onTrack = reached && fireAge.totalMonths <= state.assumptions.targetFireAge * 12;
   return { reached, fireYm, fireAge, debtFreeYm, onTrack, series, delta, byPlanOnly, houseShortfall };
+}
+
+// ── Analiza (tabele i statystyki) ───────────────────────────────────────
+// Funkcje czyste, liczone przy renderze ekranu #/analiza — NIE w
+// recomputeDerived (potrzebne tylko tam, a recompute biegnie po każdej mutacji).
+
+// Faza wypłat: rekurencja w REALNYCH zł, kolumny nominalne pochodne.
+// Epoka nominalna = startYm (indeks cen 1 w miesiącu przejścia na FIRE —
+// konwencja arkusza Faza wypłat): start_n = real·(1+i)^(n−1), end_n = real·(1+i)^n.
+export function projectWithdrawal(state, opts = {}) {
+  const a = state.assumptions;
+  const proj = opts.projection || null;
+  const reached = !!(proj && proj.reached);
+  const hypothetical = opts.startYm == null && !reached;
+  const startYm = opts.startYm != null ? opts.startYm : (reached ? proj.fireYm : todayYm());
+  let startPortfolioReal = opts.startPortfolioReal;
+  if (startPortfolioReal == null) {
+    const row = reached ? proj.series.find(r => r.ym === startYm) : null;
+    startPortfolioReal = row ? row.portfolio : fireTargetAt(state, startYm);
+  }
+  const years = opts.years || 35;
+  const swr = a.withdrawalRate;
+  const realRate = a.realReturnAnnual;
+  const inflation = a.inflationAnnual;
+  const nominalRate = (1 + realRate) * (1 + inflation) - 1;
+  const withdrawalRealYearly = opts.withdrawalRealYearly != null
+    ? opts.withdrawalRealYearly
+    : fireTargetAt(state, startYm) * swr;
+  const priceFactorAtStart = Math.pow(1 + inflation, monthsBetween(state.anchorMonth, startYm) / 12);
+  const birth = state.profile.birthDate;
+  const startAge = birth ? ageAt(birth, startYm).years : null;
+
+  const rows = [];
+  let depletedYear = null;
+  let bal = startPortfolioReal;
+  for (let n = 1; n <= years; n++) {
+    const ym = addMonths(startYm, (n - 1) * 12);
+    const startReal = bal;
+    let endReal = (startReal - withdrawalRealYearly) * (1 + realRate);
+    if (endReal <= EPS) { endReal = 0; depletedYear = n; }
+    const growthReal = endReal - (startReal - withdrawalRealYearly);
+    const pf1 = Math.pow(1 + inflation, n - 1);
+    const pfN = Math.pow(1 + inflation, n);
+    const startNominal = startReal * pf1;
+    const withdrawalNominal = withdrawalRealYearly * pf1;
+    const endNominal = endReal * pfN;
+    const growthNominal = endNominal - (startNominal - withdrawalNominal);
+    rows.push({
+      year: n, ym, age: birth ? ageAt(birth, ym).years : null,
+      startReal, startNominal,
+      withdrawalReal: withdrawalRealYearly, withdrawalNominal,
+      growthReal, growthNominal, endReal, endNominal,
+    });
+    bal = endReal;
+    if (depletedYear != null) break;
+  }
+  return {
+    startYm, startAge, hypothetical, swr, realRate, inflation, nominalRate,
+    withdrawalRealYearly, priceFactorAtStart, rows, depletedYear,
+  };
+}
+
+// Projekcja roczna (model aplikacji): serie miesięczne pogrupowane w bloki
+// 12 miesięcy roku planu (od anchorMonth). Wzrost jest REZYDUALNY:
+// saldo końc. = saldo pocz. + wpłaty + wzrost — tożsamość zachodzi dokładnie
+// (korekty sald lądują we "wzroście", stąd flaga hasOverride → "*" w UI).
+export function yearlyProjection(state, projection) {
+  const series = projection.series;
+  const birth = state.profile.birthDate;
+  const blocks = [];
+  for (let k = 0; k < series.length; k += 12) {
+    const chunk = series.slice(k, k + 12);
+    const prev = k > 0 ? series[k - 1] : null;
+    const portStart = prev ? prev.portfolio : (state.assumptions.portfolioStart || 0);
+    const cashStart = prev ? prev.cash : (state.assumptions.cashStart || 0);
+    const last = chunk[chunk.length - 1];
+    let flowPortfolio = 0, flowCash = 0, hasOverride = false, projCount = 0;
+    for (const r of chunk) {
+      flowPortfolio += r.flowPortfolio || 0;
+      flowCash += r.flowCash || 0;
+      if (r.override) hasOverride = true;
+      if (r.projected) projCount++;
+    }
+    blocks.push({
+      t: k / 12 + 1,
+      ymFrom: chunk[0].ym, ymTo: last.ym, months: chunk.length,
+      age: birth ? ageAt(birth, last.ym).years : null,
+      portStart, flowPortfolio,
+      growthPortfolio: last.portfolio - portStart - flowPortfolio,
+      portEnd: last.portfolio,
+      cashStart, flowCash, cashEnd: last.cash,
+      debtRealEnd: last.debtReal, targetEnd: last.target,
+      reached: !!(projection.reached && ymToIdx(chunk[0].ym) <= ymToIdx(projection.fireYm)
+        && ymToIdx(projection.fireYm) <= ymToIdx(last.ym)),
+      projected: projCount === 0 ? 'none' : (projCount === chunk.length ? 'full' : 'part'),
+      hasOverride,
+    });
+  }
+  return blocks;
+}
+
+// Widok parytetu z arkuszem Projekcja: kapitalizacja ROCZNA end = (start+wpłaty)·(1+r),
+// cel rosnący (1+g_exp)^(n−1). Celowo różny od modelu aplikacji (miesięczna
+// kapitalizacja, fazy, kubełki, delta) — służy do ręcznego cross-checku z Excelem.
+export function excelProjection(state, opts = {}) {
+  const a = state.assumptions;
+  const anchor = state.anchorMonth;
+  const years = opts.years || 60;
+  const start = opts.start || 0;
+  const contribYearly = opts.contribYearly || 0;
+  const r = a.realReturnAnnual;
+  const g = a.expenseGrowthReal;
+  const target1 = fireTargetAt(state, anchor);
+  const birth = state.profile.birthDate;
+  const rows = [];
+  let bal = start;
+  for (let n = 1; n <= years; n++) {
+    const startBal = bal;
+    const growth = (startBal + contribYearly) * r;
+    bal = (startBal + contribYearly) * (1 + r);
+    const target = target1 * Math.pow(1 + g, n - 1);
+    const ym = addMonths(anchor, n * 12 - 1);
+    rows.push({
+      year: n, ym, age: birth ? ageAt(birth, ym).years : null,
+      startBal, contrib: contribYearly, growth, endBal: bal, target,
+      reached: bal >= target - EPS,
+    });
+  }
+  return rows;
+}
+
+// Wrażliwość: pełny potok na płytkiej kopii stanu (wszystkie funkcje potoku
+// są czystymi czytelnikami — stan wejściowy pozostaje nietknięty, test F15a).
+export function projectionWith(state, { assumptions = {}, extraMonthlySavings = 0 } = {}, now = new Date()) {
+  const st = { ...state, assumptions: { ...state.assumptions, ...assumptions } };
+  const upto = lastCompleteMonth(now);
+  let plan = buildPlan(st);
+  if (extraMonthlySavings) {
+    plan = plan.map(m => ({ ...m, plannedSavings: m.plannedSavings + extraMonthlySavings }));
+  }
+  const debt = replayDebt(st, upto);
+  const balances = replayBalances(st, upto, debt);
+  return projectFire(st, plan, balances, debt, upto);
+}
+
+// Tabela SWR: cel = roczne wydatki / SWR (roczne wydatki wprost z celu użytkownika).
+export function swrComparison(state, nowYm = todayYm()) {
+  const user = state.assumptions.withdrawalRate;
+  const expensesYearly = fireTargetAt(state, nowYm) * user;
+  const target4 = expensesYearly / 0.04;
+  const labels = new Map([[0.03, 'Bardzo konserwatywne'], [0.035, 'Konserwatywne'], [0.04, 'Klasyczne']]);
+  const swrs = [...labels.keys()];
+  if (!swrs.some(s => Math.abs(s - user) < 1e-9)) swrs.push(user);
+  swrs.sort((x, y) => x - y);
+  return swrs.map(swr => ({
+    swr,
+    multiplier: 1 / swr,
+    target: expensesYearly / swr,
+    diffVs4pct: expensesYearly / swr - target4,
+    label: labels.get(swr) || 'Twoje ustawienie',
+    isUser: Math.abs(swr - user) < 1e-9,
+  }));
+}
+
+// Stopa oszczędzania: ostatni miesiąc / 12 miesięcy / od początku.
+export function savingsStats(state, uptoYm) {
+  const upto = ymToIdx(uptoYm);
+  const entries = state.entries
+    .filter(e => ymToIdx(e.month) <= upto)
+    .sort((x, y) => (x.month < y.month ? -1 : 1));
+  const agg = list => {
+    const earned = list.reduce((s, e) => s + e.earned, 0);
+    const spent = list.reduce((s, e) => s + e.spent, 0);
+    const net = earned - spent;
+    return { n: list.length, earned, spent, net, rate: earned > 0 ? net / earned : null };
+  };
+  return {
+    last: agg(entries.slice(-1)),
+    trailing12: agg(entries.filter(e => ymToIdx(e.month) > upto - 12)),
+    overall: agg(entries),
+  };
+}
+
+// Wykonanie planu na zamrożonych snapshotach (plannedSavingsSnapshot) —
+// spójne z niezmiennikiem: zmiana założeń nie przepisuje przeszłych werdyktów.
+export function planVsActualStats(entries) {
+  const sorted = [...entries].sort((x, y) => (x.month < y.month ? -1 : 1));
+  const verdicts = { crushed: 0, on_plan: 0, behind: 0, hard: 0 };
+  const cumRows = [];
+  let cumNet = 0, cumPlanned = 0, best = null, worst = null;
+  for (const e of sorted) {
+    const net = roundGrosze(e.earned - e.spent);
+    const delta = net - e.plannedSavingsSnapshot;
+    cumNet += net;
+    cumPlanned += e.plannedSavingsSnapshot;
+    if (verdicts[e.verdict] != null) verdicts[e.verdict]++;
+    cumRows.push({ ym: e.month, cumNet, cumPlanned });
+    if (!best || delta > best.delta) best = { ym: e.month, net, delta };
+    if (!worst || delta < worst.delta) worst = { ym: e.month, net, delta };
+  }
+  return { n: sorted.length, cumNet, cumPlanned, cumDelta: cumNet - cumPlanned, verdicts, cumRows, best, worst };
+}
+
+// Harmonogram "sama rata" od zadanego salda (cap 1200 kroków).
+export function remainingSchedule(balNominal, j, payment) {
+  const rows = [];
+  let bal = balNominal, totalInterest = 0;
+  for (let n = 0; bal > 0 && n < 1200; n++) {
+    const step = mortgageStep(bal, j, payment);
+    bal = step.bal;
+    totalInterest += step.interest;
+    rows.push({ n: n + 1, balNominal: bal, interest: step.interest });
+  }
+  return { months: rows.length, totalInterest, rows };
+}
+
+// Analityka kredytu. Oszczędność z nadpłat liczona "na sztywno":
+// interestSavedSoFar = Σodsetek kontraktu − zapłacone − pozostałe wg harmonogramu.
+export function mortgageAnalytics(state, debt, projection) {
+  const hp = state.housing.housePlan;
+  if (!hp || !hp.enabled || !debt.started) return null;
+  const mtg = hp.mortgage;
+  const j = monthlyRate(mtg.rateNominal);
+  const A = mortgagePayment(mtg);
+  let paidInterest = 0, paidPrincipal = 0;
+  let paidOffYm = null;
+  for (const r of debt.rows) {
+    paidInterest += r.interest;
+    paidPrincipal += r.principalPaid;
+    if (paidOffYm == null && r.balNominal <= 0) paidOffYm = r.ym;
+  }
+  const startIdx = ymToIdx(mtg.startMonth);
+  const overpaidTotal = state.entries
+    .filter(e => (e.overpayment || 0) > 0 && ymToIdx(e.month) >= startIdx)
+    .reduce((s, e) => s + e.overpayment, 0);
+  const balanceNominal = debt.balanceNominal;
+  const lastYm = debt.rows.length ? debt.rows[debt.rows.length - 1].ym : addMonths(mtg.startMonth, -1);
+  const rem = remainingSchedule(balanceNominal, j, A);
+  const scheduleOnlyPayoffYm = paidOffYm || addMonths(lastYm, rem.months);
+  const contract = remainingSchedule(mtg.principal, j, A);
+  const contractPayoffYm = addMonths(mtg.startMonth, contract.months - 1);
+  const contractTotalInterest = contract.totalInterest;
+  const interestSavedSoFar = contractTotalInterest - paidInterest - rem.totalInterest;
+  return {
+    paidInterest, paidPrincipal, overpaidTotal, balanceNominal,
+    scheduleOnlyPayoffYm, scheduleOnlyRemainingInterest: rem.totalInterest,
+    contractPayoffYm, contractTotalInterest, interestSavedSoFar,
+    monthsAheadOfContract: monthsBetween(scheduleOnlyPayoffYm, contractPayoffYm),
+    projectedPayoffYm: projection ? projection.debtFreeYm : null,
+    payment: A, rateMonthly: j, lastYm, scheduleRows: rem.rows,
+  };
+}
+
+// Statystyki FIRE: FI%, majątek netto (bez wartości domu), runway, Coast FIRE.
+// Coast = cel w miesiącu docelowego wieku FIRE zdyskontowany realnym zwrotem.
+export function fiStats(state, balances, debt, plan, nowYm = todayYm()) {
+  const a = state.assumptions;
+  const target = fireTargetAt(state, nowYm);
+  const netWorth = balances.cash + balances.portfolio - (debt ? debt.balanceReal : 0);
+  const i = ymToIdx(nowYm) - ymToIdx(plan[0].ym);
+  const row = plan[Math.min(Math.max(i, 0), plan.length - 1)];
+  const monthlyExpenses = row.livingReal + row.rentReal + row.mortgagePaymentReal;
+  const runwayMonths = monthlyExpenses > 0 ? (balances.cash + balances.portfolio) / monthlyExpenses : null;
+  let coast = null;
+  if (state.profile.birthDate && a.targetFireAge > 0) {
+    const [by, bm] = state.profile.birthDate.split('-').map(Number);
+    const fireAgeYm = idxToYm(by * 12 + (bm - 1) + Math.round(a.targetFireAge * 12));
+    const mo = monthsBetween(nowYm, fireAgeYm);
+    if (mo >= 0) {
+      const number = fireTargetAt(state, fireAgeYm) / Math.pow(1 + a.realReturnAnnual, mo / 12);
+      coast = { number, reached: balances.portfolio >= number - EPS, fireAgeYm };
+    }
+  }
+  return {
+    fiPct: target > 0 ? balances.portfolio / target : 0,
+    target, netWorth, monthlyExpenses, runwayMonths, coast,
+  };
+}
+
+// Wpłaty vs wzrost od startu planu (wzrost rezydualny — zawiera korekty sald).
+export function contributionsVsGrowth(state, balances) {
+  const a = state.assumptions;
+  const start = (a.cashStart || 0) + (a.portfolioStart || 0);
+  let totalFlow = 0, hasOverride = false;
+  for (const r of balances.rows) {
+    totalFlow += (r.flowCash || 0) + (r.flowPortfolio || 0);
+    if (r.override) hasOverride = true;
+  }
+  const now = balances.cash + balances.portfolio;
+  return { start, totalFlow, growth: now - start - totalFlow, now, hasOverride };
 }
 
 // ── Jeden potok po każdej mutacji ───────────────────────────────────────
