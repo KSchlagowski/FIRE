@@ -6,7 +6,7 @@ import * as An from './analysis.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '1.6.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1407,11 +1407,39 @@ function renderBackup() {
       </ol>
     </details>
   </div>
+  <div class="card"><h2>Aktualizacja</h2>
+    <p class="muted small">Jeśli aplikacja nie odświeża się do najnowszej wersji, wymuś ponowne pobranie
+    wszystkich plików z sieci. <b>Twoje dane pozostaną nietknięte</b> — czyścimy tylko pamięć podręczną plików aplikacji.</p>
+    <button id="bk-update" class="wide">🔄 Wymuś aktualizację i przeładuj</button>
+  </div>
   <div class="card"><h2>Strefa ostrożności</h2>
     <button id="bk-reset" class="${resetArmed ? 'danger' : ''} wide">${resetArmed ? '⚠️ Potwierdź: usuń WSZYSTKIE dane' : 'Wyzeruj aplikację…'}</button>
     ${resetArmed ? '<p class="field-error center small">To usunie całą historię bezpowrotnie. Najpierw zrób eksport!</p>' : ''}
   </div>
   <p class="muted small center">FIRE Companion v${APP_VERSION}</p>`;
+
+  $('#bk-update').addEventListener('click', async () => {
+    const btn = $('#bk-update');
+    btn.disabled = true;
+    btn.textContent = '⏳ Pobieram najnowszą wersję…';
+    try {
+      // Kasujemy TYLKO Cache Storage (pliki aplikacji) — localStorage z danymi zostaje.
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      // Wyrejestruj service workery, żeby po przeładowaniu wszystko poszło ze świeżej sieci.
+      if (navigator.serviceWorker) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+    } catch (err) {
+      console.warn('Wymuszona aktualizacja:', err);
+    }
+    // reload(true) jest przestarzały i ignorowany, ale samo przeładowanie bez SW
+    // pobierze wszystko z sieci — a app.js zarejestruje nowy SW od nowa.
+    location.reload();
+  });
 
   $('#bk-export').addEventListener('click', () => {
     const json = exportJSON(state);

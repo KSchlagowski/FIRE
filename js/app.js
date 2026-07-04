@@ -30,6 +30,13 @@ if ('serviceWorker' in navigator) {
           }
         });
       });
+      // Aktywne szukanie aktualizacji: przy każdym powrocie do aplikacji i co godzinę.
+      // Bez tego toast pojawia się tylko, gdy przeglądarka sama sprawdzi sw.js.
+      const checkForUpdate = () => reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') checkForUpdate();
+      });
+      setInterval(checkForUpdate, 60 * 60 * 1000);
     } catch (err) {
       console.warn('SW registration failed:', err);
     }
