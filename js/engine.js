@@ -857,6 +857,42 @@ export function contributionsVsGrowth(state, balances) {
   return { start, totalFlow, growth: now - start - totalFlow, now, hasOverride };
 }
 
+// Postęp „drogi do FIRE": jaka część CAŁEJ podróży oszczędzania jest już za Tobą.
+// Sensowny także w fazie domu/długu, gdzie portfel ≈ 0 a klasyczne FI% stoi w miejscu.
+//
+// Każdy miesiąc ma kwotę do odłożenia (na dom, dług, inwestycje) — to plannedSavings
+// (dla miesięcy historycznych bierzemy realny wynik earned−spent). Sumujemy je od
+// startu planu do dnia FIRE. Aby było „realistycznie", ważymy każdą wpłatę jej
+// wzrostem do dnia FIRE (realny zwrot z inwestycji) — wcześniejsza złotówka jest
+// warta więcej; wszystko w realnych zł, więc inflacja już uwzględniona. Miesiące
+// na minusie nie cofają paska (max(0, …)) → pasek tylko rośnie i sięga 100% w FIRE.
+// Wpłaty z faz domu i długu też się liczą: każda odłożona złotówka przybliża FIRE.
+export function fireJourneyProgress(state, plan, projection, uptoYm) {
+  const a = state.assumptions;
+  const a0 = ymToIdx(state.anchorMonth);
+  const upto = ymToIdx(uptoYm);
+  const series = projection.series;
+  const reached = !!projection.reached;
+  if (!series.length) return { pct: 0, savedValue: 0, totalValue: 0, reached, monthlySaveNow: 0 };
+  const endIdx = ymToIdx(series[series.length - 1].ym); // dzień FIRE (albo koniec horyzontu)
+  const r = monthlyRate(a.realReturnAnnual);
+  const entriesByMonth = new Map(state.entries.map(e => [ymToIdx(e.month), e]));
+  let saved = 0, total = 0;
+  for (let idx = a0; idx <= endIdx; idx++) {
+    const e = entriesByMonth.get(idx);
+    const contrib = idx <= upto
+      ? (e ? roundGrosze(e.earned - e.spent) : 0)      // historia: realny wynik miesiąca
+      : plannedSavingsFor(plan, idxToYm(idx));          // przyszłość: plan
+    const c = Math.max(0, contrib);
+    const w = Math.pow(1 + r, endIdx - idx);            // wartość przyszła (do dnia FIRE)
+    total += c * w;
+    if (idx <= upto) saved += c * w;
+  }
+  const pct = total > 0 ? Math.min(1, Math.max(0, saved / total)) : 0;
+  const monthlySaveNow = plannedSavingsFor(plan, idxToYm(Math.min(upto + 1, endIdx)));
+  return { pct, savedValue: saved, totalValue: total, reached, monthlySaveNow };
+}
+
 // ── Jeden potok po każdej mutacji ───────────────────────────────────────
 // Pochodne trzymane na state.derived — nigdy nie utrwalane jako prawda.
 

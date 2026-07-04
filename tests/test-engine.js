@@ -843,6 +843,56 @@ test('F18e: ujemne kwoty, monotoniczność; r=0 → +1000 od 2027-01 = +6000 w 2
     FIX.F18.recurringAmount * FIX.F18.monthsToJun2027, 1e-9);
 });
 
+// ── F19: postęp „drogi do FIRE" ─────────────────────────────────────────
+
+test('F19a: droga do FIRE przy r=0 to udział odłożonych miesięcy', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000, realReturnAnnual: 0 } });
+  for (let i = 0; i < 6; i++) st.entries.push(entry(E.addMonths('2026-01', i), 10000, 6000)); // 2026-01..06, net 4000
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  const jp = E.fireJourneyProgress(st, d.plan, d.projection, d.uptoYm);
+  assertTrue(jp.reached, 'FIRE w horyzoncie');
+  const totalMonths = E.ymToIdx(d.projection.fireYm) - E.ymToIdx('2026-01') + 1;
+  assertClose(jp.pct, 6 / totalMonths, 1e-9);
+  assertClose(jp.savedValue, 6 * 4000, 1e-9, 'r=0 → wagi = 1');
+  assertClose(jp.monthlySaveNow, 4000, 1e-9);
+});
+
+test('F19b: pasek tylko rośnie — miesiąc na minusie liczony jako 0', () => {
+  const mk = neg => {
+    const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000, realReturnAnnual: 0 } });
+    for (let i = 0; i < 5; i++) st.entries.push(entry(E.addMonths('2026-01', i), 10000, 6000)); // 5 dobrych
+    st.entries.push(entry('2026-06', neg ? 3000 : 10000, neg ? 9000 : 6000)); // minus (−6000) vs plus (+4000)
+    E.recomputeDerived(st, NOW);
+    return E.fireJourneyProgress(st, st.derived.plan, st.derived.projection, st.derived.uptoYm);
+  };
+  const plus = mk(false), minus = mk(true);
+  assertClose(minus.savedValue, 5 * 4000, 1e-9, 'minus nie odejmuje — max(0, ·)');
+  assertTrue(plus.savedValue > minus.savedValue, 'dobry miesiąc podnosi pasek');
+  assertTrue(minus.pct >= 0 && minus.pct <= 1, 'zakres [0,1]');
+});
+
+test('F19c: wpłaty w fazie domu też liczą się do FIRE', () => {
+  const st = baseState({
+    anchorMonth: '2026-01',
+    assumptions: { portfolioStart: 1300000, realReturnAnnual: 0 },
+    housing: {
+      currentRentMonthly: 0,
+      housePlan: housePlan({
+        moveInMonth: '2027-01',
+        houseSpend: { month: '2027-01', amount: 0 },
+        mortgage: { startMonth: '2027-01', principal: 300000, rateNominal: 0.07, termYears: 20 },
+      }),
+    },
+  });
+  for (let i = 0; i < 6; i++) st.entries.push(entry(E.addMonths('2026-01', i), 10000, 6000)); // faza funduszu na dom
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  const jp = E.fireJourneyProgress(st, d.plan, d.projection, d.uptoYm);
+  assertClose(jp.savedValue, 6 * 4000, 1e-9, 'odłożone na dom liczą się (r=0)');
+  assertTrue(jp.pct > 0 && jp.pct < 1, 'pasek rusza mimo portfela ≈ start');
+});
+
 // ── Statystyki oszczędzania i wykonania planu ───────────────────────────
 
 test('statystyki: stopa oszczędzania (ostatni / 12 mies. / całość)', () => {

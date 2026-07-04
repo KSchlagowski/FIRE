@@ -139,7 +139,7 @@ export function chartSVG(rows, defs, { height = 170 } = {}) {
   </svg>`;
 }
 
-function ringSVG(pct) {
+function ringSVG(pct, sublabel = 'celu FIRE') {
   const r = 80, c = 2 * Math.PI * r;
   const dash = Math.max(0, Math.min(pct, 1)) * c;
   return `<div class="ring-wrap">
@@ -151,7 +151,7 @@ function ringSVG(pct) {
     </svg>
     <div class="ring-center">
       <span class="pct">${(Math.min(pct, 1) * 100).toFixed(1).replace('.', ',')}%</span>
-      <span class="muted small">celu FIRE</span>
+      <span class="muted small">${esc(sublabel)}</span>
     </div>
   </div>`;
 }
@@ -463,6 +463,11 @@ function renderDashboard() {
   }
 
   // ── Hero wg fazy ──
+  if (mode === 'housefund' || mode === 'debt') {
+    // Ring „drogi do FIRE" na górze: postęp całej podróży oszczędzania (dom + dług
+    // + inwestycje). Każda odłożona złotówka go podnosi, choć portfel jeszcze stoi.
+    html += fireJourneyHero(proj);
+  }
   if (mode === 'housefund') {
     const hsAmount = hp.houseSpend.amount;
     let goal = hsAmount;
@@ -471,18 +476,17 @@ function renderDashboard() {
       goal = preSpend ? preSpend.cash : d.balances.cash;
     }
     const pct = goal > 0 ? Math.min(1, d.balances.cash / goal) : 1;
-    html += `<div class="card hero">
+    html += `<div class="card">
       <div class="muted">Fundusz na dom</div>
       <div class="big">${Fmt.formatPLN(d.balances.cash)}</div>
       <div class="muted small">z planowanych ~${Fmt.formatPLN(goal)} do ${Fmt.formatMonthGenitive(hp.houseSpend.month || hp.mortgage.startMonth)}</div>
       <div class="bar"><i style="width:${(pct * 100).toFixed(1)}%"></i></div>
       <div class="muted small">Start kredytu: ${Fmt.formatMonthName(hp.mortgage.startMonth)}</div>
     </div>`;
-    html += fireSecondaryCard(proj);
   } else if (mode === 'debt') {
     const pct = d.debt.paidPct;
     const dfYm = proj.debtFreeYm;
-    html += `<div class="card hero">
+    html += `<div class="card">
       <div class="muted">Do spłaty (realnie)</div>
       <div class="big">${Fmt.formatPLN(d.debt.balanceReal)}</div>
       <div class="muted small">nominalnie: ${Fmt.formatPLN(d.debt.balanceNominal)}</div>
@@ -498,7 +502,6 @@ function renderDashboard() {
         ${chartSVG(debtRows, [{ get: r => r.debtReal, cls: 'line-debt' }])}
       </div>`;
     }
-    html += fireSecondaryCard(proj);
   } else {
     const targets = E.fireTargetsToday(state, nowYm);
     const pct = d.balances.portfolio / targets.primary;
@@ -553,15 +556,19 @@ function renderDashboard() {
   });
 }
 
-function fireSecondaryCard(proj) {
+// Hero „drogi do FIRE" dla faz domu i długu — ring postępu całej podróży
+// oszczędzania na górze pulpitu, nad kartą fazy (fundusz / spłata).
+function fireJourneyHero(proj) {
   const d = state.derived;
+  const jp = E.fireJourneyProgress(state, d.plan, proj, d.uptoYm);
   const targets = E.fireTargetsToday(state, E.todayYm());
-  return `<div class="card">
-    <h2>Cel FIRE 🎯</h2>
-    <div class="kv"><span>Portfel inwestycyjny</span><b>${Fmt.formatPLN(d.balances.portfolio)}</b></div>
-    <div class="kv"><span>Liczba FIRE (dziś)</span><b>${Fmt.formatPLN(targets.primary)}</b></div>
-    ${proj.reached ? `<div class="kv"><span>Prognoza FIRE</span><b class="${proj.onTrack ? 'good' : 'warn-text'}">${Fmt.formatMonthName(proj.fireYm)} (wiek ${Fmt.formatAgeYM(proj.fireAge)})</b></div>` : '<div class="kv"><span>Prognoza FIRE</span><b class="warn-text">poza horyzontem</b></div>'}
-    ${proj.debtFreeYm && d.debt.balanceNominal > 0 ? `<div class="kv"><span>Wolny od długu</span><b>${Fmt.formatMonthName(proj.debtFreeYm)}</b></div>` : ''}
+  return `<div class="card hero">
+    ${ringSVG(jp.pct, 'drogi do FIRE')}
+    ${proj.reached
+      ? `<p style="margin:.5rem 0 0">Prognoza FIRE: <b class="${proj.onTrack ? 'good' : 'warn-text'}">${Fmt.formatMonthName(proj.fireYm)}</b>
+          <span class="muted">(wiek ${Fmt.formatAgeYM(proj.fireAge)})</span></p>`
+      : '<p class="warn-text small" style="margin:.5rem 0 0">Przy obecnym planie cel FIRE jest poza 60-letnim horyzontem — zajrzyj do założeń.</p>'}
+    <p class="muted small">Każda złotówka odłożona na dom, dług i inwestycje przybliża Cię do celu (liczba FIRE dziś: ${Fmt.formatPLN(targets.primary)}). ${tip('Postęp całej drogi oszczędzania: suma tego, co już odłożone, do sumy potrzebnej do FIRE (dom + dług + inwestycje), ważona wzrostem inwestycji. W realnych zł, więc inflacja uwzględniona. Pasek tylko rośnie.')}</p>
   </div>`;
 }
 
