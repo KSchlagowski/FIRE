@@ -115,7 +115,7 @@ export function projectionCard({ mode, blocks, series, excelRows, houseOn, selec
       if (b.hasOverride) hasOverride = true;
       const cls = [b.projected === 'full' ? 'proj' : '', b.reached ? 'reached' : ''].filter(Boolean).join(' ');
       return `<tr${cls ? ` class="${cls}"` : ''}>
-        <td>Rok ${b.t} <span class="muted small">${ymShort(b.ymFrom)}–${ymShort(b.ymTo)}</span></td>
+        <td>${b.t}</td>
         <td>${b.age != null ? b.age : '—'}</td>
         <td>${money(b.portStart)}</td>
         <td>${money(b.flowPortfolio)}</td>
