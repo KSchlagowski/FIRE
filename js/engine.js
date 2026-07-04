@@ -492,6 +492,28 @@ export function reanchor(state, newAnchor, now = new Date()) {
   recomputeDerived(state, now);
 }
 
+// Historia: dodaj wcześniejszy miesiąc — cofa start planu o 1 miesiąc.
+// Salda startowe zostają (to stan początku nowego, wcześniejszego miesiąca),
+// dokładnie jak reanchor wstecz. Otwiera pusty miesiąc do check-inu.
+export function addEarlierMonth(state, now = new Date()) {
+  reanchor(state, addMonths(state.anchorMonth, -1), now);
+}
+
+// Historia: usuń najwcześniejszy miesiąc — przesuwa start planu o 1 miesiąc w
+// przód, ZACHOWUJĄC salda startowe (dokładna odwrotność addEarlierMonth). Jeśli
+// ten miesiąc ma wpis, usuwa go wraz z werdyktem. Startu nie można przesunąć poza
+// bieżący miesiąc.
+export function removeEarliestMonth(state, now = new Date()) {
+  const anchor = state.anchorMonth;
+  if (ymToIdx(addMonths(anchor, 1)) > ymToIdx(todayYm(now))) {
+    throw new Error('Nie można przesunąć startu w przyszłość');
+  }
+  const i = state.entries.findIndex(e => e.month === anchor);
+  if (i >= 0) state.entries.splice(i, 1);
+  state.anchorMonth = addMonths(anchor, 1);
+  recomputeDerived(state, now);
+}
+
 // ── Prognoza ────────────────────────────────────────────────────────────
 
 // Średnia (net − snapshot) z ostatnich min(6, n) wpisów; 0 gdy n < 3

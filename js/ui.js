@@ -6,7 +6,7 @@ import * as An from './analysis.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.6.0';
+export const APP_VERSION = '1.7.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -861,11 +861,17 @@ function renderHistory() {
   for (let i = endIdx; i >= startIdx; i--) allMonths.add(E.idxToYm(i));
   const months = [...allMonths].sort((a, b) => (a < b ? 1 : -1));
 
+  const canRemove = E.ymToIdx(E.addMonths(state.anchorMonth, 1)) <= E.ymToIdx(E.todayYm());
+  const removeBtn = ym => (ym === state.anchorMonth && canRemove)
+    ? `<button class="hist-x" data-remove-earliest="${ym}" aria-label="Usuń miesiąc i przesuń start planu">✕</button>`
+    : '';
+
   for (const ym of months) {
     const e = byMonth.get(ym);
     if (!e) {
       rows.push(`<div class="hist-row gap" data-m="${ym}" data-gap>
         <div class="m">${esc(Fmt.formatMonthName(ym))}<span class="muted small">brak wpisu — dotknij, aby uzupełnić</span></div>
+        ${removeBtn(ym)}
       </div>`);
       continue;
     }
@@ -875,6 +881,7 @@ function renderHistory() {
       <div class="m"><b>${esc(Fmt.formatMonthName(ym))}</b>
         <span class="muted small">odłożone ${Fmt.formatPLN(net)} · ${delta >= 0 ? '+' : ''}${Fmt.formatPLN(delta)} vs plan</span></div>
       <span class="badge v-${e.verdict}">${verdictEmoji(e.verdict)}</span>
+      ${removeBtn(ym)}
     </div>
     ${histExpanded === ym ? `<div class="hist-actions">
       <button data-edit="${ym}">✏️ Edytuj</button>
@@ -882,9 +889,13 @@ function renderHistory() {
     </div>` : ''}`);
   }
 
+  const addEarlier = `<button class="btn ghost wide hist-add" id="hist-add-earlier">➕ Dodaj wcześniejszy miesiąc</button>
+    <p class="muted small">Cofa start planu o miesiąc, aby uzupełnić wcześniejsze check-iny.</p>`;
+
   view().innerHTML = `<div class="card">
     <h2>Historia check-inów</h2>
     ${rows.length ? rows.join('') : '<p class="muted">Jeszcze pusto — pierwszy check-in przed Tobą.</p>'}
+    ${addEarlier}
     ${state.derived.streak.best > 0 ? `<p class="muted small" style="margin-top:.75rem">Najdłuższa seria: 🔥 ${state.derived.streak.best}</p>` : ''}
   </div>`;
 
@@ -908,6 +919,29 @@ function renderHistory() {
       histExpanded = null;
       renderHistory();
       toast('Wpis usunięty, wszystko przeliczone.');
+    }
+  }));
+  const addBtn = document.getElementById('hist-add-earlier');
+  if (addBtn) addBtn.addEventListener('click', () => {
+    E.addEarlierMonth(state);
+    persist();
+    histExpanded = null;
+    renderHistory();
+    toast('Dodano ' + Fmt.formatMonthName(state.anchorMonth) + ' — uzupełnij go w check-inie.');
+  });
+  $$('[data-remove-earliest]').forEach(el => el.addEventListener('click', ev => {
+    ev.stopPropagation();
+    const ym = el.dataset.removeEarliest;
+    const hasEntry = byMonth.has(ym);
+    if (hasEntry && !confirm(`Usunąć miesiąc ${Fmt.formatMonthName(ym)} wraz z jego check-inem i przesunąć start planu? Salda i prognoza zostaną przeliczone.`)) return;
+    try {
+      E.removeEarliestMonth(state);
+      persist();
+      histExpanded = null;
+      renderHistory();
+      toast(hasEntry ? 'Miesiąc usunięty, start planu przesunięty.' : 'Usunięto pusty najwcześniejszy miesiąc.');
+    } catch (err) {
+      toast(err.message, 6000);
     }
   }));
 }

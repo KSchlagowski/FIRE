@@ -578,6 +578,54 @@ test('re-anchor wstecz: otwiera wcześniejsze miesiące, salda startowe bez zmia
   assertThrows(() => E.applyCheckIn(st, { month: '2026-01', earned: 1, spent: 1 }, NOW), 'wciąż sprzed nowego startu');
 });
 
+test('Historia: add→remove wcześniejszego miesiąca to dokładny round trip', () => {
+  const st = baseState({
+    anchorMonth: '2026-05',
+    assumptions: { portfolioStart: 100000, cashStart: 3000, realReturnAnnual: 0.05, cashReturnReal: 0.02 },
+  });
+  E.recomputeDerived(st, NOW);
+  const anchor0 = st.anchorMonth;
+  const port0 = st.assumptions.portfolioStart;
+  const cash0 = st.assumptions.cashStart;
+  E.addEarlierMonth(st, NOW);
+  assertEq(st.anchorMonth, '2026-04', 'start cofnięty o miesiąc');
+  E.removeEarliestMonth(st, NOW);
+  assertEq(st.anchorMonth, anchor0, 'kotwica przywrócona');
+  assertClose(st.assumptions.portfolioStart, port0, 1e-9, 'portfel startowy przywrócony');
+  assertClose(st.assumptions.cashStart, cash0, 1e-9, 'gotówka startowa przywrócona');
+});
+
+test('Historia: remove pustego najwcześniejszego miesiąca — salda i wpisy bez zmian', () => {
+  const st = baseState({
+    anchorMonth: '2026-05',
+    assumptions: { portfolioStart: 100000, cashStart: 3000, realReturnAnnual: 0.05, cashReturnReal: 0.02 },
+  });
+  E.recomputeDerived(st, NOW);
+  const port0 = st.assumptions.portfolioStart;
+  const cash0 = st.assumptions.cashStart;
+  E.removeEarliestMonth(st, NOW);
+  assertEq(st.anchorMonth, '2026-06', 'start przesunięty o miesiąc w przód');
+  assertClose(st.assumptions.portfolioStart, port0, 1e-9, 'portfel startowy nietknięty');
+  assertClose(st.assumptions.cashStart, cash0, 1e-9, 'gotówka startowa nietknięta');
+  assertEq(st.entries.length, 0, 'brak wpisów, brak zmian');
+});
+
+test('Historia: remove usuwa check-in z najwcześniejszego miesiąca', () => {
+  const st = baseState({ anchorMonth: '2026-05', assumptions: { portfolioStart: 100000 } });
+  E.applyCheckIn(st, { month: '2026-05', earned: 10000, spent: 6000 }, NOW);
+  E.applyCheckIn(st, { month: '2026-06', earned: 10000, spent: 6000 }, NOW);
+  E.removeEarliestMonth(st, NOW);
+  assertEq(st.anchorMonth, '2026-06', 'start przesunięty w przód');
+  assertEq(st.entries.length, 1, 'brzegowy wpis usunięty, późniejszy został');
+  assertEq(st.entries[0].month, '2026-06', 'został wpis czerwcowy');
+});
+
+test('Historia: remove nie przesuwa startu w przyszłość', () => {
+  const st = baseState({ anchorMonth: '2026-07' }); // = todayYm(NOW)
+  E.recomputeDerived(st, NOW);
+  assertThrows(() => E.removeEarliestMonth(st, NOW), 'przyszłość');
+});
+
 // ── F13: Faza wypłat ────────────────────────────────────────────────────
 
 test('F13a: Faza wypłat — parytet Excela (lata 1/2/35, R nominalne 8,15%)', () => {

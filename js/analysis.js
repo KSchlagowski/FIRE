@@ -151,7 +151,7 @@ export function projectionCard({ mode, blocks, series, excelRows, houseOn, selec
     const shown = firstReached >= 0 ? excelRows.slice(0, Math.min(excelRows.length, firstReached + 5)) : excelRows;
     const headers = ['Rok', 'Wiek', 'Saldo pocz.', 'Wpłaty', 'Wzrost', 'Saldo końc.', 'Cel FIRE', '✓'];
     const rows = shown.map((r, i) => `<tr${i === firstReached ? ' class="reached"' : ''}>
-      <td>${r.year} <span class="muted small">${r.ym.slice(0, 4)}</span></td>
+      <td>${r.year}</td>
       <td>${r.age != null ? r.age : '—'}</td>
       <td>${money(r.startBal)}</td>
       <td>${money(r.contrib)}</td>
