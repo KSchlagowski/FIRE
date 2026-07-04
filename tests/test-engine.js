@@ -452,10 +452,20 @@ test('F11: odzysk z .bak po korupcji', () => {
   assertEq(res.state.assumptions.monthlyIncome, 10000, '.bak trzyma poprzedni pełny zapis');
 });
 
-test('F11: migracja v1 = identyczność; nowsza wersja odrzucona', () => {
+test('F11: v2 round-trip = identyczność; migracja v1→v2; nowsza wersja odrzucona', () => {
   const st = baseState();
-  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 1);
-  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99 odrzucona');
+  assertEq(st.version, 2, 'nowy stan = v2');
+  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 2);
+  // v1 (bez długu rodzinnego) → v2: dokładany familyLoan (wyłączony) + familyOverrides.
+  const v1 = JSON.parse(JSON.stringify(st));
+  v1.version = 1;
+  delete v1.housing.housePlan.familyLoan;
+  delete v1.debt.familyOverrides;
+  const migrated = S.migrate(S.validateState(v1));
+  assertEq(migrated.version, 2);
+  assertTrue(migrated.housing.housePlan.familyLoan && migrated.housing.housePlan.familyLoan.enabled === false, 'familyLoan dodany, wyłączony');
+  assertTrue(Array.isArray(migrated.debt.familyOverrides) && migrated.debt.familyOverrides.length === 0, 'familyOverrides = []');
+  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99/v3 odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: 'inna-apka', version: 1, state: {} })), 'obcy plik odrzucony');
 });
 
@@ -903,6 +913,164 @@ test('F19c: wpłaty w fazie domu też liczą się do FIRE', () => {
   const jp = E.fireJourneyProgress(st, d.plan, d.projection, d.uptoYm);
   assertClose(jp.savedValue, 6 * 4000, 1e-9, 'odłożone na dom liczą się (r=0)');
   assertTrue(jp.pct > 0 && jp.pct < 1, 'pasek rusza mimo portfela ≈ start');
+});
+
+// ── F20: dług rodzinny (family loan) ────────────────────────────────────
+
+// Kredyt 0% i dług rodzinny 0% dla ręcznych rachunków całkowitych.
+// Mortgage: 12 000/1 rok → rata 1000. Family: 24 000, okno 12 mies. → rata 2000.
+function f20State(flOver = {}) {
+  return baseState({
+    anchorMonth: '2026-01',
+    assumptions: { cashStart: 5000, portfolioStart: 20000, realReturnAnnual: 0, inflationAnnual: 0 },
+    housing: {
+      currentRentMonthly: 0,
+      housePlan: housePlan({
+        moveInMonth: '2026-01',
+        houseSpend: { month: '2026-01', amount: 0 },
+        mortgage: { startMonth: '2026-01', principal: 12000, rateNominal: 0, termYears: 1 },
+        familyLoan: deep({ enabled: true, startMonth: '2026-01', endMonth: '2026-12', principal: 24000, rateNominal: 0, paymentOverrideMonthly: null }, flOver),
+      }),
+    },
+  });
+}
+
+test('F20a: familyLoanPayment ≡ annuitet; N krokiem → saldo ≈ 0', () => {
+  const f = FIX.F20;
+  const fl = { principal: f.principal, rateNominal: f.rateNominal, startMonth: f.startMonth, endMonth: f.endMonth, paymentOverrideMonthly: null };
+  assertEq(E.familyLoanTermMonths(fl), f.N);
+  const A = E.familyLoanPayment(fl);
+  const j = E.monthlyRate(f.rateNominal);
+  assertClose(A, E.annuityPayment(f.principal, j, f.N, null), 1e-9, 'parytet z annuityPayment');
+  let bal = f.principal;
+  for (let i = 0; i < f.N; i++) bal = E.mortgageStep(bal, j, A).bal;
+  assertClose(bal, 0, f.eps, 'saldo po N ratach');
+  // Override raty respektowany.
+  assertEq(E.familyLoanPayment({ ...fl, paymentOverrideMonthly: 3333 }), 3333);
+});
+
+test('F20b: replayFamilyLoan — determinizm i miesiące bez wpisu', () => {
+  const st = f20State();
+  const a = E.replayFamilyLoan(st, '2026-03');
+  const b = E.replayFamilyLoan(st, '2026-03');
+  assertEq(JSON.stringify(a.rows), JSON.stringify(b.rows));
+  assertClose(a.balanceNominal, 24000 - 6000, 1e-9, 'rata planowa schodzi mimo braku wpisów');
+  assertTrue(a.started && a.active);
+  // Wyłączony dług rodzinny → pusty wynik.
+  const off = f20State({ enabled: false });
+  const e = E.replayFamilyLoan(off, '2026-03');
+  assertEq(e.started, false);
+  assertEq(e.balanceNominal, 0);
+});
+
+test('F20c: familyOverpayment redukuje dług; kontrybucja pomniejszona idzie do gotówki', () => {
+  const st = f20State();
+  st.entries.push(entry('2026-02', 8000, 6000, { familyOverpayment: 500 }));
+  const fam = E.replayFamilyLoan(st, '2026-02');
+  assertClose(fam.balanceNominal, 24000 - 4000 - 500, 1e-9);
+  const debt = E.replayDebt(st, '2026-02');
+  const b = E.replayBalances(st, '2026-02', debt, fam);
+  // Faza długu (kredyt aktywny) → kontrybucja (2000−500=1500) do gotówki.
+  assertClose(b.cash, 5000 + 1500, 1e-9);
+  assertClose(b.portfolio, 20000, 1e-9);
+});
+
+test('F20d: nadpłata długu rodzinnego ponad saldo → spill do portfela, dług = 0', () => {
+  const st = f20State();
+  st.entries.push(entry('2026-02', 40000, 6000, { familyOverpayment: 30000 }));
+  const fam = E.replayFamilyLoan(st, '2026-02');
+  assertEq(fam.balanceNominal, 0, 'dług rodzinny wyzerowany');
+  // Sty: 24000→22000. Lut: rata 2000 + nadpłata 30000 → spill 10000.
+  const debt = E.replayDebt(st, '2026-02');
+  const b = E.replayBalances(st, '2026-02', debt, fam);
+  assertClose(b.portfolio, 20000 + 10000, 1e-9);
+  // kontrybucja = 34000 − 30000 = 4000 → gotówka (faza długu).
+  assertClose(b.cash, 5000 + 4000, 1e-9);
+});
+
+test('F20e: familyOverrides resetuje łańcuch od tego miesiąca', () => {
+  const st = f20State();
+  st.debt.familyOverrides = [{ month: '2026-02', balanceNominal: 50000 }];
+  const fam = E.replayFamilyLoan(st, '2026-03');
+  assertClose(fam.balanceNominal, 50000 - 2000, 1e-9, 'override 50000 w lutym, rata w marcu');
+});
+
+test('F20f: buildPlan — plannedSavings pomniejszone o ratę rodzinną tylko w oknie', () => {
+  const st = baseState({
+    anchorMonth: '2026-01',
+    assumptions: { monthlyIncome: 10000, monthlyLivingExpenses: 6000, incomeGrowthReal: 0, expenseGrowthReal: 0, inflationAnnual: 0 },
+    housing: {
+      currentRentMonthly: 0,
+      housePlan: housePlan({
+        moveInMonth: '2026-01',
+        houseSpend: { month: '2030-01', amount: 0 },
+        mortgage: { startMonth: '2030-01', principal: 12000, rateNominal: 0, termYears: 1 },
+        familyLoan: { enabled: true, startMonth: '2028-01', endMonth: '2028-12', principal: 24000, rateNominal: 0, paymentOverrideMonthly: null },
+      }),
+    },
+  });
+  const plan = E.buildPlan(st);
+  const at = ym => plan[E.monthsBetween('2026-01', ym)];
+  assertClose(at('2027-12').plannedSavings, 4000, 1e-9, 'przed oknem: pełne 4000');
+  assertClose(at('2028-06').plannedSavings, 4000 - 2000, 1e-9, 'w oknie: −rata 2000');
+  assertClose(at('2028-06').familyPaymentReal, 2000, 1e-9);
+  assertClose(at('2029-01').plannedSavings, 4000, 1e-9, 'po oknie: znów 4000');
+});
+
+test('F20g: projectFire — FIRE zablokowane póki dług rodzinny > 0; familyFreeYm', () => {
+  const st = baseState({
+    anchorMonth: '2026-01',
+    assumptions: { portfolioStart: 2000000, cashStart: 0, realReturnAnnual: 0.05 },
+    housing: {
+      currentRentMonthly: 0,
+      housePlan: housePlan({
+        moveInMonth: '2026-08',
+        houseSpend: { month: '2026-08', amount: 0 },
+        mortgage: { startMonth: '2026-08', principal: 12000, rateNominal: 0, termYears: 1 },
+        familyLoan: { enabled: true, startMonth: '2026-08', endMonth: '2027-07', principal: 24000, rateNominal: 0.035, paymentOverrideMonthly: null },
+      }),
+    },
+  });
+  E.recomputeDerived(st, NOW);
+  const p = st.derived.projection;
+  assertTrue(p.reached, 'w końcu osiąga FIRE');
+  assertTrue(p.familyFreeYm != null, 'data spłaty długu rodzinnego wyznaczona');
+  assertTrue(E.ymToIdx(p.fireYm) >= E.ymToIdx(p.familyFreeYm), 'FIRE nie przed spłatą długu rodzinnego');
+  assertTrue(E.ymToIdx(p.fireYm) >= E.ymToIdx(p.debtFreeYm), 'ani przed spłatą kredytu');
+});
+
+test('F20h: majątek netto pomniejszony o dług rodzinny (realnie)', () => {
+  const st = f20State();
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  const withFam = E.fiStats(st, d.balances, d.debt, d.plan, '2026-06', d.family);
+  const noFam = E.fiStats(st, d.balances, d.debt, d.plan, '2026-06', null);
+  assertClose(noFam.netWorth - withFam.netWorth, d.family.balanceReal, 1e-9);
+  assertTrue(d.family.balanceReal > 0, 'dług rodzinny wciąż aktywny w 2026-06');
+});
+
+test('F20i: yearlyPrincipalInterest — Σ kapitału = principal, Σ rat = kapitał+odsetki', () => {
+  const f = FIX.F20;
+  const rows = E.amortizationScheduleN(f.principal, f.rateNominal, f.N, null);
+  const years = E.yearlyPrincipalInterest(rows);
+  const sumP = years.reduce((s, y) => s + y.principal, 0);
+  const sumI = years.reduce((s, y) => s + y.interest, 0);
+  assertClose(sumP, f.principal, 0.01, 'Σ kapitału = principal');
+  const A = E.familyLoanPayment({ principal: f.principal, rateNominal: f.rateNominal, startMonth: f.startMonth, endMonth: f.endMonth, paymentOverrideMonthly: null });
+  assertClose(sumP + sumI, A * f.N, 0.5, 'Σ (kapitał+odsetki) = Σ rat');
+  assertEq(years.length, Math.ceil(f.N / 12));
+});
+
+test('F20j: applyCheckIn — nadpłata rodzinna tylko przy aktywnym długu, zapisana na wpisie', () => {
+  const st = f20State();
+  const e = E.applyCheckIn(st, { month: '2026-02', earned: 8000, spent: 6000, familyOverpayment: 500 }, NOW);
+  assertEq(e.familyOverpayment, 500);
+  // derived liczy do ostatniego pełnego miesiąca (2026-06): 6 rat po 2000 + nadpłata 500.
+  assertClose(st.derived.family.balanceNominal, 24000 - 12000 - 500, 1e-9);
+  // Po oknie spłaty (dług rodzinny = 0) nadpłata rzuca. Okno 2 mies. → spłacone od marca.
+  const st2 = f20State({ endMonth: '2026-02' });
+  assertThrows(() => E.applyCheckIn(st2, { month: '2026-04', earned: 8000, spent: 6000, familyOverpayment: 100 }, NOW),
+    'nadpłata bez aktywnego długu rodzinnego');
 });
 
 // ── Statystyki oszczędzania i wykonania planu ───────────────────────────

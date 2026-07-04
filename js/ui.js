@@ -6,7 +6,7 @@ import * as An from './analysis.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.4.1';
+export const APP_VERSION = '1.5.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -139,6 +139,51 @@ export function chartSVG(rows, defs, { height = 170 } = {}) {
   </svg>`;
 }
 
+// Słupkowy skumulowany: dla każdego rzędu (rok) pionowy słupek złożony
+// z segmentów (kapitał + odsetki) piętrzonych od 0. Te same konwencje
+// viewBox/osi co chartSVG; etykiety lat na osi X, zł na osi Y.
+export function stackedBarSVG(rows, segments, { height = 170 } = {}) {
+  if (!rows.length) return '';
+  const W = 440, H = height, padL = 48, padR = 8, padT = 10, padB = 20;
+  let max = 0;
+  for (const r of rows) {
+    let sum = 0;
+    for (const s of segments) sum += Math.max(0, s.get(r) || 0);
+    max = Math.max(max, sum);
+  }
+  if (max <= 0) max = 1;
+  const n = rows.length;
+  const innerW = W - padL - padR;
+  const slot = innerW / n;
+  const bw = Math.max(2, Math.min(slot * 0.7, 28));
+  const y = v => padT + (1 - Math.min(v, max) / max) * (H - padT - padB);
+  const y0 = y(0), yM = y(max), yH = y(max / 2);
+  const bars = [];
+  rows.forEach((r, i) => {
+    const cx = padL + slot * (i + 0.5);
+    let base = 0;
+    for (const s of segments) {
+      const v = Math.max(0, s.get(r) || 0);
+      if (v <= 0) continue;
+      const yTop = y(base + v), yBot = y(base);
+      bars.push(`<rect class="${s.cls}" x="${(cx - bw / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, yBot - yTop).toFixed(1)}"/>`);
+      base += v;
+    }
+  });
+  const labelStep = Math.ceil(n / 8);
+  const xLabels = rows.map((r, i) => (i % labelStep === 0 || i === n - 1)
+    ? `<text x="${(padL + slot * (i + 0.5)).toFixed(1)}" y="${H - 4}" text-anchor="middle">${esc(String(r.year))}</text>` : '').join('');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">
+    <line class="axis" x1="${padL}" y1="${y0}" x2="${W - padR}" y2="${y0}"/>
+    <line class="axis" x1="${padL}" y1="${yM}" x2="${W - padR}" y2="${yM}" opacity=".4"/>
+    <line class="axis" x1="${padL}" y1="${yH}" x2="${W - padR}" y2="${yH}" opacity=".4"/>
+    <text x="${padL - 4}" y="${y0 + 3}" text-anchor="end">0</text>
+    <text x="${padL - 4}" y="${yH + 3}" text-anchor="end">${formatShort(max / 2)}</text>
+    <text x="${padL - 4}" y="${yM + 3}" text-anchor="end">${formatShort(max)}</text>
+    ${bars.join('')}${xLabels}
+  </svg>`;
+}
+
 function ringSVG(pct, sublabel = 'celu FIRE') {
   const r = 80, c = 2 * Math.PI * r;
   const dash = Math.max(0, Math.min(pct, 1)) * c;
@@ -206,6 +251,7 @@ const OB_DEFAULTS = {
   monthlyLivingExpenses: '', currentRentMonthly: '', cashStart: '', portfolioStart: '',
   houseEnabled: false, mtgStart: '', mtgPrincipal: '', mtgRate: '7', mtgTerm: '25', mtgOverride: '',
   moveIn: '', hsMonth: '', hsAmount: '', bizIncome: '', bizStart: '',
+  flEnabled: false, flPrincipal: '', flRate: '3.5', flStart: '', flEnd: '', flOverride: '',
   wr: '4', realReturn: '5', inflation: '3', gExp: '1', gInc: '3', cashReturn: '0',
 };
 
@@ -260,6 +306,19 @@ function renderOnboarding() {
       ${field({ id: 'ob-hs-amount', label: 'Kwota wydatku na dom', suffix: 'zł', value: ob.d.hsAmount, hint: 'Zostaw puste = cała zgromadzona gotówka.' })}
       ${field({ id: 'ob-biz-income', label: 'Dodatkowy dochód (np. z działalności)', suffix: 'zł/mies.', value: ob.d.bizIncome, hint: 'Opcjonalnie. 0 = brak.' })}
       ${field({ id: 'ob-biz-start', label: 'Od kiedy dodatkowy dochód', type: 'month', value: ob.d.bizStart })}
+      <h3>Dług rodzinny</h3>
+      <label class="field"><span class="lbl">
+        <input type="checkbox" id="ob-fl" ${ob.d.flEnabled ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
+        Dodatkowy dług rodzinny (obok kredytu)</span>
+      </label>
+      ${ob.d.flEnabled ? `
+      ${field({ id: 'ob-fl-principal', label: 'Kwota długu rodzinnego', suffix: 'zł', value: ob.d.flPrincipal })}
+      ${field({ id: 'ob-fl-rate', label: 'Oprocentowanie nominalne', suffix: '%', value: ob.d.flRate, tipText: 'Stałe oprocentowanie pożyczki od rodziny (nominalne — to drugi nominalny kontrakt w aplikacji).' })}
+      ${field({ id: 'ob-fl-start', label: 'Start spłaty', type: 'month', value: ob.d.flStart, tipText: 'Miesiąc, w którym pojawia się saldo i zaczyna się spłata.' })}
+      ${field({ id: 'ob-fl-end', label: 'Koniec spłaty', type: 'month', value: ob.d.flEnd, tipText: 'Ostatni miesiąc spłaty (włącznie).' })}
+      <div class="banner info" id="ob-fl-annuity">Rata: —</div>
+      ${field({ id: 'ob-fl-override', label: 'Rata ręcznie (opcjonalnie)', suffix: 'zł', value: ob.d.flOverride, hint: 'Zostaw puste, aby użyć raty wyliczonej.' })}
+      ` : ''}
       ` : '<p class="muted">Bez planu domu cel FIRE uwzględnia czynsz najmu płacony bezterminowo.</p>'}
       <div class="btn-row"><button data-back>Wstecz</button><button class="primary" data-next>Dalej</button></div>
     </div>`;
@@ -285,6 +344,7 @@ function renderOnboarding() {
       'ob-mtg-start': 'mtgStart', 'ob-mtg-principal': 'mtgPrincipal', 'ob-mtg-rate': 'mtgRate', 'ob-mtg-term': 'mtgTerm',
       'ob-mtg-override': 'mtgOverride', 'ob-movein': 'moveIn', 'ob-hs-month': 'hsMonth', 'ob-hs-amount': 'hsAmount',
       'ob-biz-income': 'bizIncome', 'ob-biz-start': 'bizStart',
+      'ob-fl-principal': 'flPrincipal', 'ob-fl-rate': 'flRate', 'ob-fl-start': 'flStart', 'ob-fl-end': 'flEnd', 'ob-fl-override': 'flOverride',
       'ob-wr': 'wr', 'ob-return': 'realReturn', 'ob-infl': 'inflation', 'ob-gexp': 'gExp', 'ob-ginc': 'gInc', 'ob-cashret': 'cashReturn',
     };
     for (const [id, key] of Object.entries(ids)) {
@@ -293,10 +353,14 @@ function renderOnboarding() {
     }
     const house = $('#ob-house');
     if (house) ob.d.houseEnabled = house.checked;
+    const fl = $('#ob-fl');
+    if (fl) ob.d.flEnabled = fl.checked;
   };
 
   const houseCb = $('#ob-house');
   if (houseCb) houseCb.addEventListener('change', () => { grab(); renderOnboarding(); });
+  const flCb = $('#ob-fl');
+  if (flCb) flCb.addEventListener('change', () => { grab(); renderOnboarding(); });
 
   const annuityPreview = () => {
     const out = $('#ob-annuity');
@@ -315,6 +379,27 @@ function renderOnboarding() {
     ['ob-mtg-principal', 'ob-mtg-rate', 'ob-mtg-term', 'ob-mtg-override'].forEach(id =>
       $('#' + id).addEventListener('input', annuityPreview));
     annuityPreview();
+  }
+
+  const flAnnuityPreview = () => {
+    const out = $('#ob-fl-annuity');
+    if (!out) return;
+    const P = Fmt.parsePLN($('#ob-fl-principal').value);
+    const r = Fmt.parsePLN($('#ob-fl-rate').value);
+    const start = $('#ob-fl-start').value;
+    const end = $('#ob-fl-end').value;
+    const ov = Fmt.parsePLN($('#ob-fl-override').value);
+    if (ov != null) { out.textContent = `Rata (ręczna): ${Fmt.formatPLN(ov)}/mies.`; return; }
+    if (P != null && r != null && E.isValidYm(start) && E.isValidYm(end) && E.ymToIdx(end) >= E.ymToIdx(start)) {
+      const A = E.familyLoanPayment({ principal: P, rateNominal: r / 100, startMonth: start, endMonth: end, paymentOverrideMonthly: null });
+      const N = E.familyLoanTermMonths({ startMonth: start, endMonth: end });
+      out.textContent = `Rata wyliczona: ${Fmt.formatPLN(A)}/mies. (${N} mies.)`;
+    } else out.textContent = 'Rata: — (uzupełnij kwotę, oprocentowanie i okno spłaty)';
+  };
+  if ($('#ob-fl-annuity')) {
+    ['ob-fl-principal', 'ob-fl-rate', 'ob-fl-start', 'ob-fl-end', 'ob-fl-override'].forEach(id =>
+      $('#' + id).addEventListener('input', flAnnuityPreview));
+    flAnnuityPreview();
   }
 
   const back = $('[data-back]');
@@ -365,6 +450,15 @@ function validateObStep(s) {
     if (!E.isValidYm(d.moveIn)) return 'Podaj miesiąc wprowadzki.';
     if (d.hsMonth && !E.isValidYm(d.hsMonth)) return 'Nieprawidłowy miesiąc wydatku na dom.';
     if (d.bizIncome && money(d.bizIncome) > 0 && !E.isValidYm(d.bizStart)) return 'Podaj, od kiedy dodatkowy dochód.';
+    if (d.flEnabled) {
+      const flP = money(d.flPrincipal);
+      if (flP == null || flP <= 0) return 'Podaj kwotę długu rodzinnego.';
+      const flR = money(d.flRate);
+      if (flR == null || flR < 0 || flR > 30) return 'Podaj oprocentowanie długu rodzinnego (0–30%).';
+      if (!E.isValidYm(d.flStart)) return 'Podaj start spłaty długu rodzinnego.';
+      if (!E.isValidYm(d.flEnd)) return 'Podaj koniec spłaty długu rodzinnego.';
+      if (E.ymToIdx(d.flEnd) < E.ymToIdx(d.flStart)) return 'Koniec spłaty długu rodzinnego nie może być przed startem.';
+    }
   }
   if (s === 4) {
     const wr = money(d.wr);
@@ -411,6 +505,14 @@ function finishOnboarding() {
           termYears: m(d.mtgTerm),
           paymentOverrideMonthly: Fmt.parsePLN(d.mtgOverride),
         } : { startMonth: null, principal: 0, rateNominal: 0, termYears: 0, paymentOverrideMonthly: null },
+        familyLoan: houseOn && d.flEnabled ? {
+          enabled: true,
+          startMonth: d.flStart,
+          endMonth: d.flEnd,
+          principal: m(d.flPrincipal),
+          rateNominal: m(d.flRate) / 100,
+          paymentOverrideMonthly: Fmt.parsePLN(d.flOverride),
+        } : { enabled: false, startMonth: null, endMonth: null, principal: 0, rateNominal: 0, paymentOverrideMonthly: null },
       },
     },
   });
@@ -428,9 +530,12 @@ function finishOnboarding() {
 function dashboardMode() {
   const hp = state.housing.housePlan;
   if (hp.enabled) {
+    const d = state.derived;
     const nowIdx = E.ymToIdx(E.todayYm());
     if (nowIdx < E.ymToIdx(hp.mortgage.startMonth)) return 'housefund';
-    if (state.derived.debt.started && state.derived.debt.balanceNominal > 0) return 'debt';
+    const debtOn = d.debt.started && d.debt.balanceNominal > 0;
+    const famOn = d.family && d.family.started && d.family.balanceNominal > 0;
+    if (debtOn || famOn) return 'debt';
   }
   return 'accumulation';
 }
@@ -486,26 +591,35 @@ function renderDashboard() {
   } else if (mode === 'debt') {
     const pct = d.debt.paidPct;
     const dfYm = proj.debtFreeYm;
+    const fam = d.family;
+    const famOn = !!(fam && fam.started && fam.balanceNominal > 0);
+    const mtgOn = d.debt.started && d.debt.balanceNominal > 0;
     html += `<div class="card">
       <div class="muted">Do spłaty (realnie)</div>
-      <div class="big">${Fmt.formatPLN(d.debt.balanceReal)}</div>
-      <div class="muted small">nominalnie: ${Fmt.formatPLN(d.debt.balanceNominal)}</div>
+      <div class="big">${Fmt.formatPLN(d.debt.balanceReal + (fam ? fam.balanceReal : 0))}</div>
+      ${mtgOn ? `<div class="muted small">kredyt: ${Fmt.formatPLN(d.debt.balanceReal)} (nom. ${Fmt.formatPLN(d.debt.balanceNominal)})</div>` : ''}
+      ${famOn ? `<div class="muted small">dług rodzinny: ${Fmt.formatPLN(fam.balanceReal)} (nom. ${Fmt.formatPLN(fam.balanceNominal)})</div>` : ''}
       <div class="bar flame"><i style="width:${(pct * 100).toFixed(1)}%"></i></div>
-      <div class="small">spłacono <b>${(pct * 100).toFixed(1).replace('.', ',')}%</b></div>
-      ${dfYm ? `<p>Wolny od długu: <b class="good">${Fmt.formatMonthName(dfYm)}</b><br>
+      <div class="small">kredyt spłacony w <b>${(pct * 100).toFixed(1).replace('.', ',')}%</b></div>
+      ${dfYm ? `<p>Wolny od kredytu: <b class="good">${Fmt.formatMonthName(dfYm)}</b><br>
         <span class="muted small">za ${Fmt.formatYearsMonths(Math.max(0, E.monthsBetween(nowYm, dfYm)))}</span></p>` : ''}
+      ${famOn && proj.familyFreeYm ? `<p>Wolny od długu rodzinnego: <b class="good">${Fmt.formatMonthName(proj.familyFreeYm)}</b></p>` : ''}
       <p class="muted small">Strategia: najpierw dług, potem inwestowanie — każda nadpłata przybliża datę wyżej.</p>
     </div>`;
-    const debtRows = proj.series.filter(r => r.debtReal > 0 || !r.projected);
+    const debtRows = proj.series.filter(r => r.debtReal > 0 || (r.familyReal || 0) > 0 || !r.projected);
     if (debtRows.length > 1) {
       html += `<div class="card"><h2>Krzywa topnienia długu</h2>
-        ${chartSVG(debtRows, [{ get: r => r.debtReal, cls: 'line-debt' }])}
+        ${chartSVG(debtRows, [
+        { get: r => r.debtReal + (r.familyReal || 0), cls: 'line-debt' },
+      ])}
+        ${famOn ? '<div class="legend"><span><i style="background:var(--danger)"></i>kredyt + dług rodzinny (realnie)</span></div>' : ''}
       </div>`;
     }
   } else {
     const targets = E.fireTargetsToday(state, nowYm);
     const pct = d.balances.portfolio / targets.primary;
-    const reachedNow = pct >= 1 && (!hp.enabled || (d.debt.started && d.debt.balanceNominal <= 0));
+    const famSettled = !(d.family && d.family.started) || d.family.balanceNominal <= 0;
+    const reachedNow = pct >= 1 && (!hp.enabled || (d.debt.started && d.debt.balanceNominal <= 0 && famSettled));
     html += `<div class="card hero">
       ${reachedNow ? '<div class="banner success"><b>🎉 FIRE osiągnięte!</b> Portfel pokrywa Twoje wydatki przy bezpiecznej stopie wypłat.</div>' : ''}
       ${ringSVG(pct)}
@@ -605,6 +719,9 @@ function renderCheckin(month) {
   const debt = E.replayDebt(state, m);
   const dm = debt.byMonth.get(E.ymToIdx(m));
   const debtActive = !!(dm && dm.balStart > E.EPS);
+  const family = E.replayFamilyLoan(state, m);
+  const fm = family.byMonth.get(E.ymToIdx(m));
+  const familyActive = !!(fm && fm.balStart > E.EPS);
   const planned = E.plannedSavingsFor(state.derived.plan, m);
 
   view().innerHTML = `<div class="card">
@@ -621,6 +738,7 @@ function renderCheckin(month) {
     ${field({ id: 'ci-earned', label: 'Zarobione', suffix: 'zł', value: existing ? moneyVal(existing.earned) : '', tipText: 'Wszystkie dochody netto w tym miesiącu.' })}
     ${field({ id: 'ci-spent', label: 'Wydane', suffix: 'zł', value: existing ? moneyVal(existing.spent) : '', hint: 'Razem z czynszem i ratą kredytu.' })}
     ${debtActive ? field({ id: 'ci-overpay', label: 'Nadpłata kredytu', suffix: 'zł', value: existing ? moneyVal(existing.overpayment) : '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług.', tipText: 'Kwota wpłacona na kredyt PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
+    ${familyActive ? field({ id: 'ci-fl-overpay', label: 'Nadpłata długu rodzinnego', suffix: 'zł', value: existing ? moneyVal(existing.familyOverpayment) : '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług rodzinny.', tipText: 'Kwota wpłacona na dług rodzinny PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
     <details class="section"><summary>Popraw salda (opcjonalnie)</summary>
       <p class="muted small">Jeśli rzeczywiste saldo na koniec miesiąca różni się od wyliczonego — wpisz je tutaj. Puste = bez korekty.</p>
       ${field({ id: 'ci-cash-ov', label: 'Rzeczywista gotówka', suffix: 'zł', value: existing && existing.cashOverride != null ? moneyVal(existing.cashOverride) : '' })}
@@ -658,9 +776,10 @@ function renderCheckin(month) {
     const earned = parseMoney('ci-earned');
     const spent = parseMoney('ci-spent');
     const over = debtActive ? parseMoney('ci-overpay', { required: false }) : { value: 0 };
+    const flOver = familyActive ? parseMoney('ci-fl-overpay', { required: false }) : { value: 0 };
     const cashOv = parseMoney('ci-cash-ov', { required: false });
     const portOv = parseMoney('ci-port-ov', { required: false });
-    const bad = [earned, spent, over, cashOv, portOv].find(x => x.error);
+    const bad = [earned, spent, over, flOver, cashOv, portOv].find(x => x.error);
     if (bad) { errBox.innerHTML = `<div class="field-error">${esc(bad.error)}</div>`; return; }
     const prevFireYm = state.derived.projection.reached ? state.derived.projection.fireYm : null;
     const wasFirst = state.entries.length === 0;
@@ -670,6 +789,7 @@ function renderCheckin(month) {
       entry = E.applyCheckIn(state, {
         month: m, earned: earned.value, spent: spent.value,
         overpayment: over.value || 0,
+        familyOverpayment: flOver.value || 0,
         cashOverride: cashOv.value, balanceOverride: portOv.value,
       });
     } catch (err) {
@@ -716,7 +836,8 @@ function renderCheckinResult(entry, { prevFireYm, wasFirst, prevEntry }) {
     <h2>Po aktualizacji</h2>
     <div class="kv"><span>Gotówka</span><b>${Fmt.formatPLN(d.balances.cash)}</b></div>
     <div class="kv"><span>Portfel inwestycyjny</span><b>${Fmt.formatPLN(d.balances.portfolio)}</b></div>
-    ${d.debt.balanceNominal > 0 ? `<div class="kv"><span>Dług (realnie)</span><b>${Fmt.formatPLN(d.debt.balanceReal)}</b></div>` : ''}
+    ${d.debt.balanceNominal > 0 ? `<div class="kv"><span>Kredyt (realnie)</span><b>${Fmt.formatPLN(d.debt.balanceReal)}</b></div>` : ''}
+    ${d.family && d.family.balanceNominal > 0 ? `<div class="kv"><span>Dług rodzinny (realnie)</span><b>${Fmt.formatPLN(d.family.balanceReal)}</b></div>` : ''}
     ${proj.reached ? `<div class="kv"><span>Prognoza FIRE</span><b>${Fmt.formatMonthName(proj.fireYm)} ${shift}</b></div>` : ''}
     ${d.streak.current > 0 ? `<div class="kv"><span>Seria</span><b>🔥 ${d.streak.current}</b></div>` : ''}
   </div>
@@ -822,7 +943,7 @@ function renderAnaliza() {
   const proj = d.projection;
   const houseOn = !!(state.housing.housePlan && state.housing.housePlan.enabled);
 
-  const fi = E.fiStats(state, d.balances, d.debt, d.plan, nowYm);
+  const fi = E.fiStats(state, d.balances, d.debt, d.plan, nowYm, d.family);
   const cvg = E.contributionsVsGrowth(state, d.balances);
   const sav = E.savingsStats(state, d.uptoYm);
   const pva = E.planVsActualStats(state.entries);
@@ -864,15 +985,16 @@ function renderAnaliza() {
     ])
     : '';
 
-  const ma = houseOn && d.debt.started ? E.mortgageAnalytics(state, d.debt, proj) : null;
-  let debtChart = '';
-  if (ma && d.debt.rows.length > 1) {
-    const histBy = new Map(d.debt.rows.map(r => [r.ym, r.balNominal]));
-    const schedBy = new Map(ma.scheduleRows.map((r, i) => [E.addMonths(ma.lastYm, i + 1), r.balNominal]));
+  // Wykres topnienia salda (sama rata vs z nadpłatami) — wspólny dla kredytu
+  // i długu rodzinnego; realField wskazuje pole realne w serii prognozy.
+  const meltChart = (analytics, loanRes, realField) => {
+    if (!analytics || loanRes.rows.length <= 1) return '';
+    const histBy = new Map(loanRes.rows.map(r => [r.ym, r.balNominal]));
+    const schedBy = new Map(analytics.scheduleRows.map((r, i) => [E.addMonths(analytics.lastYm, i + 1), r.balNominal]));
     const projBy = new Map(proj.series.filter(r => r.projected)
-      .map(r => [r.ym, E.toNominal(r.debtReal, state.anchorMonth, r.ym, a.inflationAnnual)]));
-    const start = E.ymToIdx(d.debt.rows[0].ym);
-    const end = E.ymToIdx(ma.lastYm) + ma.scheduleRows.length;
+      .map(r => [r.ym, E.toNominal(r[realField] || 0, state.anchorMonth, r.ym, a.inflationAnnual)]));
+    const start = E.ymToIdx(loanRes.rows[0].ym);
+    const end = E.ymToIdx(analytics.lastYm) + analytics.scheduleRows.length;
     const rows = [];
     for (let i = start; i <= end; i++) {
       const ym = E.idxToYm(i);
@@ -883,13 +1005,33 @@ function renderAnaliza() {
         sched: hist != null ? hist : (schedBy.get(ym) || 0),
       });
     }
-    debtChart = rows.length > 1
+    return rows.length > 1
       ? chartSVG(rows, [
         { get: r => r.sched, cls: 'line-debt-dash' },
         { get: r => r.over, cls: 'line-debt' },
       ])
       : '';
-  }
+  };
+  // Słupki kapitał/odsetki wg kontraktu (deterministyczne, bez nadpłat).
+  const piBars = rows => rows.length
+    ? stackedBarSVG(rows, [
+      { get: r => r.principal, cls: 'bar-principal' },
+      { get: r => r.interest, cls: 'bar-interest' },
+    ])
+    : '';
+
+  const hp = state.housing.housePlan;
+  const ma = houseOn && d.debt.started ? E.mortgageAnalytics(state, d.debt, proj) : null;
+  const debtChart = meltChart(ma, d.debt, 'debtReal');
+  const mtgBar = ma ? piBars(E.yearlyPrincipalInterest(E.amortizationSchedule(hp.mortgage))) : '';
+
+  const fam = d.family;
+  const fa = houseOn && fam && fam.started ? E.familyLoanAnalytics(state, fam, proj) : null;
+  const familyChart = meltChart(fa, fam, 'familyReal');
+  const flBar = fa && hp.familyLoan
+    ? piBars(E.yearlyPrincipalInterest(
+      E.amortizationScheduleN(hp.familyLoan.principal, hp.familyLoan.rateNominal, E.familyLoanTermMonths(hp.familyLoan), hp.familyLoan.paymentOverrideMonthly)))
+    : '';
 
   view().innerHTML = [
     An.statsCard({ fi, cvg, balances: d.balances, a, nowYm }),
@@ -899,6 +1041,7 @@ function renderAnaliza() {
       selectedYear: anYear, fireYm: proj.reached ? proj.fireYm : null,
       excelStart: d.balances.portfolio, excelContrib,
       byPlanOnly: proj.byPlanOnly, delta: proj.delta,
+      hasFamily: !!fa,
     }),
     An.withdrawalCard({ w, chartHTML: wChart }),
     An.sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows }),
@@ -906,7 +1049,8 @@ function renderAnaliza() {
       nowYm, month: simMonth || nowYm, amount: simAmount, recurring: simRecurring,
       resultHTML: simResultHTML(baseFireYm),
     }),
-    ma ? An.mortgageCard({ ma, chartHTML: debtChart }) : '',
+    ma ? An.mortgageCard({ ma, chartHTML: debtChart, barHTML: mtgBar }) : '',
+    fa ? An.familyLoanCard({ fa, chartHTML: familyChart, barHTML: flBar }) : '',
   ].join('');
 
   $$('[data-anmode]').forEach(el => el.addEventListener('click', () => {
@@ -939,6 +1083,7 @@ function renderPlan() {
   const a = state.assumptions;
   const h = state.housing;
   const hp = h.housePlan;
+  const fl = hp.familyLoan || { enabled: false, startMonth: null, endMonth: null, principal: 0, rateNominal: 0, paymentOverrideMonthly: null };
   const lastOk = E.lastCompleteMonth();
   const hasEntryLastOk = !!state.entries.find(e => e.month === lastOk);
 
@@ -985,6 +1130,19 @@ function renderPlan() {
       ${field({ id: 'pl-mtg-term', label: 'Okres', suffix: 'lata', value: moneyVal(hp.mortgage.termYears), mode: 'numeric' })}
       <div class="banner info" id="pl-annuity">Rata: —</div>
       ${field({ id: 'pl-mtg-override', label: 'Rata ręcznie (opcjonalnie)', suffix: 'zł', value: moneyVal(hp.mortgage.paymentOverrideMonthly) })}
+      <h3>Dług rodzinny</h3>
+      <label class="field"><span class="lbl">
+        <input type="checkbox" id="pl-fl" ${fl.enabled ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
+        Dodatkowy dług rodzinny (obok kredytu)${tip('Pożyczka od rodziny na budowę domu — stałe oprocentowanie, spłacana równą ratą w oknie [start, koniec]. To drugi nominalny kontrakt w aplikacji (obok kredytu).')}</span>
+      </label>
+      <div id="pl-fl-fields" ${fl.enabled ? '' : 'hidden'}>
+        ${field({ id: 'pl-fl-principal', label: 'Kwota długu rodzinnego', suffix: 'zł', value: moneyVal(fl.principal) })}
+        ${field({ id: 'pl-fl-rate', label: 'Oprocentowanie nominalne', suffix: '%', value: pctVal(fl.rateNominal) })}
+        ${field({ id: 'pl-fl-start', label: 'Start spłaty', type: 'month', value: fl.startMonth || '', tipText: 'Miesiąc, w którym pojawia się saldo długu (= kwota) i zaczyna się spłata.' })}
+        ${field({ id: 'pl-fl-end', label: 'Koniec spłaty', type: 'month', value: fl.endMonth || '', tipText: 'Ostatni miesiąc spłaty (włącznie). Rata annuitetowa jest tak dobrana, by dług zniknął dokładnie wtedy.' })}
+        <div class="banner info" id="pl-fl-annuity">Rata: —</div>
+        ${field({ id: 'pl-fl-override', label: 'Rata ręcznie (opcjonalnie)', suffix: 'zł', value: moneyVal(fl.paymentOverrideMonthly) })}
+      </div>
     </div>
   </div>
   <div class="card"><h2>Aplikacja</h2>
@@ -1008,12 +1166,20 @@ function renderPlan() {
     ${state.derived.debt.started && state.derived.debt.balanceNominal > 0
       ? field({ id: 'cor-debt', label: 'Rzeczywiste saldo kredytu (nominalne)', suffix: 'zł' })
       : ''}
+    ${state.derived.family && state.derived.family.started && state.derived.family.balanceNominal > 0
+      ? field({ id: 'cor-fl-debt', label: 'Rzeczywiste saldo długu rodzinnego (nominalne)', suffix: 'zł' })
+      : ''}
     <button id="cor-save" class="wide">Zapisz korekty</button>
   </details>`;
 
   const houseCb = $('#pl-house');
   houseCb.addEventListener('change', () => {
     $('#pl-house-fields').hidden = !houseCb.checked;
+  });
+
+  const flCb = $('#pl-fl');
+  if (flCb) flCb.addEventListener('change', () => {
+    $('#pl-fl-fields').hidden = !flCb.checked;
   });
 
   const annuity = () => {
@@ -1030,6 +1196,27 @@ function renderPlan() {
   ['pl-mtg-principal', 'pl-mtg-rate', 'pl-mtg-term', 'pl-mtg-override'].forEach(id =>
     $('#' + id).addEventListener('input', annuity));
   annuity();
+
+  const flAnnuity = () => {
+    const out = $('#pl-fl-annuity');
+    if (!out) return;
+    const P = Fmt.parsePLN($('#pl-fl-principal').value);
+    const r = Fmt.parsePLN($('#pl-fl-rate').value);
+    const start = $('#pl-fl-start').value;
+    const end = $('#pl-fl-end').value;
+    const ov = Fmt.parsePLN($('#pl-fl-override').value);
+    if (ov != null) { out.textContent = `Rata (ręczna): ${Fmt.formatPLN(ov)}/mies.`; return; }
+    if (P != null && r != null && E.isValidYm(start) && E.isValidYm(end) && E.ymToIdx(end) >= E.ymToIdx(start)) {
+      const A = E.familyLoanPayment({ principal: P, rateNominal: r / 100, startMonth: start, endMonth: end, paymentOverrideMonthly: null });
+      const N = E.familyLoanTermMonths({ startMonth: start, endMonth: end });
+      out.textContent = `Rata wyliczona: ${Fmt.formatPLN(A)}/mies. (${N} mies.)`;
+    } else out.textContent = 'Rata: — (uzupełnij kwotę, oprocentowanie i okno spłaty)';
+  };
+  if ($('#pl-fl-annuity')) {
+    ['pl-fl-principal', 'pl-fl-rate', 'pl-fl-start', 'pl-fl-end', 'pl-fl-override'].forEach(id =>
+      $('#' + id).addEventListener('input', flAnnuity));
+    flAnnuity();
+  }
 
   $('#pl-save').addEventListener('click', () => {
     const errBox = $('#plan-error');
@@ -1078,6 +1265,21 @@ function renderPlan() {
       const bizI = parseMoney('pl-biz-income', { required: false }); if (bizI.error) return fail('Popraw dodatkowy dochód.');
       const bizS = $('#pl-biz-start').value;
       if ((bizI.value || 0) > 0 && !E.isValidYm(bizS)) return fail('Podaj, od kiedy dodatkowy dochód.');
+      let familyLoan = { enabled: false, startMonth: null, endMonth: null, principal: 0, rateNominal: 0, paymentOverrideMonthly: null };
+      if ($('#pl-fl') && $('#pl-fl').checked) {
+        const flStart = $('#pl-fl-start').value;
+        const flEnd = $('#pl-fl-end').value;
+        if (!E.isValidYm(flStart)) return fail('Podaj start spłaty długu rodzinnego.');
+        if (!E.isValidYm(flEnd)) return fail('Podaj koniec spłaty długu rodzinnego.');
+        if (E.ymToIdx(flEnd) < E.ymToIdx(flStart)) return fail('Koniec spłaty długu rodzinnego nie może być przed startem.');
+        const flP = parseMoney('pl-fl-principal'); if (flP.error || flP.value <= 0) return fail('Podaj kwotę długu rodzinnego.');
+        const flR = parsePct('pl-fl-rate', { min: 0, max: 0.3 }); if (flR.error) return fail('Popraw oprocentowanie długu rodzinnego (0–30%).');
+        const flOv = parseMoney('pl-fl-override', { required: false }); if (flOv.error) return fail('Popraw ratę ręczną długu rodzinnego.');
+        familyLoan = {
+          enabled: true, startMonth: flStart, endMonth: flEnd,
+          principal: flP.value, rateNominal: flR.value, paymentOverrideMonthly: flOv.value,
+        };
+      }
       house = {
         enabled: true,
         moveInMonth: moveIn,
@@ -1085,6 +1287,7 @@ function renderPlan() {
         businessIncomeMonthly: bizI.value || 0,
         businessStartMonth: bizS && E.isValidYm(bizS) ? bizS : null,
         mortgage: { startMonth: start, principal: P.value, rateNominal: r.value, termYears: T.value, paymentOverrideMonthly: ov.value },
+        familyLoan,
       };
     }
 
@@ -1158,6 +1361,14 @@ function renderPlan() {
       if (v == null || v < 0) { errBox.innerHTML = '<div class="field-error">Popraw saldo kredytu.</div>'; return; }
       state.debt.overrides = (state.debt.overrides || []).filter(o => o.month !== lastOk);
       state.debt.overrides.push({ month: lastOk, balanceNominal: v });
+      changed = true;
+    }
+    const corFlDebt = $('#cor-fl-debt');
+    if (corFlDebt && corFlDebt.value.trim() !== '') {
+      const v = Fmt.parsePLN(corFlDebt.value);
+      if (v == null || v < 0) { errBox.innerHTML = '<div class="field-error">Popraw saldo długu rodzinnego.</div>'; return; }
+      state.debt.familyOverrides = (state.debt.familyOverrides || []).filter(o => o.month !== lastOk);
+      state.debt.familyOverrides.push({ month: lastOk, balanceNominal: v });
       changed = true;
     }
     if (!changed) { toast('Brak korekt do zapisania.'); return; }

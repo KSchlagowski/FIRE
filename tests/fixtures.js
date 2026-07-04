@@ -59,4 +59,11 @@ export const FIX = {
     oneTime: { month: '2026-09', amount: 2000 },
     recurringFrom: '2027-01', recurringAmount: 1000, monthsToJun2027: 6,
   },
+  // Dług rodzinny: annuitet z okna [start, end]. Parytet z formułą annuitetu;
+  // po N krokach saldo ≈ 0. Wersje 0% dla ręcznej arytmetyki całkowitej.
+  F20: {
+    principal: 150000, rateNominal: 0.035,
+    startMonth: '2028-01', endMonth: '2032-12', // 60 rat włącznie
+    N: 60, eps: 0.01,
+  },
 };

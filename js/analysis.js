@@ -100,7 +100,7 @@ export function planPerfCard({ sav, pva, chartHTML }) {
 
 // ── 3. Projekcja — akumulacja ───────────────────────────────────────────
 
-export function projectionCard({ mode, blocks, series, excelRows, houseOn, selectedYear, fireYm, excelStart, excelContrib, byPlanOnly, delta }) {
+export function projectionCard({ mode, blocks, series, excelRows, houseOn, selectedYear, fireYm, excelStart, excelContrib, byPlanOnly, delta, hasFamily }) {
   const seg = `<div class="seg" role="tablist">
     ${[['yearly', 'Rocznie'], ['monthly', 'Miesięcznie'], ['excel', 'Excel']]
       .map(([m, l]) => `<button type="button" data-anmode="${m}" class="${mode === m ? 'on' : ''}">${l}</button>`).join('')}
@@ -121,7 +121,7 @@ export function projectionCard({ mode, blocks, series, excelRows, houseOn, selec
         <td>${money(b.flowPortfolio)}</td>
         <td>${money(b.growthPortfolio)}${b.hasOverride ? '*' : ''}</td>
         <td>${money(b.portEnd)}</td>
-        ${houseOn ? `<td>${money(b.cashEnd)}</td><td>${money(b.debtRealEnd)}</td>` : ''}
+        ${houseOn ? `<td>${money(b.cashEnd)}</td><td>${money(b.debtRealEnd + (b.familyRealEnd || 0))}</td>` : ''}
         <td>${money(b.targetEnd)}</td>
         <td>${b.reached ? '🔥' : ''}</td>
       </tr>`;
@@ -140,7 +140,7 @@ export function projectionCard({ mode, blocks, series, excelRows, houseOn, selec
         <td>${money((r.flowCash || 0) + (r.flowPortfolio || 0))}${r.override ? '*' : ''}</td>
         <td>${money(r.cash)}</td>
         <td>${money(r.portfolio)}</td>
-        ${houseOn ? `<td>${money(r.debtReal)}</td>` : ''}
+        ${houseOn ? `<td>${money(r.debtReal + (r.familyReal || 0))}</td>` : ''}
         <td>${money(r.target)}</td>
       </tr>`;
     }).join('');
@@ -178,6 +178,7 @@ export function projectionCard({ mode, blocks, series, excelRows, houseOn, selec
       byPlanOnly
         ? 'Prognoza wg planu — po 3 wpisach doliczana będzie delta z Twoich realnych wyników.'
         : `Prognozowane miesiące = plan + delta z ostatnich wpisów (${signed(delta)}/mies.).`,
+      hasFamily ? 'Kolumna „Dług (real.)” to suma kredytu i długu rodzinnego (realnie).' : '',
       'Tabela kończy się w miesiącu osiągnięcia FIRE (jak kolumna „Osiągnięto?” w Excelu) — dalej liczy się Faza wypłat poniżej.',
     ];
 
@@ -302,7 +303,12 @@ export function simulationCard({ nowYm, month, amount, recurring, resultHTML }) 
 
 // ── 6. Kredyt ───────────────────────────────────────────────────────────
 
-export function mortgageCard({ ma, chartHTML }) {
+// Legenda słupków kapitał/odsetki (współdzielona przez kredyt i dług rodzinny).
+function barLegend() {
+  return `<div class="legend"><span><i style="background:var(--accent)"></i>kapitał</span><span><i style="background:var(--flame)"></i>odsetki</span></div>`;
+}
+
+export function mortgageCard({ ma, chartHTML, barHTML }) {
   const saved = ma.interestSavedSoFar;
   return `<div class="card"><h2>Kredyt 🏠</h2>
     ${kv('Saldo (nominalnie)', money(ma.balanceNominal))}
@@ -317,10 +323,39 @@ export function mortgageCard({ ma, chartHTML }) {
     ${kv('Spłata prognozowana (z nadpłatami)', ma.projectedPayoffYm ? esc(Fmt.formatMonthName(ma.projectedPayoffYm)) : '—')}
     ${chartHTML ? `<h3>Saldo nominalne: sama rata vs z nadpłatami</h3>${chartHTML}
       <div class="legend"><span><i style="background:var(--danger)"></i>historia + prognoza z nadpłatami</span><span><i style="background:var(--muted)"></i>sama rata</span></div>` : ''}
+    ${barHTML ? `<h3>Struktura rat: kapitał vs odsetki</h3>${barHTML}${barLegend()}
+      <p class="muted small">Rozkład kontraktowy (bez nadpłat) po latach kredytu — odsetki maleją, kapitał rośnie.</p>` : ''}
     ${metodologia([
-      `Rata = ${money(ma.payment, 2)}/mies. (annuitet, nominalnie — kredyt to jedyny nominalny kontrakt w aplikacji).`,
+      `Rata = ${money(ma.payment, 2)}/mies. (annuitet, nominalnie — kredyt to jeden z dwóch nominalnych kontraktów, obok długu rodzinnego).`,
       `Oszczędność = Σ odsetek kontraktu − zapłacone − pozostałe wg harmonogramu = ${money(ma.contractTotalInterest)} − ${money(ma.paidInterest)} − ${money(ma.scheduleOnlyRemainingInterest)} = ${money(saved)}`,
       'Prognoza „z nadpłatami” zakłada strategię aplikacji: cała miesięczna nadwyżka nadpłaca kredyt, nadmiar wraca do portfela.',
+    ])}
+  </div>`;
+}
+
+// ── 6a. Dług rodzinny ───────────────────────────────────────────────────
+
+export function familyLoanCard({ fa, chartHTML, barHTML }) {
+  const saved = fa.interestSavedSoFar;
+  return `<div class="card"><h2>Dług rodzinny 👨‍👩‍👧</h2>
+    ${kv('Saldo (nominalnie)', money(fa.balanceNominal))}
+    ${kv('Odsetki zapłacone', money(fa.paidInterest))}
+    ${kv('Kapitał spłacony', money(fa.paidPrincipal))}
+    ${kv('Nadpłaty łącznie', money(fa.overpaidTotal))}
+    ${kv('Odsetki pozostałe (sama rata)', money(fa.scheduleOnlyRemainingInterest))}
+    ${kv('Oszczędność z nadpłat (dotychczas)', money(saved), saved > 0.005 ? 'good' : '')}
+    ${fa.monthsAheadOfContract > 0 ? kv('Przed harmonogramem kontraktu', `${fa.monthsAheadOfContract} mies.`, 'good') : ''}
+    ${kv('Spłata wg kontraktu', esc(Fmt.formatMonthName(fa.contractPayoffYm)))}
+    ${kv('Spłata przy samej racie', esc(Fmt.formatMonthName(fa.scheduleOnlyPayoffYm)))}
+    ${kv('Spłata prognozowana (z nadpłatami)', fa.projectedPayoffYm ? esc(Fmt.formatMonthName(fa.projectedPayoffYm)) : '—')}
+    ${chartHTML ? `<h3>Saldo nominalne: sama rata vs z nadpłatami</h3>${chartHTML}
+      <div class="legend"><span><i style="background:var(--danger)"></i>historia + prognoza z nadpłatami</span><span><i style="background:var(--muted)"></i>sama rata</span></div>` : ''}
+    ${barHTML ? `<h3>Struktura rat: kapitał vs odsetki</h3>${barHTML}${barLegend()}
+      <p class="muted small">Rozkład kontraktowy (bez nadpłat) po latach spłaty.</p>` : ''}
+    ${metodologia([
+      `Rata = ${money(fa.payment, 2)}/mies. (annuitet z okna spłaty, nominalnie — dług rodzinny to drugi nominalny kontrakt w aplikacji).`,
+      `Oszczędność = Σ odsetek kontraktu − zapłacone − pozostałe wg harmonogramu = ${money(fa.contractTotalInterest)} − ${money(fa.paidInterest)} − ${money(fa.scheduleOnlyRemainingInterest)} = ${money(saved)}`,
+      'Dług rodzinny ma harmonogram stały — nie jest agresywnie nadpłacany; przyspieszają go tylko jawne nadpłaty z check-inu.',
     ])}
   </div>`;
 }

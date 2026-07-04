@@ -1,6 +1,7 @@
 // engine.js — czysty silnik finansowy FIRE Companion.
 // Zero DOM, zero storage. Wszystkie kwoty w REALNYCH zł, chyba że
-// identyfikator kończy się na "Nominal" (kredyt to kontrakt nominalny).
+// identyfikator kończy się na "Nominal". Nominalne kontrakty: kredyt
+// hipoteczny oraz dług rodzinny (family loan) — oba to umowy o stałej racie.
 
 export const EPS = 0.005;
 export const HORIZON_MONTHS = 720;
@@ -103,15 +104,33 @@ export function fireTargetsToday(state, nowYm = todayYm()) {
   };
 }
 
-// ── Kredyt hipoteczny (nominalny) ───────────────────────────────────────
+// ── Kredyty nominalne: hipoteczny i rodzinny ────────────────────────────
+
+// Rdzeń annuitetu: równa rata spłacająca principal w N miesięcy przy stopie
+// miesięcznej j. override != null → rata ręczna. Współdzielony przez kredyt
+// hipoteczny i dług rodzinny (oba to nominalne kontrakty o stałej racie).
+export function annuityPayment(principal, j, N, override = null) {
+  if (!(N > 0)) throw new Error('N musi być > 0');
+  if (override != null) return override;
+  if (j === 0) return principal / N;
+  return principal * j / (1 - Math.pow(1 + j, -N));
+}
 
 export function mortgagePayment(mtg) {
   if (!mtg || !(mtg.termYears > 0)) throw new Error('termYears musi być > 0');
-  if (mtg.paymentOverrideMonthly != null) return mtg.paymentOverrideMonthly;
   const N = Math.round(mtg.termYears * 12);
-  const j = monthlyRate(mtg.rateNominal);
-  if (j === 0) return mtg.principal / N;
-  return mtg.principal * j / (1 - Math.pow(1 + j, -N));
+  return annuityPayment(mtg.principal, monthlyRate(mtg.rateNominal), N, mtg.paymentOverrideMonthly);
+}
+
+// Dług rodzinny: annuitet wyprowadzony z okna spłaty [startMonth, endMonth]
+// (rata włącznie z miesiącem końcowym → +1). Spłaca się dokładnie na endMonth.
+export function familyLoanTermMonths(fl) {
+  return ymToIdx(fl.endMonth) - ymToIdx(fl.startMonth) + 1;
+}
+
+export function familyLoanPayment(fl) {
+  const N = familyLoanTermMonths(fl);
+  return annuityPayment(fl.principal, monthlyRate(fl.rateNominal), N, fl.paymentOverrideMonthly);
 }
 
 // Jeden miesiąc kredytu. spill = nadpłata ponad spłatę — wraca do inwestycji.
@@ -129,18 +148,35 @@ export function mortgageStep(balNominal, j, payment, overpayNominal = 0) {
   return { bal, interest, principalPaid, spill };
 }
 
-export function amortizationSchedule(mtg) {
-  const j = monthlyRate(mtg.rateNominal);
-  const A = mortgagePayment(mtg);
-  const N = Math.round(mtg.termYears * 12);
+// Harmonogram kontraktowy (bez nadpłat): rdzeń po (principal, rate, N, override).
+export function amortizationScheduleN(principal, rateNominal, N, override = null) {
+  const j = monthlyRate(rateNominal);
+  const A = annuityPayment(principal, j, N, override);
   const rows = [];
-  let bal = mtg.principal;
+  let bal = principal;
   for (let i = 0; i < N && bal > 0; i++) {
     const step = mortgageStep(bal, j, A);
     bal = step.bal;
     rows.push({ n: i + 1, balNominal: bal, interest: step.interest, principalPaid: step.principalPaid });
   }
   return rows;
+}
+
+export function amortizationSchedule(mtg) {
+  return amortizationScheduleN(mtg.principal, mtg.rateNominal, Math.round(mtg.termYears * 12), mtg.paymentOverrideMonthly);
+}
+
+// Roczna dekompozycja rat na kapitał i odsetki (dane do wykresu słupkowego).
+// Σ principal = principal kontraktu; Σ (principal+interest) = Σ rat.
+export function yearlyPrincipalInterest(rows, groupBy = 12) {
+  const years = [];
+  for (let k = 0; k < rows.length; k += groupBy) {
+    const chunk = rows.slice(k, k + groupBy);
+    let principal = 0, interest = 0;
+    for (const r of chunk) { principal += r.principalPaid; interest += r.interest; }
+    years.push({ year: k / groupBy + 1, principal, interest });
+  }
+  return years;
 }
 
 // ── Plan fazowy (benchmark, nie stan faktyczny) ─────────────────────────
@@ -156,6 +192,10 @@ export function buildPlan(state, horizon = HORIZON_MONTHS) {
   const A = houseOn ? mortgagePayment(hp.mortgage) : 0;
   const mStart = houseOn ? ymToIdx(hp.mortgage.startMonth) : Infinity;
   const mEnd = houseOn ? mStart + Math.round(hp.mortgage.termYears * 12) : Infinity;
+  const flOn = houseOn && hp.familyLoan && hp.familyLoan.enabled;
+  const A_fam = flOn ? familyLoanPayment(hp.familyLoan) : 0;
+  const flStart = flOn ? ymToIdx(hp.familyLoan.startMonth) : Infinity;
+  const flEnd = flOn ? ymToIdx(hp.familyLoan.endMonth) : Infinity; // włącznie
   const moveIn = houseOn && hp.moveInMonth ? ymToIdx(hp.moveInMonth) : Infinity;
   const bizStart = houseOn && hp.businessStartMonth ? ymToIdx(hp.businessStartMonth) : Infinity;
   const rows = [];
@@ -169,10 +209,13 @@ export function buildPlan(state, horizon = HORIZON_MONTHS) {
     const rentReal = (houseOn ? idx < moveIn : true) ? (h.currentRentMonthly || 0) : 0;
     const inTerm = idx >= mStart && idx < mEnd;
     const mortgagePaymentReal = inTerm ? A * Math.pow(1 + a.inflationAnnual, -(t - 1)) : 0;
-    const plannedSavings = incomeReal - livingReal - rentReal - mortgagePaymentReal;
+    const inFam = idx >= flStart && idx <= flEnd;
+    const familyPaymentReal = inFam ? A_fam * Math.pow(1 + a.inflationAnnual, -(t - 1)) : 0;
+    const plannedSavings = incomeReal - livingReal - rentReal - mortgagePaymentReal - familyPaymentReal;
     const targetReal = fireTargetAt(state, ym);
+    // Faza wciąż sterowana kredytem; rata rodzinna tylko obniża plannedSavings.
     const phase = houseOn ? (idx < mStart ? 'saving' : inTerm ? 'debt' : 'invest') : 'invest';
-    rows.push({ ym, t, incomeReal, livingReal, rentReal, mortgagePaymentReal, plannedSavings, targetReal, phase });
+    rows.push({ ym, t, incomeReal, livingReal, rentReal, mortgagePaymentReal, familyPaymentReal, plannedSavings, targetReal, phase });
   }
   return rows;
 }
@@ -187,23 +230,21 @@ export function plannedSavingsFor(plan, ym) {
 // Rata planowa zakładana jako płacona także w miesiącach bez wpisu.
 // Nadpłaty z wpisów wchodzą bez konwersji (wpisane "teraz" = nominał teraz).
 
-export function replayDebt(state, uptoYm) {
-  const hp = state.housing.housePlan;
-  const empty = {
-    active: false, started: false, balanceNominal: 0, balanceReal: 0,
-    paidPct: 0, rows: [], byMonth: new Map(),
-  };
-  if (!hp || !hp.enabled) return empty;
-  const mtg = hp.mortgage;
-  const j = monthlyRate(mtg.rateNominal);
-  const A = mortgagePayment(mtg);
-  const start = ymToIdx(mtg.startMonth);
-  const upto = ymToIdx(uptoYm);
-  if (upto < start) return { ...empty, byMonth: new Map() };
+const EMPTY_LOAN = () => ({
+  active: false, started: false, balanceNominal: 0, balanceReal: 0,
+  paidPct: 0, rows: [], byMonth: new Map(),
+});
 
+// Rdzeń replayu kredytu — współdzielony przez kredyt hipoteczny (overpayKey
+// 'overpayment', korekty debt.overrides) i dług rodzinny (overpayKey
+// 'familyOverpayment', korekty debt.familyOverrides). Publiczne API obu
+// pozostaje niezmienione.
+function replayLoanCore({ start, principal, j, payment, overpayKey, overrides }, state, uptoYm) {
+  const upto = ymToIdx(uptoYm);
+  if (upto < start) return EMPTY_LOAN();
   const entriesByMonth = new Map(state.entries.map(e => [ymToIdx(e.month), e]));
-  const overrides = new Map((state.debt.overrides || []).map(o => [ymToIdx(o.month), o.balanceNominal]));
-  let bal = mtg.principal;
+  const ov = new Map((overrides || []).map(o => [ymToIdx(o.month), o.balanceNominal]));
+  let bal = principal;
   const rows = [];
   const byMonth = new Map();
   for (let idx = start; idx <= upto; idx++) {
@@ -211,14 +252,14 @@ export function replayDebt(state, uptoYm) {
     let interest = 0, principalPaid = 0, spill = 0;
     if (bal > 0) {
       const e = entriesByMonth.get(idx);
-      const overpay = e ? (e.overpayment || 0) : 0;
-      const step = mortgageStep(bal, j, A, overpay);
+      const overpay = e ? (e[overpayKey] || 0) : 0;
+      const step = mortgageStep(bal, j, payment, overpay);
       bal = step.bal;
       interest = step.interest;
       principalPaid = step.principalPaid;
       spill = step.spill;
     }
-    if (overrides.has(idx)) bal = overrides.get(idx); // korekta ręczna resetuje łańcuch
+    if (ov.has(idx)) bal = ov.get(idx); // korekta ręczna resetuje łańcuch
     byMonth.set(idx, { balStart, bal, spill });
     rows.push({ ym: idxToYm(idx), balNominal: bal, interest, principalPaid, spill });
   }
@@ -227,10 +268,40 @@ export function replayDebt(state, uptoYm) {
     started: true,
     balanceNominal: bal,
     balanceReal: toReal(bal, state.anchorMonth, uptoYm, state.assumptions.inflationAnnual),
-    paidPct: mtg.principal > 0 ? (mtg.principal - bal) / mtg.principal : 0,
+    paidPct: principal > 0 ? (principal - bal) / principal : 0,
     rows,
     byMonth,
   };
+}
+
+export function replayDebt(state, uptoYm) {
+  const hp = state.housing.housePlan;
+  if (!hp || !hp.enabled) return EMPTY_LOAN();
+  const mtg = hp.mortgage;
+  return replayLoanCore({
+    start: ymToIdx(mtg.startMonth),
+    principal: mtg.principal,
+    j: monthlyRate(mtg.rateNominal),
+    payment: mortgagePayment(mtg),
+    overpayKey: 'overpayment',
+    overrides: state.debt.overrides,
+  }, state, uptoYm);
+}
+
+// Dług rodzinny topi się równolegle do kredytu (ta sama zasada „podwójnego
+// zapisu”): rata siedzi w wydatkach użytkownika, saldo melduje się tutaj.
+export function replayFamilyLoan(state, uptoYm) {
+  const hp = state.housing.housePlan;
+  const fl = hp && hp.familyLoan;
+  if (!hp || !hp.enabled || !fl || !fl.enabled) return EMPTY_LOAN();
+  return replayLoanCore({
+    start: ymToIdx(fl.startMonth),
+    principal: fl.principal,
+    j: monthlyRate(fl.rateNominal),
+    payment: familyLoanPayment(fl),
+    overpayKey: 'familyOverpayment',
+    overrides: state.debt.familyOverrides,
+  }, state, uptoYm);
 }
 
 // ── Replay sald: gotówka (fundusz na dom) + portfel inwestycyjny ────────
@@ -238,7 +309,7 @@ export function replayDebt(state, uptoYm) {
 // po spłacie (lub bez planu domu) → portfel. Deficyty drenują najpierw
 // gotówkę, potem portfel. Miesiące bez wpisu: tylko wzrost.
 
-export function replayBalances(state, uptoYm, debtRes = null) {
+export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) {
   const a = state.assumptions;
   const a0 = ymToIdx(state.anchorMonth);
   const upto = ymToIdx(uptoYm);
@@ -247,6 +318,7 @@ export function replayBalances(state, uptoYm, debtRes = null) {
   const hp = state.housing.housePlan;
   const houseOn = !!(hp && hp.enabled);
   const debt = debtRes || replayDebt(state, uptoYm);
+  const family = familyRes || replayFamilyLoan(state, uptoYm);
   const mStart = houseOn ? ymToIdx(hp.mortgage.startMonth) : Infinity;
   const hsMonth = houseOn ? ymToIdx((hp.houseSpend && hp.houseSpend.month) || hp.mortgage.startMonth) : Infinity;
   const hsAmount = houseOn && hp.houseSpend ? hp.houseSpend.amount : null;
@@ -261,8 +333,9 @@ export function replayBalances(state, uptoYm, debtRes = null) {
   for (let idx = a0; idx <= upto; idx++) {
     const e = entriesByMonth.get(idx);
     const net = e ? roundGrosze(e.earned - e.spent) : 0;
-    const contribution = e ? roundGrosze(net - (e.overpayment || 0)) : 0;
+    const contribution = e ? roundGrosze(net - (e.overpayment || 0) - (e.familyOverpayment || 0)) : 0;
     const d = debt.byMonth.get(idx);
+    const fd = family.byMonth.get(idx);
     let flowCash = 0, flowPortfolio = 0; // przepływy (bez wzrostu i bez korekt sald)
     let phase;
     if (!houseOn) phase = 'invest';
@@ -284,6 +357,7 @@ export function replayBalances(state, uptoYm, debtRes = null) {
     }
 
     if (d && d.spill > 0) { portfolio += d.spill; flowPortfolio += d.spill; } // nadpłata ponad spłatę wraca do inwestycji
+    if (fd && fd.spill > 0) { portfolio += fd.spill; flowPortfolio += fd.spill; } // nadpłata długu rodzinnego ponad saldo → portfel
 
     if (idx === hsMonth) {
       const amount = hsAmount == null ? cash : hsAmount; // null = "cała gotówka"
@@ -353,12 +427,19 @@ export function applyCheckIn(state, input, now = new Date()) {
   const earned = roundGrosze(Number(input.earned));
   const spent = roundGrosze(Number(input.spent));
   const overpayment = roundGrosze(Number(input.overpayment || 0));
+  const familyOverpayment = roundGrosze(Number(input.familyOverpayment || 0));
   if (!(earned >= 0) || !(spent >= 0)) throw new Error('Kwoty muszą być liczbami ≥ 0');
   if (overpayment < 0) throw new Error('Nadpłata nie może być ujemna');
+  if (familyOverpayment < 0) throw new Error('Nadpłata długu rodzinnego nie może być ujemna');
   if (overpayment > 0) {
     const debt = replayDebt(state, month);
     const d = debt.byMonth.get(ymToIdx(month));
     if (!d || d.balStart <= EPS) throw new Error('Nadpłata możliwa tylko przy aktywnym kredycie');
+  }
+  if (familyOverpayment > 0) {
+    const family = replayFamilyLoan(state, month);
+    const f = family.byMonth.get(ymToIdx(month));
+    if (!f || f.balStart <= EPS) throw new Error('Nadpłata możliwa tylko przy aktywnym długu rodzinnym');
   }
 
   const plan = buildPlan(state);
@@ -366,7 +447,7 @@ export function applyCheckIn(state, input, now = new Date()) {
   const plannedSavingsSnapshot = plannedSavingsFor(plan, month);
   const net = roundGrosze(earned - spent);
   const entry = {
-    month, earned, spent, overpayment,
+    month, earned, spent, overpayment, familyOverpayment,
     cashOverride: input.cashOverride != null ? roundGrosze(Number(input.cashOverride)) : null,
     balanceOverride: input.balanceOverride != null ? roundGrosze(Number(input.balanceOverride)) : null,
     plannedSavingsSnapshot,
@@ -401,7 +482,8 @@ export function reanchor(state, newAnchor, now = new Date()) {
     const upto = addMonths(newAnchor, -1);
     if (ymToIdx(upto) >= ymToIdx(state.anchorMonth)) {
       const debt = replayDebt(state, upto);
-      const bal = replayBalances(state, upto, debt);
+      const family = replayFamilyLoan(state, upto);
+      const bal = replayBalances(state, upto, debt, family);
       state.assumptions.cashStart = roundGrosze(bal.cash);
       state.assumptions.portfolioStart = roundGrosze(bal.portfolio);
     }
@@ -423,7 +505,7 @@ export function assumedDelta(entries) {
   return sum / last.length;
 }
 
-export function projectFire(state, plan, balances, debtRes, uptoYm) {
+export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
   const a = state.assumptions;
   const anchor = state.anchorMonth;
   const a0 = ymToIdx(anchor);
@@ -439,6 +521,11 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
   const mStart = houseOn ? ymToIdx(hp.mortgage.startMonth) : Infinity;
   const hsMonth = houseOn ? ymToIdx((hp.houseSpend && hp.houseSpend.month) || hp.mortgage.startMonth) : Infinity;
   const hsAmount = houseOn && hp.houseSpend ? hp.houseSpend.amount : null;
+  const flOn = houseOn && hp.familyLoan && hp.familyLoan.enabled;
+  const jFam = flOn ? monthlyRate(hp.familyLoan.rateNominal) : 0;
+  const A_fam = flOn ? familyLoanPayment(hp.familyLoan) : 0;
+  const flStart = flOn ? ymToIdx(hp.familyLoan.startMonth) : Infinity;
+  const flEnd = flOn ? ymToIdx(hp.familyLoan.endMonth) : Infinity;
 
   let cash = balances.cash;
   let portfolio = balances.portfolio;
@@ -448,6 +535,12 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
     debtBal = debtRes.balanceNominal;
     debtStarted = true;
   }
+  let famBal = 0;
+  let famStarted = false;
+  if (flOn && familyRes.started) {
+    famBal = familyRes.balanceNominal;
+    famStarted = true;
+  }
   let houseDone = houseOn ? upto >= hsMonth : true;
   let houseShortfall = false;
 
@@ -456,13 +549,17 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
     flowCash: r.flowCash, flowPortfolio: r.flowPortfolio, override: r.override,
     debtReal: (debtRes.byMonth.get(ymToIdx(r.ym)) || { bal: 0 }).bal
       / Math.pow(1 + a.inflationAnnual, monthsBetween(anchor, r.ym) / 12),
+    familyReal: (familyRes.byMonth.get(ymToIdx(r.ym)) || { bal: 0 }).bal
+      / Math.pow(1 + a.inflationAnnual, monthsBetween(anchor, r.ym) / 12),
     target: fireTargetAt(state, r.ym),
     projected: false,
   }));
 
   let fireYm = null;
   let debtFreeYm = null;
+  let familyFreeYm = null;
   if (debtStarted && debtBal <= EPS) debtFreeYm = uptoYm;
+  if (famStarted && famBal <= EPS) familyFreeYm = uptoYm;
 
   const startIdx = Math.max(upto + 1, a0);
   for (let idx = startIdx; idx < a0 + plan.length; idx++) {
@@ -475,6 +572,21 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
     const debtActive = houseOn && debtStarted && debtBal > 0;
     const s = pm.plannedSavings + delta;
     let flowCash = 0, flowPortfolio = 0;
+
+    // Dług rodzinny topi się równolegle wg harmonogramu (bez auto-nadpłat).
+    // Rata jest już odjęta w plannedSavings, więc s (nadwyżka nadpłacająca
+    // kredyt) jej nie dubluje. Spill z ostatniej raty wraca do portfela.
+    if (flOn && idx >= flStart && !famStarted) { famBal = hp.familyLoan.principal; famStarted = true; }
+    if (famStarted && famBal > EPS && idx <= flEnd) {
+      const stepF = mortgageStep(famBal, jFam, A_fam);
+      famBal = stepF.bal;
+      if (stepF.spill > 0) {
+        const spillReal = toReal(stepF.spill, anchor, ym, a.inflationAnnual);
+        portfolio += spillReal;
+        flowPortfolio += spillReal;
+      }
+      if (famBal <= EPS && !familyFreeYm) { famBal = 0; familyFreeYm = ym; }
+    }
 
     if (debtActive) {
       // Strategia: cała nadwyżka nadpłaca kredyt (konwersja na nominał).
@@ -537,12 +649,14 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
     series.push({
       ym, cash, portfolio, flowCash, flowPortfolio, override: false,
       debtReal: toReal(debtBal, anchor, ym, a.inflationAnnual),
+      familyReal: toReal(famBal, anchor, ym, a.inflationAnnual),
       target: pm.targetReal,
       projected: true,
     });
 
     const houseSettled = !houseOn || (debtStarted && debtBal <= EPS && idx >= hsMonth);
-    if (!fireYm && houseSettled && portfolio >= pm.targetReal - EPS) {
+    const famSettled = !flOn || (famStarted && famBal <= EPS);
+    if (!fireYm && houseSettled && famSettled && portfolio >= pm.targetReal - EPS) {
       fireYm = ym;
       break;
     }
@@ -551,7 +665,7 @@ export function projectFire(state, plan, balances, debtRes, uptoYm) {
   const reached = fireYm != null;
   const fireAge = reached ? ageAt(state.profile.birthDate, fireYm) : null;
   const onTrack = reached && fireAge.totalMonths <= state.assumptions.targetFireAge * 12;
-  return { reached, fireYm, fireAge, debtFreeYm, onTrack, series, delta, byPlanOnly, houseShortfall };
+  return { reached, fireYm, fireAge, debtFreeYm, familyFreeYm, onTrack, series, delta, byPlanOnly, houseShortfall };
 }
 
 // ── Analiza (tabele i statystyki) ───────────────────────────────────────
@@ -643,7 +757,7 @@ export function yearlyProjection(state, projection) {
       growthPortfolio: last.portfolio - portStart - flowPortfolio,
       portEnd: last.portfolio,
       cashStart, flowCash, cashEnd: last.cash,
-      debtRealEnd: last.debtReal, targetEnd: last.target,
+      debtRealEnd: last.debtReal, familyRealEnd: last.familyReal || 0, targetEnd: last.target,
       reached: !!(projection.reached && ymToIdx(chunk[0].ym) <= ymToIdx(projection.fireYm)
         && ymToIdx(projection.fireYm) <= ymToIdx(last.ym)),
       projected: projCount === 0 ? 'none' : (projCount === chunk.length ? 'full' : 'part'),
@@ -706,8 +820,9 @@ export function projectionWith(state, { assumptions = {}, extraMonthlySavings = 
     });
   }
   const debt = replayDebt(st, upto);
-  const balances = replayBalances(st, upto, debt);
-  return projectFire(st, plan, balances, debt, upto);
+  const family = replayFamilyLoan(st, upto);
+  const balances = replayBalances(st, upto, debt, family);
+  return projectFire(st, plan, balances, debt, family, upto);
 }
 
 // Tabela SWR: cel = roczne wydatki / SWR (roczne wydatki wprost z celu użytkownika).
@@ -818,12 +933,52 @@ export function mortgageAnalytics(state, debt, projection) {
   };
 }
 
+// Analityka długu rodzinnego — lustro mortgageAnalytics. Spłata wg kontraktu
+// przypada dokładnie na endMonth (annuitet z okna [start, end]).
+export function familyLoanAnalytics(state, family, projection) {
+  const hp = state.housing.housePlan;
+  const fl = hp && hp.familyLoan;
+  if (!hp || !hp.enabled || !fl || !fl.enabled || !family.started) return null;
+  const j = monthlyRate(fl.rateNominal);
+  const A = familyLoanPayment(fl);
+  let paidInterest = 0, paidPrincipal = 0;
+  let paidOffYm = null;
+  for (const r of family.rows) {
+    paidInterest += r.interest;
+    paidPrincipal += r.principalPaid;
+    if (paidOffYm == null && r.balNominal <= 0) paidOffYm = r.ym;
+  }
+  const startIdx = ymToIdx(fl.startMonth);
+  const overpaidTotal = state.entries
+    .filter(e => (e.familyOverpayment || 0) > 0 && ymToIdx(e.month) >= startIdx)
+    .reduce((s, e) => s + e.familyOverpayment, 0);
+  const balanceNominal = family.balanceNominal;
+  const lastYm = family.rows.length ? family.rows[family.rows.length - 1].ym : addMonths(fl.startMonth, -1);
+  const rem = remainingSchedule(balanceNominal, j, A);
+  const scheduleOnlyPayoffYm = paidOffYm || addMonths(lastYm, rem.months);
+  const N = familyLoanTermMonths(fl);
+  const contractRows = amortizationScheduleN(fl.principal, fl.rateNominal, N, fl.paymentOverrideMonthly);
+  const contractTotalInterest = contractRows.reduce((s, r) => s + r.interest, 0);
+  const contractPayoffYm = fl.endMonth;
+  const interestSavedSoFar = contractTotalInterest - paidInterest - rem.totalInterest;
+  return {
+    paidInterest, paidPrincipal, overpaidTotal, balanceNominal,
+    scheduleOnlyPayoffYm, scheduleOnlyRemainingInterest: rem.totalInterest,
+    contractPayoffYm, contractTotalInterest, interestSavedSoFar,
+    monthsAheadOfContract: monthsBetween(scheduleOnlyPayoffYm, contractPayoffYm),
+    projectedPayoffYm: projection ? projection.familyFreeYm : null,
+    payment: A, rateMonthly: j, lastYm, scheduleRows: rem.rows,
+    principal: fl.principal, rateNominal: fl.rateNominal, termMonths: N,
+  };
+}
+
 // Statystyki FIRE: FI%, majątek netto (bez wartości domu), runway, Coast FIRE.
 // Coast = cel w miesiącu docelowego wieku FIRE zdyskontowany realnym zwrotem.
-export function fiStats(state, balances, debt, plan, nowYm = todayYm()) {
+export function fiStats(state, balances, debt, plan, nowYm = todayYm(), family = null) {
   const a = state.assumptions;
   const target = fireTargetAt(state, nowYm);
-  const netWorth = balances.cash + balances.portfolio - (debt ? debt.balanceReal : 0);
+  const familyReal = family ? family.balanceReal : 0;
+  const netWorth = balances.cash + balances.portfolio - (debt ? debt.balanceReal : 0) - familyReal;
   const i = ymToIdx(nowYm) - ymToIdx(plan[0].ym);
   const row = plan[Math.min(Math.max(i, 0), plan.length - 1)];
   const monthlyExpenses = row.livingReal + row.rentReal + row.mortgagePaymentReal;
@@ -902,10 +1057,11 @@ export function recomputeDerived(state, now = new Date()) {
   let upto = lastCompleteMonth(now);
   // Wpisy mogą sięgać dalej niż "ostatni pełny miesiąc" tylko przy cofniętym zegarze — nie wspieramy.
   const debt = replayDebt(state, upto);
-  const balances = replayBalances(state, upto, debt);
+  const family = replayFamilyLoan(state, upto);
+  const balances = replayBalances(state, upto, debt, family);
   const streak = computeStreak(state.entries);
-  const projection = projectFire(state, plan, balances, debt, upto);
-  state.derived = { plan, balances, debt, streak, projection, uptoYm: upto };
+  const projection = projectFire(state, plan, balances, debt, family, upto);
+  state.derived = { plan, balances, debt, family, streak, projection, uptoYm: upto };
   return state;
 }
 
@@ -929,7 +1085,7 @@ export function defaultAssumptions() {
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 1,
+    version: 2,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },
@@ -943,9 +1099,10 @@ export function createState(partial = {}, now = new Date()) {
         businessIncomeMonthly: 0,
         businessStartMonth: null,
         mortgage: { startMonth: null, principal: 0, rateNominal: 0, termYears: 0, paymentOverrideMonthly: null },
+        familyLoan: { enabled: false, startMonth: null, endMonth: null, principal: 0, rateNominal: 0, paymentOverrideMonthly: null },
       },
     },
-    debt: { overrides: [] },
+    debt: { overrides: [], familyOverrides: [] },
     entries: [],
     ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null },
   };

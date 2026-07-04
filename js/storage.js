@@ -1,7 +1,7 @@
 // storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
 // migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const KEY = 'fireApp';
 export const BAK = 'fireApp.bak';
 export const APP_TAG = 'fire-companion';
@@ -37,11 +37,23 @@ export function validateState(s) {
   return s;
 }
 
-// Łańcuch migracji: każda wersja podnosi o 1. v1 = identyczność.
+// Łańcuch migracji: każda wersja podnosi o 1 (fall-through do najnowszej).
 export function migrate(s) {
   let cur = s;
   switch (cur.version) {
     case 1:
+      // v1 → v2: dodaj dług rodzinny (wyłączony) i listę jego korekt.
+      if (cur.housing && cur.housing.housePlan && !cur.housing.housePlan.familyLoan) {
+        cur.housing.housePlan.familyLoan = {
+          enabled: false, startMonth: null, endMonth: null,
+          principal: 0, rateNominal: 0, paymentOverrideMonthly: null,
+        };
+      }
+      cur.debt = cur.debt || {};
+      if (!Array.isArray(cur.debt.familyOverrides)) cur.debt.familyOverrides = [];
+      cur.version = 2;
+      // fall-through
+    case 2:
       break;
     default:
       throw new Error(`Nieznana wersja schematu: ${cur.version}`);

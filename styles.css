@@ -298,6 +298,9 @@ details.section summary { cursor: pointer; font-weight: 600; min-height: 40px; d
 .chart .line-cash { stroke: var(--warn); stroke-width: 1.5; fill: none; }
 .chart text { fill: var(--muted); font-size: 10px; }
 .chart .axis { stroke: var(--line); stroke-width: 1; }
+.chart .bar-principal { fill: var(--accent); }
+.chart .bar-interest { fill: var(--flame); }
+.chart rect { stroke: var(--card, transparent); stroke-width: .5; }
 .legend { display: flex; flex-wrap: wrap; gap: .75rem; font-size: .75rem; color: var(--muted); margin-top: .3rem; }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
 

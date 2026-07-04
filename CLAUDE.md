@@ -63,8 +63,9 @@ replay chain that reset it from that month forward, not overwrites of a stored t
 ## Invariants — break these and money math goes wrong
 
 - **Real vs nominal**: every amount is **real** (today's PLN) *unless the
-  identifier ends in `Nominal`*. The mortgage is the only nominal thing (it's a
-  contract). Conversions happen **only** through `toNominal`/`toReal`. Don't mix.
+  identifier ends in `Nominal`*. The nominal things are the two loan contracts —
+  the mortgage and the **family loan** (`housePlan.familyLoan`). Conversions
+  happen **only** through `toNominal`/`toReal`. Don't mix.
 - **Months are `"YYYY-MM"` strings; arithmetic is on integer indices** via
   `ymToIdx`/`idxToYm`. **Never** `new Date("YYYY-MM")` — it parses as UTC and
   shifts the month in negative-offset zones. "Today's month" comes only from local
@@ -79,7 +80,10 @@ replay chain that reset it from that month forward, not overwrites of a stored t
 - **`plannedSavingsSnapshot`** is frozen when an entry is created. Changing
   assumptions does **not** rewrite past verdicts; only an explicit re-save of that
   entry refreshes its snapshot.
-- **FIRE reached** ⇔ `portfolio ≥ fireTargetAt(...)` **AND** `debt == 0`. Both.
+- **FIRE reached** ⇔ `portfolio ≥ fireTargetAt(...)` **AND** mortgage `debt == 0`
+  **AND** family loan `== 0`. All three. The family loan melts on a fixed annuity
+  schedule (`replayFamilyLoan`/`projectFire`) — only explicit check-in
+  `familyOverpayment`s accelerate it; monthly surplus still overpays the mortgage.
 - **Verdict scale** `S = max(|plan|, 500)`: `≥ plan+0.15S` crushed, `≥ plan`
   on_plan, `≥ plan−0.40S` behind, else hard. Works for negative plans (build months).
 - **Two buckets**: `cash` (fundusz na dom) and `portfolio` (brokerage, counts to
@@ -144,6 +148,9 @@ numbers are the spec. Prefer adding a test over eyeballing a screenshot.
   anything but the app's own files. No build tooling.
 - Put logic in `engine.js` (testable), presentation in `ui.js`.
 - New user-facing text is **Polish**. Match the existing tone in `coach.js`.
+- **Plans, design docs, and technical writing are in English.** Only the parts
+  that ship as UI copy (or otherwise reach the user) are Polish — the app is
+  Polish, the planning is not.
 - **Commit messages in Polish** to match history (`git log`).
 - Mobile-first, max-width 480px, touch targets ≥48px, dark mode via CSS custom
   props + `prefers-color-scheme` with a manual override in `state.ui.theme`.
