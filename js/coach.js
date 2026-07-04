@@ -15,7 +15,7 @@ const MESSAGES = {
     ],
     off: [
       'Świetny miesiąc — zdecydowanie ponad plan. Prognoza jeszcze nie domyka się do Twojego celu wieku, ale takie miesiące właśnie ją przesuwają. Więcej takich.',
-      'Rozbiłeś plan. Jeszcze jedziesz za wolno względem wymarzonej daty, ale jeśli to nie był wyjątek, tylko nowy standard — dogonisz ją.',
+      'Wynik ponad plan. Jeszcze jedziesz za wolno względem wymarzonej daty, ale jeśli to nie był wyjątek, tylko nowy standard — dogonisz ją.',
       'Ponad plan! Cel wiekowy wciąż ucieka, ale ten miesiąc pokazuje, że stać Cię na więcej, niż zakłada plan. Zrób z tego nawyk.',
     ],
   },
@@ -107,7 +107,7 @@ export function coachMessage(ctx) {
 
 export function verdictLabel(v) {
   return {
-    crushed: 'Rozbiłeś plan!',
+    crushed: 'Ponad plan!',
     on_plan: 'W planie',
     behind: 'Poniżej planu',
     hard: 'Ciężki miesiąc',

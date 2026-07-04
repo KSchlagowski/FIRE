@@ -6,7 +6,7 @@ import * as An from './analysis.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.4.0';
+export const APP_VERSION = '1.4.1';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -509,7 +509,7 @@ function renderDashboard() {
     html += `<div class="card hero">
       ${reachedNow ? '<div class="banner success"><b>🎉 FIRE osiągnięte!</b> Portfel pokrywa Twoje wydatki przy bezpiecznej stopie wypłat.</div>' : ''}
       ${ringSVG(pct)}
-      <p style="margin:.5rem 0 0">${Fmt.formatPLN(d.balances.portfolio)} <span class="muted">z</span> <b>${Fmt.formatPLN(targets.primary)}</b> ${tip('Twoja liczba FIRE: roczne wydatki ÷ stopa wypłat. Cel jest ruchomy — rośnie razem z planowanym wzrostem wydatków.')}</p>
+      <p style="margin:.5rem 0 0">${Fmt.formatPLN(d.balances.portfolio)} <span class="muted">z</span> <b>${Fmt.formatPLN(targets.primary)}</b> ${tip('Twoja kwota FIRE: roczne wydatki ÷ stopa wypłat. Cel jest ruchomy — rośnie razem z planowanym wzrostem wydatków.')}</p>
       ${proj.reached ? `<p>Prognoza FIRE: <b class="${proj.onTrack ? 'good' : 'warn-text'}">${Fmt.formatMonthName(proj.fireYm)}</b>
         <span class="muted">(wiek ${Fmt.formatAgeYM(proj.fireAge)}, cel: ${state.assumptions.targetFireAge})</span>
         ${proj.byPlanOnly ? '<br><span class="muted small">prognoza wg planu — po 3 wpisach użyję Twoich realnych wyników</span>' : ''}</p>`
@@ -568,7 +568,7 @@ function fireJourneyHero(proj) {
     return `<div class="card hero">
       ${ringSVG(d.balances.portfolio / targets.primary)}
       <p class="warn-text small" style="margin:.5rem 0 0">Przy obecnym planie cel FIRE jest poza 60-letnim horyzontem — zajrzyj do założeń.</p>
-      <p class="muted small">Liczba FIRE dziś: ${Fmt.formatPLN(targets.primary)}.</p>
+      <p class="muted small">Kwota FIRE dziś: ${Fmt.formatPLN(targets.primary)}.</p>
     </div>`;
   }
   const jp = E.fireJourneyProgress(state, d.plan, proj, d.uptoYm);
@@ -576,7 +576,7 @@ function fireJourneyHero(proj) {
     ${ringSVG(jp.pct, 'drogi do FIRE')}
     <p style="margin:.5rem 0 0">Prognoza FIRE: <b class="${proj.onTrack ? 'good' : 'warn-text'}">${Fmt.formatMonthName(proj.fireYm)}</b>
       <span class="muted">(wiek ${Fmt.formatAgeYM(proj.fireAge)})</span></p>
-    <p class="muted small">Każda złotówka odłożona na dom, dług i inwestycje przybliża Cię do celu (liczba FIRE dziś: ${Fmt.formatPLN(targets.primary)}). ${tip('Postęp całej drogi oszczędzania: suma tego, co już odłożone, do sumy potrzebnej do FIRE (dom + dług + inwestycje), ważona wzrostem inwestycji. W realnych zł, więc inflacja uwzględniona. Pasek tylko rośnie.')}</p>
+    <p class="muted small">Każda złotówka odłożona na dom, dług i inwestycje przybliża Cię do celu (kwota FIRE dziś: ${Fmt.formatPLN(targets.primary)}). ${tip('Postęp całej drogi oszczędzania: suma tego, co już odłożone, do sumy potrzebnej do FIRE (dom + dług + inwestycje), ważona wzrostem inwestycji. W realnych zł, więc inflacja uwzględniona. Pasek tylko rośnie.')}</p>
   </div>`;
 }
 
@@ -952,7 +952,7 @@ function renderPlan() {
     ${field({ id: 'pl-wr', label: 'Stopa wypłat (WR)', suffix: '%', value: pctVal(a.withdrawalRate), tipText: 'Wskaźnik bezpieczeństwa: ile procent portfela wypłacasz rocznie po FIRE. Niżej = bezpieczniej wobec ryzyka sekwencji złych lat na rynku.' })}
     ${field({ id: 'pl-return', label: 'Realny zwrot z inwestycji', suffix: '%/rok', value: pctVal(a.realReturnAnnual), tipText: 'Zwrot ponad inflację. Wszystko w aplikacji liczone jest w dzisiejszych złotówkach.' })}
     ${field({ id: 'pl-infl', label: 'Inflacja', suffix: '%/rok', value: pctVal(a.inflationAnnual), tipText: 'Służy wyłącznie do przeliczania kredytu (nominalnego kontraktu) na dzisiejsze złotówki.' })}
-    ${field({ id: 'pl-gexp', label: 'Realny wzrost wydatków', suffix: '%/rok', value: pctVal(a.expenseGrowthReal), tipText: 'Cel ruchomy: liczba FIRE rośnie razem z planowanym wzrostem stylu życia.' })}
+    ${field({ id: 'pl-gexp', label: 'Realny wzrost wydatków', suffix: '%/rok', value: pctVal(a.expenseGrowthReal), tipText: 'Cel ruchomy: kwota FIRE rośnie razem z planowanym wzrostem stylu życia.' })}
     ${field({ id: 'pl-ginc', label: 'Realny wzrost dochodów', suffix: '%/rok', value: pctVal(a.incomeGrowthReal), tipText: '3% realnie rocznie to ambitne podwyżki. Ustaw 0 dla ostrożnej prognozy.' })}
     ${field({ id: 'pl-cashret', label: 'Realny zwrot z gotówki', suffix: '%/rok', value: pctVal(a.cashReturnReal), tipText: 'Lokaty ≈ inflacja, stąd domyślnie 0% realnie.' })}
   </div>

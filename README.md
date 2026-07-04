@@ -18,7 +18,7 @@ pokazuje postęp i mobilizujący komentarz trenera.
 - Cykl życia: oszczędzanie na dom → wydatek na dom + lata kredytu (strategia:
   **najpierw dług, potem inwestowanie**) → akumulacja → FIRE.
 - **FIRE** = portfel ≥ ruchomy cel (wydatki × 12 / WR, rosnące z `g_exp`) **oraz** dług = 0.
-- Werdykty miesiąca: skala `S = max(|plan|, 500)`; ≥ plan+0,15·S → „Rozbiłeś plan!”,
+- Werdykty miesiąca: skala `S = max(|plan|, 500)`; ≥ plan+0,15·S → „Ponad plan!”,
   ≥ plan → „W planie”, ≥ plan−0,40·S → „Poniżej planu”, inaczej „Ciężki miesiąc”.
 - Salda nigdy nie są zapisywane jako prawda — zawsze wyliczane od nowa (replay)
   z historii wpisów; korekty sald to jawne nadpisania w łańcuchu.
