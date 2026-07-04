@@ -52,4 +52,11 @@ export const FIX = {
   },
   // Coast FIRE: 1.8M/1.05^(222/12); Σodsetek kontraktu F3: A·180 − 1.1M.
   F17: { coast: 729911.95, contractInterest: 655962.35, eps: 1 },
+  // Symulacja „co jeśli” (projectionWith.extraSavings): przy r=0 kwota
+  // jednorazowa ląduje 1:1 w miesiącu symulacji, recurring = kwota × liczba
+  // miesięcy od miesiąca startu symulacji.
+  F18: {
+    oneTime: { month: '2026-09', amount: 2000 },
+    recurringFrom: '2027-01', recurringAmount: 1000, monthsToJun2027: 6,
+  },
 };

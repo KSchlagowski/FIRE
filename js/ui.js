@@ -6,7 +6,7 @@ import * as An from './analysis.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -585,6 +585,7 @@ function renderCheckin(month) {
     return;
   }
   const m = month && months.includes(month) ? month : months[0];
+  const mi = months.indexOf(m); // months malejąco: ‹ (starszy) = mi+1, › (nowszy) = mi−1
   const existing = state.entries.find(e => e.month === m);
   const debt = E.replayDebt(state, m);
   const dm = debt.byMonth.get(E.ymToIdx(m));
@@ -593,9 +594,13 @@ function renderCheckin(month) {
 
   view().innerHTML = `<div class="card">
     <h2>${existing ? 'Edycja wpisu' : 'Check-in'} — ${esc(Fmt.formatMonthName(m))}</h2>
-    <label class="field"><span class="lbl">Miesiąc</span>
-      <select id="ci-month">${months.map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${esc(Fmt.formatMonthName(x))}${state.entries.find(e => e.month === x) ? ' ✓' : ''}</option>`).join('')}</select>
-    </label>
+    <div class="field"><span class="lbl">Miesiąc</span>
+      <div class="month-nav">
+        <button type="button" id="ci-prev" aria-label="Starszy miesiąc" ${mi + 1 < months.length ? '' : 'disabled'}>‹</button>
+        <select id="ci-month">${months.map(x => `<option value="${x}" ${x === m ? 'selected' : ''}>${esc(Fmt.formatMonthName(x))}${state.entries.find(e => e.month === x) ? ' ✓' : ''}</option>`).join('')}</select>
+        <button type="button" id="ci-next" aria-label="Nowszy miesiąc" ${mi > 0 ? '' : 'disabled'}>›</button>
+      </div>
+    </div>
     <div class="banner info small">Plan na ten miesiąc: <b>${Fmt.formatPLN(planned)}</b>${planned < 0 ? ' (miesiąc budowy — plan zakłada niedobór)' : ''}</div>
     <div id="ci-error"></div>
     ${field({ id: 'ci-earned', label: 'Zarobione', suffix: 'zł', value: existing ? moneyVal(existing.earned) : '', tipText: 'Wszystkie dochody netto w tym miesiącu.' })}
@@ -614,6 +619,12 @@ function renderCheckin(month) {
 
   $('#ci-month').addEventListener('change', ev => {
     location.hash = '#/checkin/' + ev.target.value;
+  });
+  $('#ci-prev').addEventListener('click', () => {
+    if (mi + 1 < months.length) location.hash = '#/checkin/' + months[mi + 1];
+  });
+  $('#ci-next').addEventListener('click', () => {
+    if (mi > 0) location.hash = '#/checkin/' + months[mi - 1];
   });
 
   const del = $('#ci-delete');
@@ -770,6 +781,23 @@ function renderHistory() {
 
 let anMode = 'yearly';
 let anYear = 1;
+let simMonth = '';       // wejścia symulacji przeżywają pełne re-rendery ekranu
+let simAmount = '';
+let simRecurring = false;
+
+// Wynik karty Symulacja: czysta symulacja na projectionWith — nic nie zapisujemy.
+function simResultHTML(baseFireYm) {
+  const month = simMonth || E.todayYm();
+  if (!E.isValidYm(month) || E.ymToIdx(month) < E.ymToIdx(E.todayYm())) {
+    return '<p class="muted small">Wybierz bieżący lub przyszły miesiąc.</p>';
+  }
+  const raw = simAmount.trim();
+  if (raw === '') return '<p class="muted small">Podaj kwotę, aby zobaczyć wpływ na datę FIRE.</p>';
+  const amount = Fmt.parsePLN(raw);
+  if (amount == null) return '<div class="field-error">Nieprawidłowa kwota</div>';
+  const sim = E.projectionWith(state, { extraSavings: { month, amount, recurring: simRecurring } });
+  return An.simulationResult({ baseFireYm, sim, month });
+}
 
 function renderAnaliza() {
   if (!state.derived) E.recomputeDerived(state);
@@ -859,6 +887,10 @@ function renderAnaliza() {
     }),
     An.withdrawalCard({ w, chartHTML: wChart }),
     An.sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows }),
+    An.simulationCard({
+      nowYm, month: simMonth || nowYm, amount: simAmount, recurring: simRecurring,
+      resultHTML: simResultHTML(baseFireYm),
+    }),
     ma ? An.mortgageCard({ ma, chartHTML: debtChart }) : '',
   ].join('');
 
@@ -871,6 +903,19 @@ function renderAnaliza() {
     anYear = Number(yearSel.value) || 1;
     renderAnaliza();
   });
+
+  // Symulacja: podmieniamy tylko #sim-result (pełny re-render gubiłby fokus
+  // pola kwoty w trakcie pisania; projectionWith to jeden przebieg ≤720 iteracji).
+  const refreshSim = () => { $('#sim-result').innerHTML = simResultHTML(baseFireYm); };
+  const simM = $('#sim-month');
+  simM.addEventListener('change', () => { simMonth = simM.value; refreshSim(); });
+  const simA = $('#sim-amount');
+  simA.addEventListener('input', () => { simAmount = simA.value; refreshSim(); });
+  $$('[data-simmode]').forEach(el => el.addEventListener('click', () => {
+    simRecurring = el.dataset.simmode === 'from';
+    $$('[data-simmode]').forEach(b => b.classList.toggle('on', b === el));
+    refreshSim();
+  }));
 }
 
 // ── Plan i założenia ────────────────────────────────────────────────────

@@ -181,11 +181,15 @@ button:disabled { opacity: .5; cursor: default; }
 .btn-row { display: flex; gap: .5rem; margin-top: .5rem; }
 .btn-row > * { flex: 1; }
 
-label.field {
+.month-nav { display: flex; gap: .5rem; }
+.month-nav select { flex: 1; min-width: 0; }
+.month-nav button { flex: 0 0 48px; padding: 0; font-size: 1.35rem; line-height: 1; }
+
+.field {
   display: block;
   margin-bottom: .8rem;
 }
-label.field .lbl {
+.field .lbl {
   display: flex;
   align-items: baseline;
   gap: .35rem;

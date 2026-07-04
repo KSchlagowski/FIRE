@@ -682,12 +682,25 @@ export function excelProjection(state, opts = {}) {
 
 // Wrażliwość: pełny potok na płytkiej kopii stanu (wszystkie funkcje potoku
 // są czystymi czytelnikami — stan wejściowy pozostaje nietknięty, test F15a).
-export function projectionWith(state, { assumptions = {}, extraMonthlySavings = 0 } = {}, now = new Date()) {
+export function projectionWith(state, { assumptions = {}, extraMonthlySavings = 0, extraSavings = null } = {}, now = new Date()) {
   const st = { ...state, assumptions: { ...state.assumptions, ...assumptions } };
   const upto = lastCompleteMonth(now);
   let plan = buildPlan(st);
   if (extraMonthlySavings) {
     plan = plan.map(m => ({ ...m, plannedSavings: m.plannedSavings + extraMonthlySavings }));
+  }
+  if (extraSavings) {
+    // Symulacja „co jeśli”: kwota w jednym miesiącu (recurring=false) albo od
+    // tego miesiąca w górę (recurring=true). Ujemne kwoty legalne — deficyt
+    // drenuje gotówkę→portfel istniejącymi ścieżkami projekcji.
+    if (!isValidYm(extraSavings.month)) throw new Error('Nieprawidłowy miesiąc symulacji');
+    const amount = Number(extraSavings.amount) || 0;
+    const at = ymToIdx(extraSavings.month);
+    const a0 = ymToIdx(st.anchorMonth);
+    plan = plan.map((m, i) => {
+      const hit = extraSavings.recurring ? a0 + i >= at : a0 + i === at;
+      return hit ? { ...m, plannedSavings: m.plannedSavings + amount } : m;
+    });
   }
   const debt = replayDebt(st, upto);
   const balances = replayBalances(st, upto, debt);

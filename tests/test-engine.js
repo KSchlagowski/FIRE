@@ -762,6 +762,73 @@ test('F17c: nadpłata → oszczędność odsetek i szybsza spłata', () => {
   assertClose(ma.overpaidTotal, 50000, 0.01);
 });
 
+// ── F18: symulacja „co jeśli” (extraSavings per miesiąc) ────────────────
+
+function f18State() {
+  return baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 100000, realReturnAnnual: 0 } });
+}
+
+const rowAt = (p, ym) => p.series.find(r => r.ym === ym);
+
+test('F18a: extraSavings nie mutuje stanu', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  st.entries.push(entry('2026-01', 10000, 6000, { plannedSavingsSnapshot: 4000 }));
+  E.recomputeDerived(st, NOW);
+  const before = JSON.stringify(st);
+  E.projectionWith(st, { extraSavings: { month: '2026-09', amount: 2000, recurring: false } }, NOW);
+  E.projectionWith(st, { extraSavings: { month: '2026-09', amount: -500, recurring: true } }, NOW);
+  assertEq(JSON.stringify(st), before);
+});
+
+test('F18b: jednorazowo przy r=0 — dokładnie +2000 od miesiąca symulacji', () => {
+  const f = FIX.F18.oneTime;
+  const st = f18State();
+  const base = E.projectionWith(st, {}, NOW);
+  const sim = E.projectionWith(st, { extraSavings: { month: f.month, amount: f.amount, recurring: false } }, NOW);
+  assertClose(rowAt(sim, '2026-08').portfolio - rowAt(base, '2026-08').portfolio, 0, 1e-9, 'przed miesiącem symulacji:');
+  assertClose(rowAt(sim, f.month).portfolio - rowAt(base, f.month).portfolio, f.amount, 1e-9, 'miesiąc symulacji:');
+  assertClose(rowAt(sim, '2027-06').portfolio - rowAt(base, '2027-06').portfolio, f.amount, 1e-9, 'utrzymuje się dalej:');
+});
+
+test('F18c: co miesiąc od pierwszego prognozowanego miesiąca ≡ extraMonthlySavings', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  const flat = E.projectionWith(st, { extraMonthlySavings: 1000 }, NOW);
+  const rec = E.projectionWith(st, { extraSavings: { month: '2026-07', amount: 1000, recurring: true } }, NOW);
+  assertEq(rec.fireYm, flat.fireYm);
+  assertClose(rec.series[rec.series.length - 1].portfolio, flat.series[flat.series.length - 1].portfolio, 1e-9);
+  const past = E.projectionWith(st, { extraSavings: { month: '2026-01', amount: 1000, recurring: true } }, NOW);
+  assertEq(past.fireYm, flat.fireYm, 'start w przeszłości = od pierwszego prognozowanego:');
+  assertClose(past.series[past.series.length - 1].portfolio, flat.series[flat.series.length - 1].portfolio, 1e-9);
+});
+
+test('F18d: krawędzie — przeszłość / poza horyzontem / po dacie FIRE = baza; zły miesiąc rzuca', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  const base = E.projectionWith(st, {}, NOW);
+  assertTrue(base.reached, 'baza osiąga FIRE');
+  const past = E.projectionWith(st, { extraSavings: { month: '2026-03', amount: 5000, recurring: false } }, NOW);
+  assertEq(past.fireYm, base.fireYm, 'jednorazowo w przeszłości:');
+  assertClose(past.series[past.series.length - 1].portfolio, base.series[base.series.length - 1].portfolio, 1e-9);
+  const far = E.projectionWith(st, { extraSavings: { month: '2100-01', amount: 5000, recurring: false } }, NOW);
+  assertEq(far.fireYm, base.fireYm, 'poza horyzontem planu:');
+  const after = E.projectionWith(st, { extraSavings: { month: E.addMonths(base.fireYm, 12), amount: 5000, recurring: false } }, NOW);
+  assertEq(after.fireYm, base.fireYm, 'po dacie FIRE:');
+  assertThrows(() => E.projectionWith(st, { extraSavings: { month: '2026-13', amount: 100, recurring: false } }, NOW));
+});
+
+test('F18e: ujemne kwoty, monotoniczność; r=0 → +1000 od 2027-01 = +6000 w 2027-06', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  const base = E.projectionWith(st, {}, NOW);
+  const minus = E.projectionWith(st, { extraSavings: { month: '2026-07', amount: -1000, recurring: true } }, NOW);
+  const plus = E.projectionWith(st, { extraSavings: { month: '2026-07', amount: 1000, recurring: true } }, NOW);
+  assertTrue(minus.reached && E.ymToIdx(minus.fireYm) >= E.ymToIdx(base.fireYm), 'mniej oszczędności nie wcześniej');
+  assertTrue(plus.reached && E.ymToIdx(plus.fireYm) <= E.ymToIdx(base.fireYm), 'więcej oszczędności nie później');
+  const st0 = f18State();
+  const b0 = E.projectionWith(st0, {}, NOW);
+  const r0 = E.projectionWith(st0, { extraSavings: { month: FIX.F18.recurringFrom, amount: FIX.F18.recurringAmount, recurring: true } }, NOW);
+  assertClose(rowAt(r0, '2027-06').portfolio - rowAt(b0, '2027-06').portfolio,
+    FIX.F18.recurringAmount * FIX.F18.monthsToJun2027, 1e-9);
+});
+
 // ── Statystyki oszczędzania i wykonania planu ───────────────────────────
 
 test('statystyki: stopa oszczędzania (ostatni / 12 mies. / całość)', () => {
