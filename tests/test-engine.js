@@ -554,6 +554,20 @@ test('re-anchor: salda przeniesione, historia bez zmian', () => {
   assertEq(st.entries.length, 1, 'wpis został');
 });
 
+test('re-anchor wstecz: otwiera wcześniejsze miesiące, salda startowe bez zmian', () => {
+  const st = baseState({ anchorMonth: '2026-05', assumptions: { portfolioStart: 100000, cashStart: 3000 } });
+  E.recomputeDerived(st, NOW);
+  // Wstecz na 2026-02: salda startowe zostają (to stan początku lutego wg wywołującego).
+  E.reanchor(st, '2026-02', NOW);
+  assertEq(st.anchorMonth, '2026-02');
+  assertClose(st.assumptions.portfolioStart, 100000, 1e-9, 'portfel startowy nietknięty');
+  assertClose(st.assumptions.cashStart, 3000, 1e-9, 'gotówka startowa nietknięta');
+  // Teraz wcześniejszy miesiąc daje się wpisać (był „sprzed startu”).
+  const e = E.applyCheckIn(st, { month: '2026-03', earned: 10000, spent: 6000 }, NOW);
+  assertEq(e.month, '2026-03');
+  assertThrows(() => E.applyCheckIn(st, { month: '2026-01', earned: 1, spent: 1 }, NOW), 'wciąż sprzed nowego startu');
+});
+
 // ── F13: Faza wypłat ────────────────────────────────────────────────────
 
 test('F13a: Faza wypłat — parytet Excela (lata 1/2/35, R nominalne 8,15%)', () => {

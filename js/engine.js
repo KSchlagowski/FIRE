@@ -390,8 +390,11 @@ export function deleteEntry(state, month, now = new Date()) {
   recomputeDerived(state, now);
 }
 
-// Re-kotwiczenie po edycji dochodu/wydatków/czynszu: salda przenoszone na
-// nową kotwicę, historia (wpisy, werdykty) pozostaje bez zmian.
+// Re-kotwiczenie startu planu. W PRZÓD (auto po edycji dochodu/wydatków/czynszu
+// albo ręcznie): salda przenoszone na nową kotwicę. WSTECZ (ręcznie, aby otworzyć
+// wcześniejsze miesiące do check-inu): salda startowe zostają takie, jakie ustawił
+// wywołujący — to stan początku nowego, wcześniejszego miesiąca. Historia (wpisy,
+// werdykty) pozostaje bez zmian w obu kierunkach.
 export function reanchor(state, newAnchor, now = new Date()) {
   if (newAnchor === state.anchorMonth) return;
   if (ymToIdx(newAnchor) > ymToIdx(state.anchorMonth)) {

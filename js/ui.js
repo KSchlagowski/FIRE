@@ -6,7 +6,7 @@ import * as An from './analysis.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.3.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -50,11 +50,11 @@ function tip(text) {
   return `<details class="tip"><summary>?</summary><p>${esc(text)}</p></details>`;
 }
 
-function field({ id, label, value = '', tipText = '', hint = '', type = 'text', mode = 'decimal', placeholder = '', suffix = '' }) {
+function field({ id, label, value = '', tipText = '', hint = '', type = 'text', mode = 'decimal', placeholder = '', suffix = '', max = '' }) {
   const im = type === 'text' ? ` inputmode="${mode}"` : '';
   return `<label class="field">
     <span class="lbl">${esc(label)}${suffix ? ` <span class="muted">(${esc(suffix)})</span>` : ''}${tipText ? tip(tipText) : ''}</span>
-    <input type="${type}" id="${id}"${im} value="${esc(value)}" placeholder="${esc(placeholder)}">
+    <input type="${type}" id="${id}"${im} value="${esc(value)}" placeholder="${esc(placeholder)}"${max ? ` max="${esc(max)}"` : ''}>
     ${hint ? `<div class="hint">${esc(hint)}</div>` : ''}
   </label>`;
 }
@@ -945,6 +945,12 @@ function renderPlan() {
     ${field({ id: 'pl-income', label: 'Miesięczny dochód netto', suffix: 'zł', value: moneyVal(a.monthlyIncome) })}
     ${field({ id: 'pl-living', label: 'Miesięczne koszty życia', suffix: 'zł', value: moneyVal(a.monthlyLivingExpenses), tipText: 'Bez kosztów mieszkania — czynsz i rata liczone osobno.' })}
   </div>
+  <div class="card"><h2>Start planu</h2>
+    ${field({ id: 'pl-anchor', label: 'Miesiąc startu planu', type: 'month', value: state.anchorMonth, max: E.todayYm(), tipText: 'Od tego miesiąca liczą się check-iny, salda startowe i krzywe wzrostu. Cofnij go, aby uzupełnić wcześniejsze miesiące.' })}
+    ${field({ id: 'pl-cash-start', label: 'Gotówka na starcie', suffix: 'zł', value: moneyVal(a.cashStart) })}
+    ${field({ id: 'pl-port-start', label: 'Portfel na starcie', suffix: 'zł', value: moneyVal(a.portfolioStart) })}
+    <p class="muted small">Salda startowe to stan z początku miesiąca startu. Po cofnięciu startu ustaw je na stan z nowego miesiąca — inaczej uzupełniane wpisy policzą się podwójnie.</p>
+  </div>
   <div class="card"><h2>Mieszkanie i dom</h2>
     ${field({ id: 'pl-rent', label: 'Miesięczny czynsz najmu', suffix: 'zł', value: moneyVal(h.currentRentMonthly), tipText: 'Czynsz rośnie z inflacją = realnie stały. Znika w miesiącu wprowadzki.' })}
     <label class="field"><span class="lbl">
@@ -1029,6 +1035,8 @@ function renderPlan() {
       ['pl-income', 'income', () => parseMoney('pl-income')],
       ['pl-living', 'living', () => parseMoney('pl-living')],
       ['pl-rent', 'rent', () => parseMoney('pl-rent')],
+      ['pl-cash-start', 'cashStart', () => parseMoney('pl-cash-start')],
+      ['pl-port-start', 'portStart', () => parseMoney('pl-port-start')],
     ];
     for (const [, key, get] of specs) {
       const r = get();
@@ -1065,6 +1073,12 @@ function renderPlan() {
       };
     }
 
+    const anchorNew = $('#pl-anchor').value;
+    if (!E.isValidYm(anchorNew)) return fail('Podaj miesiąc startu planu.');
+    if (E.ymToIdx(anchorNew) > E.ymToIdx(E.todayYm())) return fail('Start planu nie może być w przyszłości.');
+    const anchorChanged = anchorNew !== state.anchorMonth;
+    const anchorBackward = anchorChanged && E.ymToIdx(anchorNew) < E.ymToIdx(state.anchorMonth);
+
     const reanchorNeeded = vals.income !== a.monthlyIncome
       || vals.living !== a.monthlyLivingExpenses
       || vals.rent !== h.currentRentMonthly;
@@ -1074,6 +1088,7 @@ function renderPlan() {
       targetFireAge: vals.fireage, withdrawalRate: vals.wr, realReturnAnnual: vals.ret,
       inflationAnnual: vals.infl, expenseGrowthReal: vals.gexp, incomeGrowthReal: vals.ginc,
       cashReturnReal: vals.cashret, monthlyIncome: vals.income, monthlyLivingExpenses: vals.living,
+      cashStart: vals.cashStart, portfolioStart: vals.portStart,
     });
     state.housing.currentRentMonthly = vals.rent;
     if (houseOn) state.housing.housePlan = house;
@@ -1082,7 +1097,15 @@ function renderPlan() {
     applyTheme();
 
     try {
-      if (reanchorNeeded && state.anchorMonth !== E.todayYm()) {
+      if (anchorChanged) {
+        // Jawna zmiana startu wygrywa z automatycznym re-kotwiczeniem:
+        // wstecz — otwiera wcześniejsze miesiące (salda startowe wg pól powyżej),
+        // w przód — salda przenoszone przez reanchor jak dotychczas.
+        E.reanchor(state, anchorNew);
+        toast(anchorBackward
+          ? `Zapisano. Plan startuje od: ${Fmt.formatMonthName(anchorNew)} — wcześniejsze miesiące uzupełnisz w check-inie.`
+          : `Zapisano. Start planu przesunięty na ${Fmt.formatMonthName(anchorNew)} — salda startowe przeliczone.`);
+      } else if (reanchorNeeded && state.anchorMonth !== E.todayYm()) {
         E.reanchor(state, E.todayYm());
         toast('Zapisano. Krzywe wzrostu wystartowały od nowa od bieżącego miesiąca — historia bez zmian.');
       } else {
