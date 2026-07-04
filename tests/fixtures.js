@@ -66,4 +66,9 @@ export const FIX = {
     startMonth: '2028-01', endMonth: '2032-12', // 60 rat włącznie
     N: 60, eps: 0.01,
   },
+  // Wartość przyszła równych wpłat (annuity-due). Parytet z zamkniętą formą
+  // oraz ze składkową częścią silnika miesięcznego (replayBalances, start 0).
+  F21: { monthly: 1000, annualReal: 0.05, months: 24 },
+  // Cel: wiek FIRE — poszukiwanie binarne minimalnych dodatkowych oszczędności.
+  F22: { cap: 100000 },
 };

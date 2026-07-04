@@ -847,6 +847,46 @@ export function projectionWith(state, { assumptions = {}, extraMonthlySavings = 
   return projectFire(st, plan, balances, debt, family, upto);
 }
 
+// Wartość przyszła równych miesięcznych wpłat (annuity-due — kolejność jak w
+// projekcji: portfolio += flow; portfolio *= 1+r). Czysta forma zamknięta,
+// zgodna konwencją ze składkową częścią replayBalances (test F21).
+export function futureValueOfMonthly(monthly, annualReal, years) {
+  const r = monthlyRate(annualReal);
+  const N = years * 12;
+  return r === 0 ? monthly * N : monthly * ((Math.pow(1 + r, N) - 1) / r) * (1 + r);
+}
+
+// Ile dodatkowych zł/mies. potrzeba, by osiągnąć FIRE najpóźniej w zadanym wieku.
+// Poszukiwanie binarne minimalnego extraMonthlySavings ≥ 0 spełniającego
+// (reached && fireAge.totalMonths ≤ targetAgeMonths) — funkcja monotoniczna:
+// więcej oszczędności ⇒ FIRE nie później. Każdy krok to jeden przebieg
+// projectionWith (na płytkiej kopii stanu — nic nie mutuje, test F15a).
+export function solveExtraSavingsForAge(state, targetAgeMonths, { cap = 100000 } = {}, now = new Date()) {
+  const run = extra => projectionWith(state, { extraMonthlySavings: extra }, now);
+  const meets = p => p.reached && p.fireAge.totalMonths <= targetAgeMonths;
+
+  const base = run(0);
+  if (meets(base)) {
+    return { feasible: true, extraMonthly: 0, fireYm: base.fireYm, fireAge: base.fireAge };
+  }
+  const capRes = run(cap);
+  if (!meets(capRes)) {
+    return {
+      feasible: false, extraMonthly: null,
+      fireYm: capRes.reached ? capRes.fireYm : null,
+      fireAge: capRes.reached ? capRes.fireAge : null,
+    };
+  }
+  // lo = najwyższe znane „za mało", hi = najniższe znane „wystarcza".
+  let lo = 0, hi = cap;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (meets(run(mid))) hi = mid; else lo = mid;
+  }
+  const res = run(hi);
+  return { feasible: true, extraMonthly: hi, fireYm: res.fireYm, fireAge: res.fireAge };
+}
+
 // Tabela SWR: cel = roczne wydatki / SWR (roczne wydatki wprost z celu użytkownika).
 export function swrComparison(state, nowYm = todayYm()) {
   const user = state.assumptions.withdrawalRate;

@@ -222,7 +222,7 @@ export function withdrawalCard({ w, chartHTML }) {
 
 // ── 5. Wrażliwość ───────────────────────────────────────────────────────
 
-function fireCell(fireYm, baseFireYm, isBase = false) {
+export function fireCell(fireYm, baseFireYm, isBase = false) {
   if (fireYm == null) return '<span class="warn-text">poza horyzontem</span>';
   const when = esc(Fmt.formatMonthName(fireYm));
   if (isBase) return `<b>${when}</b> <span class="muted small">(baza)</span>`;
@@ -257,46 +257,6 @@ export function sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows }
     ${metodologia([
       'Każdy wariant to pełny przebieg prognozy (plan → dług → salda → projekcja) z jednym zmienionym założeniem.',
       'Cel przy SWR = roczne wydatki ÷ SWR; mnożnik = 1 ÷ SWR (4% → 25× rocznych wydatków).',
-    ])}
-  </div>`;
-}
-
-// ── 5a. Symulacja „co jeśli” ────────────────────────────────────────────
-
-export function simulationResult({ baseFireYm, sim, month }) {
-  const simFireYm = sim.reached ? sim.fireYm : null;
-  let note = '';
-  if (baseFireYm != null && E.ymToIdx(month) > E.ymToIdx(baseFireYm)) {
-    note = '<p class="muted small">Wybrany miesiąc wypada po prognozowanej dacie FIRE — ta kwota nic już nie zmienia.</p>';
-  } else if (baseFireYm == null && simFireYm != null) {
-    note = '<p class="muted small">Ta zmiana sprowadza FIRE z powrotem w horyzont prognozy. 🔥</p>';
-  }
-  return [
-    kv('Prognoza bazowa', fireCell(baseFireYm, null)),
-    kv('Po symulacji', fireCell(simFireYm, baseFireYm)),
-    simFireYm ? kv('Wiek w dniu FIRE', esc(Fmt.formatAgeYM(sim.fireAge))) : '',
-    note,
-  ].join('');
-}
-
-export function simulationCard({ nowYm, month, amount, recurring, resultHTML }) {
-  return `<div class="card"><h2>Symulacja 🧪</h2>
-    <p class="muted small">Co jeśli odłożysz więcej (albo mniej)? Czysta symulacja — niczego nie zapisujemy, Twoje wpisy pozostają jedynym źródłem prawdy.</p>
-    <label class="field"><span class="lbl">Miesiąc</span>
-      <input type="month" id="sim-month" min="${nowYm}" value="${esc(month)}">
-    </label>
-    <div class="seg" role="tablist">
-      <button type="button" data-simmode="once" class="${recurring ? '' : 'on'}">Jednorazowo</button>
-      <button type="button" data-simmode="from" class="${recurring ? 'on' : ''}">Co miesiąc</button>
-    </div>
-    <label class="field"><span class="lbl">Kwota <span class="muted">(zł)</span></span>
-      <input type="text" id="sim-amount" inputmode="decimal" value="${esc(amount)}" placeholder="np. 2000">
-      <div class="hint">„Jednorazowo” dodaje kwotę tylko w wybranym miesiącu; „Co miesiąc” — od tego miesiąca do końca prognozy. Ujemna kwota = odkładasz mniej.</div>
-    </label>
-    <div id="sim-result">${resultHTML}</div>
-    ${metodologia([
-      'Symulacja = pełny przebieg prognozy (plan → dług → salda → projekcja) z kwotą dodaną do planu wybranego miesiąca.',
-      'Nic nie zapisujemy — po odświeżeniu ekranu symulacja znika, a wpisy i założenia pozostają nietknięte.',
     ])}
   </div>`;
 }

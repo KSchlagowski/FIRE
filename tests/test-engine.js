@@ -1121,6 +1121,63 @@ test('F20j: applyCheckIn — nadpłata rodzinna tylko przy aktywnym długu, zapi
     'nadpłata bez aktywnego długu rodzinnego');
 });
 
+// ── F21: wartość przyszła równych wpłat (annuity-due) ───────────────────
+
+test('F21a: futureValueOfMonthly ≡ zamknięta forma i część składkowa silnika', () => {
+  const f = FIX.F21;
+  const rm = E.monthlyRate(f.annualReal);
+  const N = f.months;
+  const closed = f.monthly * (1 + rm) * (Math.pow(1 + rm, N) - 1) / rm;
+  assertClose(E.futureValueOfMonthly(f.monthly, f.annualReal, N / 12), closed, 1e-6, 'parytet z zamkniętą formą');
+  // Cross-check konwencji annuity-due z F2: replayBalances (start 0, same wpłaty).
+  const st = baseState({ assumptions: { portfolioStart: 0, realReturnAnnual: f.annualReal } });
+  for (let i = 0; i < N; i++) st.entries.push(entry(E.addMonths('2026-07', i), f.monthly, 0));
+  const res = E.replayBalances(st, E.addMonths('2026-07', N - 1));
+  assertClose(res.portfolio, E.futureValueOfMonthly(f.monthly, f.annualReal, N / 12), 0.01, 'parytet z silnikiem miesięcznym');
+});
+
+test('F21b: r=0 → suma nominalna monthly·N', () => {
+  assertClose(E.futureValueOfMonthly(500, 0, 3), 500 * 36, 1e-9);
+});
+
+// ── F22: cel wieku FIRE (solveExtraSavingsForAge) ───────────────────────
+
+test('F22a: rozwiązanie osiąga cel, tuż poniżej nie; monotoniczność', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  E.recomputeDerived(st, NOW);
+  const base = st.derived.projection;
+  assertTrue(base.reached, 'baza osiąga FIRE');
+  const targetMonths = base.fireAge.totalMonths - 12; // rok wcześniej → wymaga dodatku
+  const sol = E.solveExtraSavingsForAge(st, targetMonths, {}, NOW);
+  assertTrue(sol.feasible, 'wykonalne w granicach cap');
+  assertTrue(sol.extraMonthly > 0, 'wymaga dodatkowych oszczędności');
+  const at = E.projectionWith(st, { extraMonthlySavings: sol.extraMonthly }, NOW);
+  assertTrue(at.reached && at.fireAge.totalMonths <= targetMonths, 'cel spełniony przy rozwiązaniu');
+  const below = E.projectionWith(st, { extraMonthlySavings: Math.max(0, sol.extraMonthly - 500) }, NOW);
+  assertTrue(!(below.reached && below.fireAge.totalMonths <= targetMonths), 'tuż poniżej progu nie spełnia');
+  const more = E.projectionWith(st, { extraMonthlySavings: sol.extraMonthly + 2000 }, NOW);
+  assertTrue(E.ymToIdx(more.fireYm) <= E.ymToIdx(at.fireYm), 'monotoniczność: więcej → nie później');
+});
+
+test('F22b: cel niewykonalny w granicach cap → feasible=false', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 100000 } });
+  E.recomputeDerived(st, NOW);
+  // Wiek 20 lat (240 mies.) — już za nami (urodzony 2000), nieosiągalne mimo cap.
+  const sol = E.solveExtraSavingsForAge(st, 240, { cap: FIX.F22.cap }, NOW);
+  assertEq(sol.feasible, false);
+  assertEq(sol.extraMonthly, null);
+});
+
+test('F22c: już na dobrej drodze → extraMonthly=0', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1700000 } });
+  E.recomputeDerived(st, NOW);
+  const base = st.derived.projection;
+  assertTrue(base.reached);
+  const sol = E.solveExtraSavingsForAge(st, base.fireAge.totalMonths + 24, {}, NOW);
+  assertEq(sol.extraMonthly, 0);
+  assertTrue(sol.feasible);
+});
+
 // ── Statystyki oszczędzania i wykonania planu ───────────────────────────
 
 test('statystyki: stopa oszczędzania (ostatni / 12 mies. / całość)', () => {

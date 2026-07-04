@@ -3,6 +3,7 @@
 import * as E from './engine.js';
 import * as Fmt from './format.js';
 import * as An from './analysis.js';
+import * as Sim from './simulation.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
@@ -231,17 +232,26 @@ function route() {
     return;
   }
   tabbar.hidden = false;
-  $$('#tabbar a').forEach(a => a.classList.toggle('active',
-    a.dataset.route === (hash.startsWith('#/checkin') ? '#/' : hash.split('/').slice(0, 2).join('/'))));
+  $$('#tabbar a').forEach(a => a.classList.toggle('active', a.dataset.route === activeRoute(hash)));
   window.scrollTo(0, 0);
   if (hash.startsWith('#/checkin')) {
     const m = hash.split('/')[2];
     renderCheckin(m && E.isValidYm(m) ? m : null);
   } else if (hash === '#/history') renderHistory();
   else if (hash === '#/analiza') renderAnaliza();
-  else if (hash === '#/plan') renderPlan();
+  else if (hash === '#/symulacja') renderSymulacja();
+  else if (hash === '#/plan') renderPlanHub();
+  else if (hash.startsWith('#/plan/')) renderPlanSection(hash.split('/')[2]);
   else if (hash === '#/backup') renderBackup();
   else renderDashboard();
+}
+
+// Podświetlenie zakładki: check-in należy do Pulpitu, a Kopia i wszystkie
+// pod-strony Planu (#/plan/*) — do zakładki Plan (slice(0,2) daje już „#/plan").
+function activeRoute(hash) {
+  if (hash.startsWith('#/checkin')) return '#/';
+  if (hash === '#/backup') return '#/plan';
+  return hash.split('/').slice(0, 2).join('/');
 }
 
 // ── Onboarding (5 kroków) ───────────────────────────────────────────────
@@ -951,23 +961,7 @@ function renderHistory() {
 
 let anMode = 'yearly';
 let anYear = 1;
-let simMonth = '';       // wejścia symulacji przeżywają pełne re-rendery ekranu
-let simAmount = '';
-let simRecurring = false;
-
-// Wynik karty Symulacja: czysta symulacja na projectionWith — nic nie zapisujemy.
-function simResultHTML(baseFireYm) {
-  const month = simMonth || E.todayYm();
-  if (!E.isValidYm(month) || E.ymToIdx(month) < E.ymToIdx(E.todayYm())) {
-    return '<p class="muted small">Wybierz bieżący lub przyszły miesiąc.</p>';
-  }
-  const raw = simAmount.trim();
-  if (raw === '') return '<p class="muted small">Podaj kwotę, aby zobaczyć wpływ na datę FIRE.</p>';
-  const amount = Fmt.parsePLN(raw);
-  if (amount == null) return '<div class="field-error">Nieprawidłowa kwota</div>';
-  const sim = E.projectionWith(state, { extraSavings: { month, amount, recurring: simRecurring } });
-  return An.simulationResult({ baseFireYm, sim, month });
-}
+let anSection = 'przeglad';   // sekcja Analizy: przeglad | prognoza | kredyty
 
 function renderAnaliza() {
   if (!state.derived) E.recomputeDerived(state);
@@ -976,117 +970,131 @@ function renderAnaliza() {
   const nowYm = E.todayYm();
   const proj = d.projection;
   const houseOn = !!(state.housing.housePlan && state.housing.housePlan.enabled);
-
-  const fi = E.fiStats(state, d.balances, d.debt, d.plan, nowYm, d.family);
-  const cvg = E.contributionsVsGrowth(state, d.balances);
-  const sav = E.savingsStats(state, d.uptoYm);
-  const pva = E.planVsActualStats(state.entries);
-  const blocks = E.yearlyProjection(state, proj);
-  if (anYear > blocks.length) anYear = 1;
-  const excelContrib = E.plannedSavingsFor(d.plan, nowYm) * 12;
-  const excelRows = E.excelProjection(state, { start: d.balances.portfolio, contribYearly: excelContrib });
-  const w = E.projectWithdrawal(state, { projection: proj });
-
-  // Wrażliwość: pełny przebieg prognozy na wariant (≤ 13 × 720 iteracji).
-  const baseFireYm = proj.reached ? proj.fireYm : null;
-  const vFire = p => (p.reached ? p.fireYm : null);
-  const returnRows = [-0.02, -0.01, 0, 0.01, 0.02].map(dp => ({
-    label: `${Fmt.formatPct(a.realReturnAnnual + dp)}${dp === 0 ? '' : ` (${dp > 0 ? '+' : '−'}${Math.round(Math.abs(dp) * 100)} pp)`}`,
-    fireYm: dp === 0 ? baseFireYm : vFire(E.projectionWith(state, { assumptions: { realReturnAnnual: a.realReturnAnnual + dp } })),
-    isBase: dp === 0,
-  }));
-  const savingsRows = [-1000, -500, 0, 500, 1000].map(x => ({
-    label: x === 0 ? 'wg planu' : `${x > 0 ? '+' : '−'}${Fmt.formatPLN(Math.abs(x))}/mies.`,
-    fireYm: x === 0 ? baseFireYm : vFire(E.projectionWith(state, { extraMonthlySavings: x })),
-    isBase: x === 0,
-  }));
-  const swrRows = E.swrComparison(state, nowYm).map(r => ({
-    ...r,
-    fireYm: r.isUser ? baseFireYm : vFire(E.projectionWith(state, { assumptions: { withdrawalRate: r.swr } })),
-  }));
-
-  // Wykresy (chartSVG skaluje od 0 — skumulowany wykres tylko przy seriach ≥ 0).
-  const cumChart = pva.cumRows.length > 1 && pva.cumRows.every(r => r.cumNet >= 0 && r.cumPlanned >= 0)
-    ? chartSVG(pva.cumRows, [
-      { get: r => r.cumPlanned, cls: 'line-target' },
-      { get: r => r.cumNet, cls: 'line-port' },
-    ])
-    : '';
-  const wChart = w.rows.length > 1
-    ? chartSVG(w.rows, [
-      { get: r => r.endNominal, cls: 'line-proj' },
-      { get: r => r.endReal, cls: 'line-port' },
-    ])
-    : '';
-
-  // Wykres topnienia salda (sama rata vs z nadpłatami) — wspólny dla kredytu
-  // i długu rodzinnego; realField wskazuje pole realne w serii prognozy.
-  const meltChart = (analytics, loanRes, realField) => {
-    if (!analytics || loanRes.rows.length <= 1) return '';
-    const histBy = new Map(loanRes.rows.map(r => [r.ym, r.balNominal]));
-    const schedBy = new Map(analytics.scheduleRows.map((r, i) => [E.addMonths(analytics.lastYm, i + 1), r.balNominal]));
-    const projBy = new Map(proj.series.filter(r => r.projected)
-      .map(r => [r.ym, E.toNominal(r[realField] || 0, state.anchorMonth, r.ym, a.inflationAnnual)]));
-    const start = E.ymToIdx(loanRes.rows[0].ym);
-    const end = E.ymToIdx(analytics.lastYm) + analytics.scheduleRows.length;
-    const rows = [];
-    for (let i = start; i <= end; i++) {
-      const ym = E.idxToYm(i);
-      const hist = histBy.get(ym);
-      rows.push({
-        ym,
-        over: hist != null ? hist : (projBy.get(ym) || 0),
-        sched: hist != null ? hist : (schedBy.get(ym) || 0),
-      });
-    }
-    return rows.length > 1
-      ? chartSVG(rows, [
-        { get: r => r.sched, cls: 'line-debt-dash' },
-        { get: r => r.over, cls: 'line-debt' },
-      ])
-      : '';
-  };
-  // Słupki kapitał/odsetki wg kontraktu (deterministyczne, bez nadpłat).
-  const piBars = rows => rows.length
-    ? stackedBarSVG(rows, [
-      { get: r => r.principal, cls: 'bar-principal' },
-      { get: r => r.interest, cls: 'bar-interest' },
-    ])
-    : '';
-
   const hp = state.housing.housePlan;
-  const ma = houseOn && d.debt.started ? E.mortgageAnalytics(state, d.debt, proj) : null;
-  const debtChart = meltChart(ma, d.debt, 'debtReal');
-  const mtgBar = ma ? piBars(E.yearlyPrincipalInterest(E.amortizationSchedule(hp.mortgage))) : '';
 
+  // Analityka kredytów — potrzebna też do decyzji, czy pokazać zakładkę Kredyty.
+  const ma = houseOn && d.debt.started ? E.mortgageAnalytics(state, d.debt, proj) : null;
   const fam = d.family;
   const fa = houseOn && fam && fam.started ? E.familyLoanAnalytics(state, fam, proj) : null;
-  const familyChart = meltChart(fa, fam, 'familyReal');
-  const flBar = fa && hp.familyLoan
-    ? piBars(E.yearlyPrincipalInterest(
-      E.amortizationScheduleN(hp.familyLoan.principal, hp.familyLoan.rateNominal, E.familyLoanTermMonths(hp.familyLoan), hp.familyLoan.paymentOverrideMonthly)))
-    : '';
+  const showKredyty = !!(ma || fa);
+  if (anSection === 'kredyty' && !showKredyty) anSection = 'przeglad';
 
-  view().innerHTML = [
-    An.statsCard({ fi, cvg, balances: d.balances, a, nowYm }),
-    An.planPerfCard({ sav, pva, chartHTML: cumChart }),
-    An.projectionCard({
+  const sections = [['przeglad', 'Przegląd'], ['prognoza', 'Prognoza']];
+  if (showKredyty) sections.push(['kredyty', 'Kredyty']);
+  const seg = `<div class="seg" role="tablist">${sections.map(([k, l]) =>
+    `<button type="button" data-ansection="${k}" class="${anSection === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+
+  let body = '';
+
+  if (anSection === 'przeglad') {
+    const fi = E.fiStats(state, d.balances, d.debt, d.plan, nowYm, d.family);
+    const cvg = E.contributionsVsGrowth(state, d.balances);
+    const sav = E.savingsStats(state, d.uptoYm);
+    const pva = E.planVsActualStats(state.entries);
+    // chartSVG skaluje od 0 — skumulowany wykres tylko przy seriach ≥ 0.
+    const cumChart = pva.cumRows.length > 1 && pva.cumRows.every(r => r.cumNet >= 0 && r.cumPlanned >= 0)
+      ? chartSVG(pva.cumRows, [
+        { get: r => r.cumPlanned, cls: 'line-target' },
+        { get: r => r.cumNet, cls: 'line-port' },
+      ])
+      : '';
+    body = An.statsCard({ fi, cvg, balances: d.balances, a, nowYm })
+      + An.planPerfCard({ sav, pva, chartHTML: cumChart });
+  } else if (anSection === 'prognoza') {
+    const blocks = E.yearlyProjection(state, proj);
+    if (anYear > blocks.length) anYear = 1;
+    const excelContrib = E.plannedSavingsFor(d.plan, nowYm) * 12;
+    const excelRows = E.excelProjection(state, { start: d.balances.portfolio, contribYearly: excelContrib });
+    const w = E.projectWithdrawal(state, { projection: proj });
+
+    // Wrażliwość: pełny przebieg prognozy na wariant (≤ 13 × 720 iteracji).
+    const baseFireYm = proj.reached ? proj.fireYm : null;
+    const vFire = p => (p.reached ? p.fireYm : null);
+    const returnRows = [-0.02, -0.01, 0, 0.01, 0.02].map(dp => ({
+      label: `${Fmt.formatPct(a.realReturnAnnual + dp)}${dp === 0 ? '' : ` (${dp > 0 ? '+' : '−'}${Math.round(Math.abs(dp) * 100)} pp)`}`,
+      fireYm: dp === 0 ? baseFireYm : vFire(E.projectionWith(state, { assumptions: { realReturnAnnual: a.realReturnAnnual + dp } })),
+      isBase: dp === 0,
+    }));
+    const savingsRows = [-1000, -500, 0, 500, 1000].map(x => ({
+      label: x === 0 ? 'wg planu' : `${x > 0 ? '+' : '−'}${Fmt.formatPLN(Math.abs(x))}/mies.`,
+      fireYm: x === 0 ? baseFireYm : vFire(E.projectionWith(state, { extraMonthlySavings: x })),
+      isBase: x === 0,
+    }));
+    const swrRows = E.swrComparison(state, nowYm).map(r => ({
+      ...r,
+      fireYm: r.isUser ? baseFireYm : vFire(E.projectionWith(state, { assumptions: { withdrawalRate: r.swr } })),
+    }));
+    const wChart = w.rows.length > 1
+      ? chartSVG(w.rows, [
+        { get: r => r.endNominal, cls: 'line-proj' },
+        { get: r => r.endReal, cls: 'line-port' },
+      ])
+      : '';
+
+    body = An.projectionCard({
       mode: anMode, blocks, series: proj.series, excelRows, houseOn,
       selectedYear: anYear, fireYm: proj.reached ? proj.fireYm : null,
       excelStart: d.balances.portfolio, excelContrib,
       byPlanOnly: proj.byPlanOnly, delta: proj.delta,
       hasFamily: !!fa,
-    }),
-    An.withdrawalCard({ w, chartHTML: wChart }),
-    An.sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows }),
-    An.simulationCard({
-      nowYm, month: simMonth || nowYm, amount: simAmount, recurring: simRecurring,
-      resultHTML: simResultHTML(baseFireYm),
-    }),
-    ma ? An.mortgageCard({ ma, chartHTML: debtChart, barHTML: mtgBar }) : '',
-    fa ? An.familyLoanCard({ fa, chartHTML: familyChart, barHTML: flBar }) : '',
-  ].join('');
+    })
+      + An.withdrawalCard({ w, chartHTML: wChart })
+      + An.sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows });
+  } else {
+    // ── Kredyty ──
+    // Wykres topnienia salda (sama rata vs z nadpłatami) — wspólny dla kredytu
+    // i długu rodzinnego; realField wskazuje pole realne w serii prognozy.
+    const meltChart = (analytics, loanRes, realField) => {
+      if (!analytics || loanRes.rows.length <= 1) return '';
+      const histBy = new Map(loanRes.rows.map(r => [r.ym, r.balNominal]));
+      const schedBy = new Map(analytics.scheduleRows.map((r, i) => [E.addMonths(analytics.lastYm, i + 1), r.balNominal]));
+      const projBy = new Map(proj.series.filter(r => r.projected)
+        .map(r => [r.ym, E.toNominal(r[realField] || 0, state.anchorMonth, r.ym, a.inflationAnnual)]));
+      const start = E.ymToIdx(loanRes.rows[0].ym);
+      const end = E.ymToIdx(analytics.lastYm) + analytics.scheduleRows.length;
+      const rows = [];
+      for (let i = start; i <= end; i++) {
+        const ym = E.idxToYm(i);
+        const hist = histBy.get(ym);
+        rows.push({
+          ym,
+          over: hist != null ? hist : (projBy.get(ym) || 0),
+          sched: hist != null ? hist : (schedBy.get(ym) || 0),
+        });
+      }
+      return rows.length > 1
+        ? chartSVG(rows, [
+          { get: r => r.sched, cls: 'line-debt-dash' },
+          { get: r => r.over, cls: 'line-debt' },
+        ])
+        : '';
+    };
+    // Słupki kapitał/odsetki wg kontraktu (deterministyczne, bez nadpłat).
+    const piBars = rows => rows.length
+      ? stackedBarSVG(rows, [
+        { get: r => r.principal, cls: 'bar-principal' },
+        { get: r => r.interest, cls: 'bar-interest' },
+      ])
+      : '';
 
+    const debtChart = meltChart(ma, d.debt, 'debtReal');
+    const mtgBar = ma ? piBars(E.yearlyPrincipalInterest(E.amortizationSchedule(hp.mortgage))) : '';
+    const familyChart = meltChart(fa, fam, 'familyReal');
+    const flBar = fa && hp.familyLoan
+      ? piBars(E.yearlyPrincipalInterest(
+        E.amortizationScheduleN(hp.familyLoan.principal, hp.familyLoan.rateNominal, E.familyLoanTermMonths(hp.familyLoan), hp.familyLoan.paymentOverrideMonthly)))
+      : '';
+
+    body = (ma ? An.mortgageCard({ ma, chartHTML: debtChart, barHTML: mtgBar }) : '')
+      + (fa ? An.familyLoanCard({ fa, chartHTML: familyChart, barHTML: flBar }) : '');
+  }
+
+  view().innerHTML = seg + body;
+
+  $$('[data-ansection]').forEach(el => el.addEventListener('click', () => {
+    anSection = el.dataset.ansection;
+    renderAnaliza();
+  }));
   $$('[data-anmode]').forEach(el => el.addEventListener('click', () => {
     anMode = el.dataset.anmode;
     renderAnaliza();
@@ -1096,38 +1104,193 @@ function renderAnaliza() {
     anYear = Number(yearSel.value) || 1;
     renderAnaliza();
   });
-
-  // Symulacja: podmieniamy tylko #sim-result (pełny re-render gubiłby fokus
-  // pola kwoty w trakcie pisania; projectionWith to jeden przebieg ≤720 iteracji).
-  const refreshSim = () => { $('#sim-result').innerHTML = simResultHTML(baseFireYm); };
-  const simM = $('#sim-month');
-  simM.addEventListener('change', () => { simMonth = simM.value; refreshSim(); });
-  const simA = $('#sim-amount');
-  simA.addEventListener('input', () => { simAmount = simA.value; refreshSim(); });
-  $$('[data-simmode]').forEach(el => el.addEventListener('click', () => {
-    simRecurring = el.dataset.simmode === 'from';
-    $$('[data-simmode]').forEach(b => b.classList.toggle('on', b === el));
-    refreshSim();
-  }));
 }
 
-// ── Plan i założenia ────────────────────────────────────────────────────
+// ── Symulacja (#/symulacja) ─────────────────────────────────────────────
+// Pięć kalkulatorów motywacyjnych. Wejścia przeżywają pełne re-rendery ekranu
+// (stan modułu); wyniki podmieniane w #…-result, by nie gubić fokusu/uchwytu.
 
-function renderPlan() {
+let symTab = 'cojesli';
+let simMonth = '';        // Co jeśli?: miesiąc
+let simAmount = '';       // Co jeśli?: kwota
+let simRecurring = false; // Co jeśli?: jednorazowo/co miesiąc
+let symAge = '';          // Cel: wiek FIRE
+let symLatte = '';        // Efekt małych wydatków
+let symMore = null;       // Suwak „oszczędzaj więcej" (zł/mies.)
+let symReturn = null;     // Suwak „wpływ zwrotu" (realny zwrot roczny, ułamek)
+
+const SYM_CAP = 100000;   // górny limit dopłaty w „Cel: wiek FIRE"
+
+function renderSymulacja() {
+  if (!state.derived) E.recomputeDerived(state);
+  const d = state.derived;
   const a = state.assumptions;
-  const h = state.housing;
-  const hp = h.housePlan;
-  const fl = hp.familyLoan || { enabled: false, startMonth: null, endMonth: null, principal: 0, rateNominal: 0, paymentOverrideMonthly: null };
-  const lastOk = E.lastCompleteMonth();
-  const hasEntryLastOk = !!state.entries.find(e => e.month === lastOk);
+  const nowYm = E.todayYm();
+  const proj = d.projection;
+  const baseFireYm = proj.reached ? proj.fireYm : null;
 
-  view().innerHTML = `
+  // ── Kalkulatory wyników (czyste projectionWith / funkcje silnika) ──
+  const whatIfResult = () => {
+    const month = simMonth || nowYm;
+    if (!E.isValidYm(month) || E.ymToIdx(month) < E.ymToIdx(nowYm)) {
+      return '<p class="muted small">Wybierz bieżący lub przyszły miesiąc.</p>';
+    }
+    const raw = simAmount.trim();
+    if (raw === '') return '<p class="muted small">Podaj kwotę, aby zobaczyć wpływ na datę FIRE.</p>';
+    const amount = Fmt.parsePLN(raw);
+    if (amount == null) return '<div class="field-error">Nieprawidłowa kwota</div>';
+    const sim = E.projectionWith(state, { extraSavings: { month, amount, recurring: simRecurring } });
+    return Sim.simulationResult({ baseFireYm, sim, month });
+  };
+
+  const targetAgeResult = () => {
+    const raw = String(symAge).trim();
+    const ageYears = raw === '' ? a.targetFireAge : Fmt.parsePLN(raw);
+    if (ageYears == null || ageYears <= 0) return '<div class="field-error">Podaj docelowy wiek.</div>';
+    const currentAge = E.ageAt(state.profile.birthDate, nowYm).years;
+    if (ageYears <= currentAge) return `<p class="muted small">Podaj wiek większy niż Twój obecny (${currentAge}).</p>`;
+    const sol = E.solveExtraSavingsForAge(state, Math.round(ageYears * 12), { cap: SYM_CAP });
+    const plannedNow = E.plannedSavingsFor(d.plan, nowYm);
+    return Sim.targetAgeResult({ sol, ageYears, plannedNow, baseFireYm, cap: SYM_CAP });
+  };
+
+  const latteResult = () => {
+    const raw = String(symLatte).trim();
+    if (raw === '') return '<p class="muted small">Podaj miesięczną kwotę, aby zobaczyć efekt.</p>';
+    const amount = Fmt.parsePLN(raw);
+    if (amount == null || amount <= 0) return '<div class="field-error">Podaj dodatnią kwotę.</div>';
+    const fv = y => E.futureValueOfMonthly(amount, a.realReturnAnnual, y);
+    const sim = E.projectionWith(state, { extraMonthlySavings: amount });
+    return Sim.latteResult({ amount, fv10: fv(10), fv20: fv(20), fv30: fv(30), sim, baseFireYm });
+  };
+
+  const moreMax = Math.max(1000, Math.round((a.monthlyIncome || 0) / 100) * 100);
+  const moreResult = () => {
+    const extra = symMore == null ? 0 : Number(symMore);
+    if (!extra) return '<p class="muted small">Przesuń suwak, aby zobaczyć, o ile wcześniej osiągniesz FIRE.</p>';
+    const sim = E.projectionWith(state, { extraMonthlySavings: extra });
+    return Sim.moreSavingsResult({ extra, sim, baseFireYm });
+  };
+
+  const retMin = Math.round((a.realReturnAnnual - 0.03) * 1000) / 1000;
+  const retMax = Math.round((a.realReturnAnnual + 0.03) * 1000) / 1000;
+  const returnResult = () => {
+    const newReturn = symReturn == null ? a.realReturnAnnual : Number(symReturn);
+    const sim = Math.abs(newReturn - a.realReturnAnnual) < 1e-9
+      ? proj
+      : E.projectionWith(state, { assumptions: { realReturnAnnual: newReturn } });
+    return Sim.returnResult({ newReturn, baseReturn: a.realReturnAnnual, sim, baseFireYm });
+  };
+
+  const tabs = [
+    ['cojesli', 'Co jeśli?'],
+    ['wiek', 'Cel: wiek'],
+    ['latte', 'Małe wydatki'],
+    ['wiecej', 'Więcej'],
+    ['zwrot', 'Zwrot'],
+  ];
+  const seg = `<div class="seg seg-scroll" role="tablist">${tabs.map(([k, l]) =>
+    `<button type="button" data-symtab="${k}" class="${symTab === k ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`;
+
+  let body = '';
+  if (symTab === 'cojesli') {
+    body = Sim.whatIfCard({ nowYm, month: simMonth || nowYm, amount: simAmount, recurring: simRecurring, resultHTML: whatIfResult() });
+  } else if (symTab === 'wiek') {
+    body = Sim.targetAgeCard({ ageValue: symAge, defaultAge: a.targetFireAge, resultHTML: targetAgeResult() });
+  } else if (symTab === 'latte') {
+    body = Sim.latteCard({ amountValue: symLatte, resultHTML: latteResult() });
+  } else if (symTab === 'wiecej') {
+    body = Sim.moreSavingsCard({ value: symMore, max: moreMax, resultHTML: moreResult() });
+  } else {
+    body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
+  }
+
+  view().innerHTML = seg + body;
+
+  $$('[data-symtab]').forEach(el => el.addEventListener('click', () => {
+    symTab = el.dataset.symtab;
+    renderSymulacja();
+  }));
+
+  if (symTab === 'cojesli') {
+    const refresh = () => { const r = $('#sim-result'); if (r) r.innerHTML = whatIfResult(); };
+    const simM = $('#sim-month');
+    if (simM) simM.addEventListener('change', () => { simMonth = simM.value; refresh(); });
+    const simA = $('#sim-amount');
+    if (simA) simA.addEventListener('input', () => { simAmount = simA.value; refresh(); });
+    $$('[data-simmode]').forEach(el => el.addEventListener('click', () => {
+      simRecurring = el.dataset.simmode === 'from';
+      $$('[data-simmode]').forEach(b => b.classList.toggle('on', b === el));
+      refresh();
+    }));
+  } else if (symTab === 'wiek') {
+    const ageEl = $('#sym-age');
+    if (ageEl) ageEl.addEventListener('input', () => { symAge = ageEl.value; $('#sym-age-result').innerHTML = targetAgeResult(); });
+  } else if (symTab === 'latte') {
+    const latteEl = $('#sym-latte');
+    if (latteEl) latteEl.addEventListener('input', () => { symLatte = latteEl.value; $('#sym-latte-result').innerHTML = latteResult(); });
+  } else if (symTab === 'wiecej') {
+    const moreEl = $('#sym-more');
+    if (moreEl) moreEl.addEventListener('input', () => {
+      symMore = moreEl.value;
+      $('#sym-more-val').textContent = Fmt.formatPLN(Number(symMore));
+      $('#sym-more-result').innerHTML = moreResult();
+    });
+  } else {
+    const retEl = $('#sym-return');
+    if (retEl) retEl.addEventListener('input', () => {
+      symReturn = retEl.value;
+      $('#sym-return-val').textContent = Fmt.formatPct(Number(symReturn));
+      $('#sym-return-result').innerHTML = returnResult();
+    });
+  }
+}
+
+// ── Ustawienia: hub + pod-strony (#/plan, #/plan/*) ─────────────────────
+// Monolityczny formularz rozbity na osobne strony, każda z własnym „Zapisz".
+// Zero zmian w silniku — reanchor / recomputeDerived tylko przeniesione.
+
+const planBack = '<a class="btn ghost wide" href="#/plan">← Ustawienia</a>';
+const planFail = msg => { $('#plan-error').innerHTML = `<div class="field-error">${esc(msg)}</div>`; window.scrollTo(0, 0); };
+
+function renderPlanHub() {
+  const items = [
+    ['🎯', 'Profil i FIRE', 'wiek, stopa wypłat, założenia', '#/plan/fire'],
+    ['💰', 'Finanse i start planu', 'dochód, wydatki, salda startowe', '#/plan/finanse'],
+    ['🏠', 'Mieszkanie i kredyt', 'czynsz, dom, kredyt, dług rodzinny', '#/plan/dom'],
+    ['⚙️', 'Aplikacja', 'motyw', '#/plan/aplikacja'],
+    ['🩹', 'Korekty sald', 'wyrównanie gotówki, portfela i długu', '#/plan/korekty'],
+    ['💾', 'Kopia zapasowa', 'eksport, import, aktualizacja', '#/backup'],
+  ];
+  view().innerHTML = `<div class="card"><h2>Ustawienia</h2>
+    <div class="hub">${items.map(([ic, t, s, go]) =>
+      `<button type="button" class="hub-item" data-go="${go}">
+        <span class="hub-ic">${ic}</span>
+        <span class="hub-txt"><b>${esc(t)}</b><small>${esc(s)}</small></span>
+        <span class="hub-arr">›</span>
+      </button>`).join('')}</div>
+  </div>`;
+  $$('[data-go]').forEach(el => el.addEventListener('click', () => { location.hash = el.dataset.go; }));
+}
+
+function renderPlanSection(section) {
+  if (section === 'fire') renderPlanFire();
+  else if (section === 'finanse') renderPlanFinanse();
+  else if (section === 'dom') renderPlanDom();
+  else if (section === 'aplikacja') renderPlanAplikacja();
+  else if (section === 'korekty') renderPlanKorekty();
+  else location.hash = '#/plan';
+}
+
+// ── Profil i FIRE ──
+function renderPlanFire() {
+  const a = state.assumptions;
+  view().innerHTML = `${planBack}
   <div id="plan-error"></div>
-  <div class="card"><h2>Profil</h2>
+  <div class="card"><h2>Profil i FIRE 🎯</h2>
     ${field({ id: 'pl-birth', label: 'Data urodzenia', type: 'date', value: state.profile.birthDate })}
     ${field({ id: 'pl-fireage', label: 'Docelowy wiek FIRE', value: moneyVal(a.targetFireAge), mode: 'numeric' })}
-  </div>
-  <div class="card"><h2>Założenia</h2>
+    <h3>Założenia</h3>
     ${field({ id: 'pl-wr', label: 'Stopa wypłat (WR)', suffix: '%', value: pctVal(a.withdrawalRate), tipText: 'Wskaźnik bezpieczeństwa: ile procent portfela wypłacasz rocznie po FIRE. Niżej = bezpieczniej wobec ryzyka sekwencji złych lat na rynku.' })}
     ${field({ id: 'pl-return', label: 'Realny zwrot z inwestycji', suffix: '%/rok', value: pctVal(a.realReturnAnnual), tipText: 'Zwrot ponad inflację. Wszystko w aplikacji liczone jest w dzisiejszych złotówkach.' })}
     ${field({ id: 'pl-infl', label: 'Inflacja', suffix: '%/rok', value: pctVal(a.inflationAnnual), tipText: 'Służy wyłącznie do przeliczania kredytu (nominalnego kontraktu) na dzisiejsze złotówki.' })}
@@ -1135,7 +1298,45 @@ function renderPlan() {
     ${field({ id: 'pl-ginc', label: 'Realny wzrost dochodów', suffix: '%/rok', value: pctVal(a.incomeGrowthReal), tipText: '3% realnie rocznie to ambitne podwyżki. Ustaw 0 dla ostrożnej prognozy.' })}
     ${field({ id: 'pl-cashret', label: 'Realny zwrot z gotówki', suffix: '%/rok', value: pctVal(a.cashReturnReal), tipText: 'Lokaty ≈ inflacja, stąd domyślnie 0% realnie.' })}
   </div>
-  <div class="card"><h2>Finanse</h2>
+  <button id="pl-save" class="primary wide">Zapisz</button>
+  ${planBack}`;
+
+  $('#pl-save').addEventListener('click', () => {
+    $('#plan-error').innerHTML = '';
+    const birth = $('#pl-birth').value;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(birth)) return planFail('Podaj datę urodzenia.');
+    const specs = [
+      ['fireage', () => parseMoney('pl-fireage')],
+      ['wr', () => parsePct('pl-wr', { min: 0.001, max: 0.2 })],
+      ['ret', () => parsePct('pl-return')],
+      ['infl', () => parsePct('pl-infl')],
+      ['gexp', () => parsePct('pl-gexp')],
+      ['ginc', () => parsePct('pl-ginc')],
+      ['cashret', () => parsePct('pl-cashret')],
+    ];
+    const vals = {};
+    for (const [k, get] of specs) { const r = get(); if (r.error) return planFail(`Popraw pola formularza: ${r.error}`); vals[k] = r.value; }
+    const age = E.ageAt(birth, E.todayYm()).years;
+    if (vals.fireage <= age) return planFail(`Docelowy wiek FIRE musi być większy niż obecny wiek (${age}).`);
+    state.profile.birthDate = birth;
+    Object.assign(state.assumptions, {
+      targetFireAge: vals.fireage, withdrawalRate: vals.wr, realReturnAnnual: vals.ret,
+      inflationAnnual: vals.infl, expenseGrowthReal: vals.gexp, incomeGrowthReal: vals.ginc,
+      cashReturnReal: vals.cashret,
+    });
+    try { E.recomputeDerived(state); } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
+    persist();
+    toast('Zapisano profil i założenia.');
+    location.hash = '#/plan';
+  });
+}
+
+// ── Finanse i start planu ──
+function renderPlanFinanse() {
+  const a = state.assumptions;
+  view().innerHTML = `${planBack}
+  <div id="plan-error"></div>
+  <div class="card"><h2>Finanse 💰</h2>
     ${field({ id: 'pl-income', label: 'Miesięczny dochód netto', suffix: 'zł', value: moneyVal(a.monthlyIncome) })}
     ${field({ id: 'pl-living', label: 'Miesięczne koszty życia', suffix: 'zł', value: moneyVal(a.monthlyLivingExpenses), tipText: 'Bez kosztów mieszkania — czynsz i rata liczone osobno.' })}
   </div>
@@ -1145,7 +1346,56 @@ function renderPlan() {
     ${field({ id: 'pl-port-start', label: 'Portfel na starcie', suffix: 'zł', value: moneyVal(a.portfolioStart) })}
     <p class="muted small">Salda startowe to stan z początku miesiąca startu. Po cofnięciu startu ustaw je na stan z nowego miesiąca — inaczej uzupełniane wpisy policzą się podwójnie.</p>
   </div>
-  <div class="card"><h2>Mieszkanie i dom</h2>
+  <button id="pl-save" class="primary wide">Zapisz</button>
+  <p class="muted small center">Zmiana dochodu lub wydatków przesuwa start krzywych wzrostu na bieżący miesiąc. Historia pozostaje bez zmian.</p>
+  ${planBack}`;
+
+  $('#pl-save').addEventListener('click', () => {
+    $('#plan-error').innerHTML = '';
+    const income = parseMoney('pl-income'); if (income.error) return planFail(`Popraw pola formularza: ${income.error}`);
+    const living = parseMoney('pl-living'); if (living.error) return planFail(`Popraw pola formularza: ${living.error}`);
+    const cashStart = parseMoney('pl-cash-start'); if (cashStart.error) return planFail(`Popraw pola formularza: ${cashStart.error}`);
+    const portStart = parseMoney('pl-port-start'); if (portStart.error) return planFail(`Popraw pola formularza: ${portStart.error}`);
+    const anchorNew = $('#pl-anchor').value;
+    if (!E.isValidYm(anchorNew)) return planFail('Podaj miesiąc startu planu.');
+    if (E.ymToIdx(anchorNew) > E.ymToIdx(E.todayYm())) return planFail('Start planu nie może być w przyszłości.');
+    const anchorChanged = anchorNew !== state.anchorMonth;
+    const anchorBackward = anchorChanged && E.ymToIdx(anchorNew) < E.ymToIdx(state.anchorMonth);
+    const reanchorNeeded = income.value !== a.monthlyIncome || living.value !== a.monthlyLivingExpenses;
+
+    Object.assign(state.assumptions, {
+      monthlyIncome: income.value, monthlyLivingExpenses: living.value,
+      cashStart: cashStart.value, portfolioStart: portStart.value,
+    });
+    try {
+      if (anchorChanged) {
+        // Jawna zmiana startu wygrywa z automatycznym re-kotwiczeniem.
+        E.reanchor(state, anchorNew);
+        toast(anchorBackward
+          ? `Zapisano. Plan startuje od: ${Fmt.formatMonthName(anchorNew)} — wcześniejsze miesiące uzupełnisz w check-inie.`
+          : `Zapisano. Start planu przesunięty na ${Fmt.formatMonthName(anchorNew)} — salda startowe przeliczone.`);
+      } else if (reanchorNeeded && state.anchorMonth !== E.todayYm()) {
+        E.reanchor(state, E.todayYm());
+        toast('Zapisano. Krzywe wzrostu wystartowały od nowa od bieżącego miesiąca — historia bez zmian.');
+      } else {
+        E.recomputeDerived(state);
+        toast('Zapisano finanse, wszystko przeliczone.');
+      }
+    } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
+    persist();
+    location.hash = '#/plan';
+  });
+}
+
+// ── Mieszkanie i kredyt ──
+function renderPlanDom() {
+  const h = state.housing;
+  const hp = h.housePlan;
+  const fl = hp.familyLoan || { enabled: false, startMonth: null, endMonth: null, principal: 0, rateNominal: 0, paymentOverrideMonthly: null };
+
+  view().innerHTML = `${planBack}
+  <div id="plan-error"></div>
+  <div class="card"><h2>Mieszkanie i dom 🏠</h2>
     ${field({ id: 'pl-rent', label: 'Miesięczny czynsz najmu', suffix: 'zł', value: moneyVal(h.currentRentMonthly), tipText: 'Czynsz rośnie z inflacją = realnie stały. Znika w miesiącu wprowadzki.' })}
     <label class="field"><span class="lbl">
       <input type="checkbox" id="pl-house" ${hp.enabled ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
@@ -1179,42 +1429,14 @@ function renderPlan() {
       </div>
     </div>
   </div>
-  <div class="card"><h2>Aplikacja</h2>
-    <label class="field"><span class="lbl">Motyw</span>
-      <select id="pl-theme">
-        <option value="auto" ${state.ui.theme === 'auto' ? 'selected' : ''}>systemowy</option>
-        <option value="light" ${state.ui.theme === 'light' ? 'selected' : ''}>jasny</option>
-        <option value="dark" ${state.ui.theme === 'dark' ? 'selected' : ''}>ciemny</option>
-      </select>
-    </label>
-  </div>
-  <button id="pl-save" class="primary wide">Zapisz plan</button>
-  <p class="muted small center">Zmiana dochodu, wydatków lub czynszu przesuwa start krzywych wzrostu na bieżący miesiąc. Historia pozostaje bez zmian.</p>
-
-  <details class="section"><summary>Skoryguj salda</summary>
-    <p class="muted small">Korekta „przypina się” do ostatniego pełnego miesiąca (${esc(Fmt.formatMonthName(lastOk))}). Puste pole = bez korekty.</p>
-    ${hasEntryLastOk
-      ? `${field({ id: 'cor-cash', label: 'Rzeczywista gotówka', suffix: 'zł' })}
-         ${field({ id: 'cor-port', label: 'Rzeczywisty portfel', suffix: 'zł' })}`
-      : `<p class="banner warn small">Korekta gotówki i portfela wymaga wpisu za ${esc(Fmt.formatMonthName(lastOk))} — zrób najpierw check-in (sekcja „Popraw salda”).</p>`}
-    ${state.derived.debt.started && state.derived.debt.balanceNominal > 0
-      ? field({ id: 'cor-debt', label: 'Rzeczywiste saldo kredytu (nominalne)', suffix: 'zł' })
-      : ''}
-    ${state.derived.family && state.derived.family.started && state.derived.family.balanceNominal > 0
-      ? field({ id: 'cor-fl-debt', label: 'Rzeczywiste saldo długu rodzinnego (nominalne)', suffix: 'zł' })
-      : ''}
-    <button id="cor-save" class="wide">Zapisz korekty</button>
-  </details>`;
+  <button id="pl-save" class="primary wide">Zapisz</button>
+  <p class="muted small center">Zmiana czynszu przesuwa start krzywych wzrostu na bieżący miesiąc. Historia pozostaje bez zmian.</p>
+  ${planBack}`;
 
   const houseCb = $('#pl-house');
-  houseCb.addEventListener('change', () => {
-    $('#pl-house-fields').hidden = !houseCb.checked;
-  });
-
+  houseCb.addEventListener('change', () => { $('#pl-house-fields').hidden = !houseCb.checked; });
   const flCb = $('#pl-fl');
-  if (flCb) flCb.addEventListener('change', () => {
-    $('#pl-fl-fields').hidden = !flCb.checked;
-  });
+  if (flCb) flCb.addEventListener('change', () => { $('#pl-fl-fields').hidden = !flCb.checked; });
 
   const annuity = () => {
     const P = Fmt.parsePLN($('#pl-mtg-principal').value);
@@ -1253,62 +1475,35 @@ function renderPlan() {
   }
 
   $('#pl-save').addEventListener('click', () => {
-    const errBox = $('#plan-error');
-    errBox.innerHTML = '';
-    const fail = msg => { errBox.innerHTML = `<div class="field-error">${esc(msg)}</div>`; window.scrollTo(0, 0); };
-
-    const birth = $('#pl-birth').value;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(birth)) return fail('Podaj datę urodzenia.');
-    const vals = {};
-    const specs = [
-      ['pl-fireage', 'fireage', () => parseMoney('pl-fireage')],
-      ['pl-wr', 'wr', () => parsePct('pl-wr', { min: 0.001, max: 0.2 })],
-      ['pl-return', 'ret', () => parsePct('pl-return')],
-      ['pl-infl', 'infl', () => parsePct('pl-infl')],
-      ['pl-gexp', 'gexp', () => parsePct('pl-gexp')],
-      ['pl-ginc', 'ginc', () => parsePct('pl-ginc')],
-      ['pl-cashret', 'cashret', () => parsePct('pl-cashret')],
-      ['pl-income', 'income', () => parseMoney('pl-income')],
-      ['pl-living', 'living', () => parseMoney('pl-living')],
-      ['pl-rent', 'rent', () => parseMoney('pl-rent')],
-      ['pl-cash-start', 'cashStart', () => parseMoney('pl-cash-start')],
-      ['pl-port-start', 'portStart', () => parseMoney('pl-port-start')],
-    ];
-    for (const [, key, get] of specs) {
-      const r = get();
-      if (r.error) return fail(`Popraw pola formularza: ${r.error}`);
-      vals[key] = r.value;
-    }
-    const age = E.ageAt(birth, E.todayYm()).years;
-    if (vals.fireage <= age) return fail(`Docelowy wiek FIRE musi być większy niż obecny wiek (${age}).`);
-
+    $('#plan-error').innerHTML = '';
+    const rent = parseMoney('pl-rent'); if (rent.error) return planFail(`Popraw pola formularza: ${rent.error}`);
     const houseOn = houseCb.checked;
     let house = null;
     if (houseOn) {
       const start = $('#pl-mtg-start').value;
       const moveIn = $('#pl-movein').value;
-      if (!E.isValidYm(start)) return fail('Podaj miesiąc startu kredytu.');
-      if (!E.isValidYm(moveIn)) return fail('Podaj miesiąc wprowadzki.');
-      const P = parseMoney('pl-mtg-principal'); if (P.error || P.value <= 0) return fail('Podaj kwotę kredytu.');
-      const r = parsePct('pl-mtg-rate', { min: 0, max: 0.3 }); if (r.error) return fail('Popraw oprocentowanie.');
-      const T = parseMoney('pl-mtg-term'); if (T.error || T.value <= 0 || T.value > 40) return fail('Okres kredytu: 1–40 lat.');
-      const ov = parseMoney('pl-mtg-override', { required: false }); if (ov.error) return fail('Popraw ratę ręczną.');
+      if (!E.isValidYm(start)) return planFail('Podaj miesiąc startu kredytu.');
+      if (!E.isValidYm(moveIn)) return planFail('Podaj miesiąc wprowadzki.');
+      const P = parseMoney('pl-mtg-principal'); if (P.error || P.value <= 0) return planFail('Podaj kwotę kredytu.');
+      const r = parsePct('pl-mtg-rate', { min: 0, max: 0.3 }); if (r.error) return planFail('Popraw oprocentowanie.');
+      const T = parseMoney('pl-mtg-term'); if (T.error || T.value <= 0 || T.value > 40) return planFail('Okres kredytu: 1–40 lat.');
+      const ov = parseMoney('pl-mtg-override', { required: false }); if (ov.error) return planFail('Popraw ratę ręczną.');
       const hsM = $('#pl-hs-month').value;
-      if (hsM && !E.isValidYm(hsM)) return fail('Nieprawidłowy miesiąc wydatku na dom.');
-      const hsA = parseMoney('pl-hs-amount', { required: false }); if (hsA.error) return fail('Popraw kwotę wydatku na dom.');
-      const bizI = parseMoney('pl-biz-income', { required: false }); if (bizI.error) return fail('Popraw dodatkowy dochód.');
+      if (hsM && !E.isValidYm(hsM)) return planFail('Nieprawidłowy miesiąc wydatku na dom.');
+      const hsA = parseMoney('pl-hs-amount', { required: false }); if (hsA.error) return planFail('Popraw kwotę wydatku na dom.');
+      const bizI = parseMoney('pl-biz-income', { required: false }); if (bizI.error) return planFail('Popraw dodatkowy dochód.');
       const bizS = $('#pl-biz-start').value;
-      if ((bizI.value || 0) > 0 && !E.isValidYm(bizS)) return fail('Podaj, od kiedy dodatkowy dochód.');
+      if ((bizI.value || 0) > 0 && !E.isValidYm(bizS)) return planFail('Podaj, od kiedy dodatkowy dochód.');
       let familyLoan = { enabled: false, startMonth: null, endMonth: null, principal: 0, rateNominal: 0, paymentOverrideMonthly: null };
       if ($('#pl-fl') && $('#pl-fl').checked) {
         const flStart = $('#pl-fl-start').value;
         const flEnd = $('#pl-fl-end').value;
-        if (!E.isValidYm(flStart)) return fail('Podaj start spłaty długu rodzinnego.');
-        if (!E.isValidYm(flEnd)) return fail('Podaj koniec spłaty długu rodzinnego.');
-        if (E.ymToIdx(flEnd) < E.ymToIdx(flStart)) return fail('Koniec spłaty długu rodzinnego nie może być przed startem.');
-        const flP = parseMoney('pl-fl-principal'); if (flP.error || flP.value <= 0) return fail('Podaj kwotę długu rodzinnego.');
-        const flR = parsePct('pl-fl-rate', { min: 0, max: 0.3 }); if (flR.error) return fail('Popraw oprocentowanie długu rodzinnego (0–30%).');
-        const flOv = parseMoney('pl-fl-override', { required: false }); if (flOv.error) return fail('Popraw ratę ręczną długu rodzinnego.');
+        if (!E.isValidYm(flStart)) return planFail('Podaj start spłaty długu rodzinnego.');
+        if (!E.isValidYm(flEnd)) return planFail('Podaj koniec spłaty długu rodzinnego.');
+        if (E.ymToIdx(flEnd) < E.ymToIdx(flStart)) return planFail('Koniec spłaty długu rodzinnego nie może być przed startem.');
+        const flP = parseMoney('pl-fl-principal'); if (flP.error || flP.value <= 0) return planFail('Podaj kwotę długu rodzinnego.');
+        const flR = parsePct('pl-fl-rate', { min: 0, max: 0.3 }); if (flR.error) return planFail('Popraw oprocentowanie długu rodzinnego (0–30%).');
+        const flOv = parseMoney('pl-fl-override', { required: false }); if (flOv.error) return planFail('Popraw ratę ręczną długu rodzinnego.');
         familyLoan = {
           enabled: true, startMonth: flStart, endMonth: flEnd,
           principal: flP.value, rateNominal: flR.value, paymentOverrideMonthly: flOv.value,
@@ -1325,54 +1520,72 @@ function renderPlan() {
       };
     }
 
-    const anchorNew = $('#pl-anchor').value;
-    if (!E.isValidYm(anchorNew)) return fail('Podaj miesiąc startu planu.');
-    if (E.ymToIdx(anchorNew) > E.ymToIdx(E.todayYm())) return fail('Start planu nie może być w przyszłości.');
-    const anchorChanged = anchorNew !== state.anchorMonth;
-    const anchorBackward = anchorChanged && E.ymToIdx(anchorNew) < E.ymToIdx(state.anchorMonth);
-
-    const reanchorNeeded = vals.income !== a.monthlyIncome
-      || vals.living !== a.monthlyLivingExpenses
-      || vals.rent !== h.currentRentMonthly;
-
-    state.profile.birthDate = birth;
-    Object.assign(state.assumptions, {
-      targetFireAge: vals.fireage, withdrawalRate: vals.wr, realReturnAnnual: vals.ret,
-      inflationAnnual: vals.infl, expenseGrowthReal: vals.gexp, incomeGrowthReal: vals.ginc,
-      cashReturnReal: vals.cashret, monthlyIncome: vals.income, monthlyLivingExpenses: vals.living,
-      cashStart: vals.cashStart, portfolioStart: vals.portStart,
-    });
-    state.housing.currentRentMonthly = vals.rent;
+    const rentChanged = rent.value !== h.currentRentMonthly;
+    state.housing.currentRentMonthly = rent.value;
     if (houseOn) state.housing.housePlan = house;
     else state.housing.housePlan.enabled = false;
-    state.ui.theme = $('#pl-theme').value;
-    applyTheme();
 
     try {
-      if (anchorChanged) {
-        // Jawna zmiana startu wygrywa z automatycznym re-kotwiczeniem:
-        // wstecz — otwiera wcześniejsze miesiące (salda startowe wg pól powyżej),
-        // w przód — salda przenoszone przez reanchor jak dotychczas.
-        E.reanchor(state, anchorNew);
-        toast(anchorBackward
-          ? `Zapisano. Plan startuje od: ${Fmt.formatMonthName(anchorNew)} — wcześniejsze miesiące uzupełnisz w check-inie.`
-          : `Zapisano. Start planu przesunięty na ${Fmt.formatMonthName(anchorNew)} — salda startowe przeliczone.`);
-      } else if (reanchorNeeded && state.anchorMonth !== E.todayYm()) {
+      if (rentChanged && state.anchorMonth !== E.todayYm()) {
         E.reanchor(state, E.todayYm());
         toast('Zapisano. Krzywe wzrostu wystartowały od nowa od bieżącego miesiąca — historia bez zmian.');
       } else {
         E.recomputeDerived(state);
-        toast('Plan zapisany, wszystko przeliczone.');
+        toast('Zapisano mieszkanie i kredyt, wszystko przeliczone.');
       }
-    } catch (err) {
-      return fail('Błąd przeliczania: ' + err.message);
-    }
+    } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
     persist();
-    location.hash = '#/';
+    location.hash = '#/plan';
   });
+}
 
-  const corSave = $('#cor-save');
-  if (corSave) corSave.addEventListener('click', () => {
+// ── Aplikacja ──
+function renderPlanAplikacja() {
+  view().innerHTML = `${planBack}
+  <div id="plan-error"></div>
+  <div class="card"><h2>Aplikacja ⚙️</h2>
+    <label class="field"><span class="lbl">Motyw</span>
+      <select id="pl-theme">
+        <option value="auto" ${state.ui.theme === 'auto' ? 'selected' : ''}>systemowy</option>
+        <option value="light" ${state.ui.theme === 'light' ? 'selected' : ''}>jasny</option>
+        <option value="dark" ${state.ui.theme === 'dark' ? 'selected' : ''}>ciemny</option>
+      </select>
+    </label>
+  </div>
+  <button id="pl-save" class="primary wide">Zapisz</button>
+  ${planBack}`;
+  $('#pl-save').addEventListener('click', () => {
+    state.ui.theme = $('#pl-theme').value;
+    applyTheme();
+    persist();
+    toast('Zapisano ustawienia aplikacji.');
+    location.hash = '#/plan';
+  });
+}
+
+// ── Korekty sald (zaawansowane) ──
+function renderPlanKorekty() {
+  const lastOk = E.lastCompleteMonth();
+  const hasEntryLastOk = !!state.entries.find(e => e.month === lastOk);
+  view().innerHTML = `${planBack}
+  <div id="plan-error"></div>
+  <div class="card"><h2>Korekty sald 🩹</h2>
+    <p class="muted small">Zaawansowane. Korekta „przypina się” do ostatniego pełnego miesiąca (${esc(Fmt.formatMonthName(lastOk))}). Puste pole = bez korekty.</p>
+    ${hasEntryLastOk
+      ? `${field({ id: 'cor-cash', label: 'Rzeczywista gotówka', suffix: 'zł' })}
+         ${field({ id: 'cor-port', label: 'Rzeczywisty portfel', suffix: 'zł' })}`
+      : `<p class="banner warn small">Korekta gotówki i portfela wymaga wpisu za ${esc(Fmt.formatMonthName(lastOk))} — zrób najpierw check-in (sekcja „Popraw salda”).</p>`}
+    ${state.derived.debt.started && state.derived.debt.balanceNominal > 0
+      ? field({ id: 'cor-debt', label: 'Rzeczywiste saldo kredytu (nominalne)', suffix: 'zł' })
+      : ''}
+    ${state.derived.family && state.derived.family.started && state.derived.family.balanceNominal > 0
+      ? field({ id: 'cor-fl-debt', label: 'Rzeczywiste saldo długu rodzinnego (nominalne)', suffix: 'zł' })
+      : ''}
+    <button id="cor-save" class="primary wide">Zapisz korekty</button>
+  </div>
+  ${planBack}`;
+
+  $('#cor-save').addEventListener('click', () => {
     const errBox = $('#plan-error');
     errBox.innerHTML = '';
     let changed = false;
@@ -1409,7 +1622,7 @@ function renderPlan() {
     E.recomputeDerived(state);
     persist();
     toast('Korekty zapisane, salda przeliczone.');
-    location.hash = '#/';
+    location.hash = '#/plan';
   });
 }
 
@@ -1419,6 +1632,7 @@ function renderBackup() {
   const last = state.ui.lastExportAt;
   const nudge = !last || (Date.now() - Date.parse(last)) > 61 * 24 * 3600 * 1000;
   view().innerHTML = `
+  <a class="btn ghost wide" href="#/plan">← Ustawienia</a>
   <div class="card"><h2>Kopia zapasowa</h2>
     <p class="muted small">Dane istnieją <b>tylko na tym urządzeniu</b>. Wyczyszczenie danych przeglądarki
     lub utrata telefonu = utrata historii. Regularny eksport to Twoje ubezpieczenie.</p>

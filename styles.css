@@ -389,6 +389,57 @@ table.data tr.depleted td { color: var(--danger); }
 .seg { display: flex; gap: .25rem; background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: .2rem; margin: .5rem 0; }
 .seg button { flex: 1; min-height: 40px; border: none; background: transparent; border-radius: 8px; color: var(--muted); font-size: .85rem; }
 .seg button.on { background: var(--card); color: var(--text); font-weight: 600; }
+/* Segment przewijany poziomo (Symulacja ma 5 zakładek) */
+.seg.seg-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.seg.seg-scroll button { flex: 0 0 auto; min-width: 4.4rem; padding: 0 .5rem; }
+
+/* Suwaki (input[type=range]) */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  margin: .7rem 0;
+  border-radius: 999px;
+  background: var(--line);
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--card);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--card);
+  cursor: pointer;
+}
+input[type="range"]:focus { outline: none; }
+input[type="range"]:focus::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Menu-hub Ustawień (#/plan) */
+.hub { display: flex; flex-direction: column; gap: .5rem; }
+.hub-item {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  width: 100%;
+  text-align: left;
+  padding: .7rem .85rem;
+  min-height: 60px;
+}
+.hub-ic { font-size: 1.4rem; flex: 0 0 auto; }
+.hub-txt { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: .1rem; }
+.hub-txt b { font-size: .95rem; }
+.hub-txt small { color: var(--muted); font-size: .76rem; font-weight: 400; }
+.hub-arr { color: var(--muted); font-size: 1.4rem; flex: 0 0 auto; }
 
 .formula {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
