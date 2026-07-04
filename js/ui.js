@@ -6,7 +6,7 @@ import * as An from './analysis.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.3.0';
+export const APP_VERSION = '1.4.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -560,14 +560,22 @@ function renderDashboard() {
 // oszczędzania na górze pulpitu, nad kartą fazy (fundusz / spłata).
 function fireJourneyHero(proj) {
   const d = state.derived;
-  const jp = E.fireJourneyProgress(state, d.plan, proj, d.uptoYm);
   const targets = E.fireTargetsToday(state, E.todayYm());
+  // Postęp „drogi" ma sens tylko, gdy prognoza sięga FIRE — bez tego mianownik
+  // się degeneruje (brak przyszłych wpłat → 100% mimo celu poza horyzontem).
+  // Wtedy wracamy do klasycznego FI% (portfel ÷ cel).
+  if (!proj.reached) {
+    return `<div class="card hero">
+      ${ringSVG(d.balances.portfolio / targets.primary)}
+      <p class="warn-text small" style="margin:.5rem 0 0">Przy obecnym planie cel FIRE jest poza 60-letnim horyzontem — zajrzyj do założeń.</p>
+      <p class="muted small">Liczba FIRE dziś: ${Fmt.formatPLN(targets.primary)}.</p>
+    </div>`;
+  }
+  const jp = E.fireJourneyProgress(state, d.plan, proj, d.uptoYm);
   return `<div class="card hero">
     ${ringSVG(jp.pct, 'drogi do FIRE')}
-    ${proj.reached
-      ? `<p style="margin:.5rem 0 0">Prognoza FIRE: <b class="${proj.onTrack ? 'good' : 'warn-text'}">${Fmt.formatMonthName(proj.fireYm)}</b>
-          <span class="muted">(wiek ${Fmt.formatAgeYM(proj.fireAge)})</span></p>`
-      : '<p class="warn-text small" style="margin:.5rem 0 0">Przy obecnym planie cel FIRE jest poza 60-letnim horyzontem — zajrzyj do założeń.</p>'}
+    <p style="margin:.5rem 0 0">Prognoza FIRE: <b class="${proj.onTrack ? 'good' : 'warn-text'}">${Fmt.formatMonthName(proj.fireYm)}</b>
+      <span class="muted">(wiek ${Fmt.formatAgeYM(proj.fireAge)})</span></p>
     <p class="muted small">Każda złotówka odłożona na dom, dług i inwestycje przybliża Cię do celu (liczba FIRE dziś: ${Fmt.formatPLN(targets.primary)}). ${tip('Postęp całej drogi oszczędzania: suma tego, co już odłożone, do sumy potrzebnej do FIRE (dom + dług + inwestycje), ważona wzrostem inwestycji. W realnych zł, więc inflacja uwzględniona. Pasek tylko rośnie.')}</p>
   </div>`;
 }

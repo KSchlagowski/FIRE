@@ -2,7 +2,7 @@
 // Checklist wydania: 1) podbij CACHE tutaj i wersję w index.html/ui.js,
 // 2) każdy NOWY plik aplikacji musi trafić do PRECACHE.
 
-const CACHE = 'fire-v1.3.0';
+const CACHE = 'fire-v1.4.0';
 
 const PRECACHE = [
   './',
@@ -24,7 +24,9 @@ const PRECACHE = [
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE)
-      .then(cache => cache.addAll(PRECACHE))
+      // cache: 'reload' — omija HTTP cache przeglądarki; bez tego nowa wersja SW
+      // może zaprecachować STARE pliki (GitHub Pages serwuje assety z max-age=600).
+      .then(cache => cache.addAll(PRECACHE.map(u => new Request(u, { cache: 'reload' }))))
       .then(() => self.skipWaiting())
   );
 });

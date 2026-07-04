@@ -847,7 +847,8 @@ test('F18e: ujemne kwoty, monotoniczność; r=0 → +1000 od 2027-01 = +6000 w 2
 
 test('F19a: droga do FIRE przy r=0 to udział odłożonych miesięcy', () => {
   const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000, realReturnAnnual: 0 } });
-  for (let i = 0; i < 6; i++) st.entries.push(entry(E.addMonths('2026-01', i), 10000, 6000)); // 2026-01..06, net 4000
+  // Snapshot = plan (4000) → delta 0; przyszłość = czysty plan, ułamek dokładny.
+  for (let i = 0; i < 6; i++) st.entries.push(entry(E.addMonths('2026-01', i), 10000, 6000, { plannedSavingsSnapshot: 4000 }));
   E.recomputeDerived(st, NOW);
   const d = st.derived;
   const jp = E.fireJourneyProgress(st, d.plan, d.projection, d.uptoYm);
@@ -870,6 +871,17 @@ test('F19b: pasek tylko rośnie — miesiąc na minusie liczony jako 0', () => {
   assertClose(minus.savedValue, 5 * 4000, 1e-9, 'minus nie odejmuje — max(0, ·)');
   assertTrue(plus.savedValue > minus.savedValue, 'dobry miesiąc podnosi pasek');
   assertTrue(minus.pct >= 0 && minus.pct <= 1, 'zakres [0,1]');
+});
+
+test('F19d: cel poza horyzontem → mianownik zdegenerowany, reached=false (UI wraca do FI%)', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { monthlyIncome: 1000, monthlyLivingExpenses: 6000, portfolioStart: 10000, realReturnAnnual: 0 } });
+  st.entries.push(entry('2026-01', 10000, 6000)); // jeden dobry miesiąc mimo ujemnego planu
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  assertEq(d.projection.reached, false);
+  const jp = E.fireJourneyProgress(st, d.plan, d.projection, d.uptoYm);
+  assertEq(jp.reached, false, 'flaga dla UI');
+  assertClose(jp.pct, 1, 1e-9, 'bez dodatnich przyszłych wpłat saved = total');
 });
 
 test('F19c: wpłaty w fazie domu też liczą się do FIRE', () => {
