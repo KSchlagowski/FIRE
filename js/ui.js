@@ -8,7 +8,7 @@ import * as Mot from './motivation.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.12.0';
+export const APP_VERSION = '1.13.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1300,6 +1300,10 @@ let symMore = null;       // Suwak „oszczędzaj więcej" (zł/mies.)
 let symReturn = null;     // Suwak „wpływ zwrotu" (realny zwrot roczny, ułamek)
 let symOverpay = 500;     // Suwak „nadpłata kredytu" (zł/mies.)
 let symOverpayLoan = 'mortgage'; // Nadpłata: który kredyt (mortgage/family)
+let symLoanP = null;   // Kalkulator kredytu: kwota (null = użyj seeda)
+let symLoanR = null;   // Kalkulator kredytu: oprocentowanie roczne % (null = seed)
+let symLoanT = null;   // Kalkulator kredytu: okres w latach (null = seed)
+let symLoanOp = 0;     // Kalkulator kredytu: nadpłata zł/mies.
 
 const SYM_CAP = 100000;   // górny limit dopłaty w „Cel: wiek FIRE"
 
@@ -1393,6 +1397,48 @@ function renderSymulacja() {
     });
   };
 
+  // ── Kalkulator kredytu (hipotetyczny): seed z planowanego kredytu hip. ──
+  const mtg = hp && hp.mortgage;
+  const seedP = mtg && mtg.principal > 0 ? mtg.principal : 500000;
+  const seedR = mtg && mtg.principal > 0 ? Math.round(mtg.rateNominal * 1000) / 10 : 7; // % z ułamka
+  const seedT = mtg && mtg.principal > 0 ? mtg.termYears : 25;
+  const loanP = symLoanP != null ? symLoanP : String(seedP);
+  const loanR = symLoanR != null ? symLoanR : String(seedR);
+  const loanT = symLoanT != null ? symLoanT : String(seedT);
+
+  const loanCalcResult = () => {
+    // Odczyt na żywo (nie z const loanP/… zamrożonych przy renderze), by edycja
+    // pól tekstowych odświeżała wynik bez pełnego re-renderu. Seed jak wyżej.
+    const lp = symLoanP != null ? symLoanP : String(seedP);
+    const lr = symLoanR != null ? symLoanR : String(seedR);
+    const lt = symLoanT != null ? symLoanT : String(seedT);
+    const P = Fmt.parsePLN(lp), R = Fmt.parsePLN(lr), T = Fmt.parsePLN(lt);
+    if (P == null || R == null || T == null) return '<div class="field-error">Uzupełnij poprawnie wszystkie pola.</div>';
+    if (!(P > 0)) return '<p class="muted small">Podaj dodatnią kwotę kredytu.</p>';
+    if (R < 0) return '<div class="field-error">Oprocentowanie nie może być ujemne.</div>';
+    if (!(T > 0)) return '<p class="muted small">Podaj okres kredytu w latach.</p>';
+    const j = E.monthlyRate(R / 100);
+    const N = Math.round(T * 12);
+    if (!(N > 0)) return '<p class="muted small">Podaj okres kredytu w latach.</p>'; // annuityPayment rzuca dla N<=0
+    const payment = E.annuityPayment(P, j, N);
+    const extra = symLoanOp == null ? 0 : Number(symLoanOp);
+    const base = E.remainingSchedule(P, j, payment);
+    const sim = extra > 0 ? E.remainingSchedule(P, j, payment, extra) : base;
+    const chartRows = extra > 0 ? E.remainingToPayComparison(P, base.rows, sim.rows) : [];
+    const chartHTML = chartRows.length
+      ? stackedBarSVG(chartRows, [
+        { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
+        { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
+        { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
+        { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
+      ])
+      : '';
+    return Sim.loanCalcResult({
+      payment, baseMonths: base.months, extra, simMonths: sim.months,
+      baseInterest: base.totalInterest, interestSaved: base.totalInterest - sim.totalInterest, chartHTML,
+    });
+  };
+
   const retMin = Math.round((a.realReturnAnnual - 0.03) * 1000) / 1000;
   const retMax = Math.round((a.realReturnAnnual + 0.03) * 1000) / 1000;
   const returnResult = () => {
@@ -1409,6 +1455,7 @@ function renderSymulacja() {
     ['latte', 'Małe wydatki'],
     ['wiecej', 'Więcej'],
     ['zwrot', 'Zwrot'],
+    ['kredyt', 'Kredyt'],
     ...(showNadplata ? [['nadplata', 'Nadpłata']] : []),
   ];
   const seg = `<div class="seg seg-scroll" role="tablist">${tabs.map(([k, l]) =>
@@ -1423,6 +1470,8 @@ function renderSymulacja() {
     body = Sim.latteCard({ amountValue: symLatte, resultHTML: latteResult() });
   } else if (symTab === 'wiecej') {
     body = Sim.moreSavingsCard({ value: symMore, max: moreMax, resultHTML: moreResult() });
+  } else if (symTab === 'kredyt') {
+    body = Sim.loanCalcCard({ principal: loanP, rate: loanR, term: loanT, amount: symLoanOp, maxAmount: moreMax, resultHTML: loanCalcResult() });
   } else if (symTab === 'nadplata') {
     body = Sim.overpaymentCard({ loans: opLoans, activeLoan: symOverpayLoan, amount: symOverpay, maxAmount: moreMax, resultHTML: overpayResult() });
   } else {
@@ -1431,7 +1480,7 @@ function renderSymulacja() {
 
   // Zakładki dokładające kwotę do planu — przypomnij, że liczy się sama nadwyżka.
   // Nie dotyczy „Zwrotu" ani „Nadpłaty" (czysty rachunek kredytowy).
-  const note = symTab === 'zwrot' || symTab === 'nadplata' ? '' : Sim.nadwyzkaNote();
+  const note = symTab === 'zwrot' || symTab === 'nadplata' || symTab === 'kredyt' ? '' : Sim.nadwyzkaNote();
 
   view().innerHTML = seg + body + note;
 
@@ -1463,6 +1512,17 @@ function renderSymulacja() {
       symMore = moreEl.value;
       $('#sym-more-val').textContent = Fmt.formatPLN(Number(symMore));
       $('#sym-more-result').innerHTML = moreResult();
+    });
+  } else if (symTab === 'kredyt') {
+    const refresh = () => { const r = $('#sym-loan-result'); if (r) r.innerHTML = loanCalcResult(); };
+    const pEl = $('#sym-loan-principal'); if (pEl) pEl.addEventListener('input', () => { symLoanP = pEl.value; refresh(); });
+    const rEl = $('#sym-loan-rate'); if (rEl) rEl.addEventListener('input', () => { symLoanR = rEl.value; refresh(); });
+    const tEl = $('#sym-loan-term'); if (tEl) tEl.addEventListener('input', () => { symLoanT = tEl.value; refresh(); });
+    const opEl = $('#sym-loan-op');
+    if (opEl) opEl.addEventListener('input', () => {
+      symLoanOp = opEl.value;
+      $('#sym-loan-op-val').textContent = Fmt.formatPLN(Number(symLoanOp));
+      $('#sym-loan-result').innerHTML = loanCalcResult();
     });
   } else if (symTab === 'nadplata') {
     const opEl = $('#sym-overpay');
