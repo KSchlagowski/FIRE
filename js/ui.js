@@ -4,10 +4,11 @@ import * as E from './engine.js';
 import * as Fmt from './format.js';
 import * as An from './analysis.js';
 import * as Sim from './simulation.js';
-import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
+import * as Mot from './motivation.js';
+import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.10.0';
+export const APP_VERSION = '1.11.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -38,6 +39,28 @@ export function toast(msg, ms = 4000, onClick = null) {
   t.onclick = () => { t.hidden = true; if (onClick) onClick(); };
   clearTimeout(toastTimer);
   if (ms > 0) toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+}
+
+// ── Modal (jedyny wzorzec nakładki poza toastem) ────────────────────────
+
+let modalKeyHandler = null;
+function showModal(innerHTML) {
+  const m = document.getElementById('modal');
+  m.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true">${innerHTML}</div>`;
+  m.hidden = false;
+  m.onclick = e => { if (e.target === m || e.target.closest('[data-close-modal]')) closeModal(); };
+  modalKeyHandler = e => { if (e.key === 'Escape') closeModal(); };
+  document.addEventListener('keydown', modalKeyHandler);
+  const btn = m.querySelector('[data-close-modal]');
+  if (btn) btn.focus();
+}
+function closeModal() {
+  const m = document.getElementById('modal');
+  if (!m || m.hidden) return;
+  m.hidden = true;
+  m.innerHTML = '';
+  m.onclick = null;
+  if (modalKeyHandler) { document.removeEventListener('keydown', modalKeyHandler); modalKeyHandler = null; }
 }
 
 export function setDeferredPrompt(e) {
@@ -224,6 +247,7 @@ function applyTheme() {
 }
 
 function route() {
+  closeModal(); // nawigacja wstecz nie może zostawić martwej nakładki
   const hash = location.hash || '#/';
   const tabbar = document.getElementById('tabbar');
   if (!state) {
@@ -599,6 +623,13 @@ function goalSavingsHTML(rsg, { compact = false } = {}) {
   </div>`;
 }
 
+// Karta „Dzisiejsza decyzja" — stan przejściowy (wzorzec Symulacji). Efemeryczne:
+// nic nie zapisujemy, zmienne giną przy przeładowaniu — z założenia.
+let decMode = 'avoided';   // 'avoided' | 'spent'
+let decAmount = '';
+let decCategory = null;    // 'invest' | 'impulse' — w trybie 'spent' wymagany wybór
+let decSeed = Math.floor(Math.random() * 1e6);
+
 function renderDashboard() {
   const d = state.derived;
   const proj = d.projection;
@@ -717,7 +748,42 @@ function renderDashboard() {
     ? `<a class="btn primary wide" href="#/checkin">➕ Check-in — ${esc(Fmt.formatMonthName(lastOk))}</a>`
     : `<div class="banner info">Pierwszy pełny miesiąc zamknie się z końcem ${esc(Fmt.formatMonthGenitive(nowYm))} — wróć 1. dnia następnego miesiąca.</div>`;
 
+  // ── Karta „Dzisiejsza decyzja" (na dole, nigdy nad CTA check-inu) ──
+  const decisionResult = () => {
+    const raw = decAmount.trim();
+    if (raw === '') return '<p class="muted small">Podaj kwotę, aby zobaczyć, co to znaczy dla Twojego FIRE.</p>';
+    const amount = Fmt.parsePLN(raw);
+    if (amount == null || amount <= 0) return '<div class="field-error">Podaj dodatnią kwotę.</div>';
+    if (decMode === 'spent' && !decCategory) return '<p class="muted small">Wybierz kategorię wydatku.</p>';
+    const impact = E.oneOffImpact(state, amount);
+    if (decMode === 'avoided') {
+      return Mot.avoidedResult({ amount, impact, message: decisionMessage('avoided', decSeed) });
+    }
+    return Mot.spentResult({
+      amount, category: decCategory, impact,
+      message: decisionMessage(decCategory, decSeed),
+    });
+  };
+  html += Mot.decisionCard({ mode: decMode, amount: decAmount, category: decCategory, resultHTML: decisionResult() });
+
   view().innerHTML = html;
+
+  const decAmt = $('#dec-amount');
+  if (decAmt) decAmt.addEventListener('input', () => {
+    decAmount = decAmt.value;
+    const r = $('#dec-result');
+    if (r) r.innerHTML = decisionResult(); // tylko podmiana wyniku — fokus przeżywa
+  });
+  $$('[data-decmode]').forEach(el => el.addEventListener('click', () => {
+    decMode = el.dataset.decmode;
+    decSeed = Math.floor(Math.random() * 1e6); // nowa próba → inny komunikat
+    renderDashboard();
+  }));
+  $$('[data-deccat]').forEach(el => el.addEventListener('click', () => {
+    decCategory = el.dataset.deccat;
+    decSeed = Math.floor(Math.random() * 1e6);
+    renderDashboard();
+  }));
 
   const inst = $('#btn-install');
   if (inst) inst.addEventListener('click', async () => {
@@ -863,6 +929,10 @@ function renderCheckin(month) {
     }
     persist();
     renderCheckinResult(entry, { prevFireYm, wasFirst, prevEntry });
+    showModal(Mot.checkinModal({
+      verdict: entry.verdict,
+      message: checkinCelebration(entry.verdict, Math.floor(Math.random() * 1e6)),
+    }));
   });
 }
 

@@ -15,6 +15,7 @@
   --danger: #dc2626;
   --danger-soft: #fee2e2;
   --info-soft: #dbeafe;
+  --overlay: rgba(15, 23, 42, .5);
   --shadow: 0 1px 3px rgba(15, 23, 42, .08);
 }
 
@@ -34,6 +35,7 @@
     --danger: #ef4444;
     --danger-soft: #450a0a;
     --info-soft: #172554;
+    --overlay: rgba(0, 0, 0, .6);
     --shadow: 0 1px 3px rgba(0, 0, 0, .4);
   }
 }
@@ -42,14 +44,14 @@
   --bg: #f1f5f9; --card: #fff; --card2: #f8fafc; --text: #0f172a; --muted: #64748b;
   --line: #e2e8f0; --accent: #16a34a; --accent-soft: #dcfce7; --flame: #ea580c;
   --warn: #d97706; --warn-soft: #fef3c7; --danger: #dc2626; --danger-soft: #fee2e2;
-  --info-soft: #dbeafe; --shadow: 0 1px 3px rgba(15, 23, 42, .08);
+  --info-soft: #dbeafe; --overlay: rgba(15, 23, 42, .5); --shadow: 0 1px 3px rgba(15, 23, 42, .08);
 }
 
 [data-theme="dark"] {
   --bg: #0f172a; --card: #1e293b; --card2: #16213a; --text: #e2e8f0; --muted: #94a3b8;
   --line: #334155; --accent: #22c55e; --accent-soft: #14532d; --flame: #f97316;
   --warn: #f59e0b; --warn-soft: #451a03; --danger: #ef4444; --danger-soft: #450a0a;
-  --info-soft: #172554; --shadow: 0 1px 3px rgba(0, 0, 0, .4);
+  --info-soft: #172554; --overlay: rgba(0, 0, 0, .6); --shadow: 0 1px 3px rgba(0, 0, 0, .4);
 }
 
 * { box-sizing: border-box; }
@@ -356,6 +358,34 @@ details.section summary { cursor: pointer; font-weight: 600; min-height: 40px; d
   z-index: 50;
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
   cursor: pointer;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+.modal-backdrop[hidden] { display: none; } /* wymagane: display:flex bije [hidden] */
+.modal-card {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 1.5rem 1.25rem;
+  width: 100%;
+  max-width: 420px;
+  text-align: center;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .4);
+  animation: modal-pop .18s ease-out;
+}
+.modal-emoji { font-size: 2.6rem; line-height: 1; margin-bottom: .5rem; }
+.modal-msg { font-size: .95rem; margin: .75rem 0 1rem; }
+@keyframes modal-pop {
+  from { transform: scale(.92); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 
 .coach {

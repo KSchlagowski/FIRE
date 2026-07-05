@@ -964,6 +964,26 @@ export function futureValueOfMonthly(monthly, annualReal, years) {
   return r === 0 ? monthly * N : monthly * ((Math.pow(1 + r, N) - 1) / r) * (1 + r);
 }
 
+// Wpływ jednorazowej decyzji (wydanej lub powstrzymanej) na majątek w dniu FIRE.
+// Czysta, O(1) — bezpieczna w ścieżce każdego naciśnięcia klawisza; NIGDY nie
+// wołaj tu projectionWith. Wszystko realnie. null, gdy profil niekompletny
+// (UI degraduje się łagodnie). Po docelowym wieku → yearsToFire=0, factor=1.
+export function oneOffImpact(state, amount, now = new Date()) {
+  const a = state.assumptions;
+  const birth = state.profile.birthDate;
+  if (!birth || !(a.targetFireAge > 0)) return null;
+  const age = ageAt(birth, todayYm(now));
+  const yearsToFire = Math.max(0, a.targetFireAge * 12 - age.totalMonths) / 12;
+  const factor = Math.pow(1 + a.realReturnAnnual, yearsToFire);
+  const futureValueReal = (Number(amount) || 0) * factor;
+  const [by, bm] = birth.split('-').map(Number);
+  const fireAtYm = idxToYm(by * 12 + (bm - 1) + a.targetFireAge * 12);
+  const monthlySpendAtFire = fireTargetAt(state, fireAtYm) * a.withdrawalRate / 12;
+  const retirementDays = monthlySpendAtFire > 0
+    ? futureValueReal / (monthlySpendAtFire * 12 / 365.25) : null;
+  return { yearsToFire, factor, futureValueReal, monthlySpendAtFire, retirementDays };
+}
+
 // Ile dodatkowych zł/mies. potrzeba, by osiągnąć FIRE najpóźniej w zadanym wieku.
 // Poszukiwanie binarne minimalnego extraMonthlySavings ≥ 0 spełniającego
 // (reached && fireAge.totalMonths ≤ targetAgeMonths) — funkcja monotoniczna:

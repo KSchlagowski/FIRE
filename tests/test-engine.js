@@ -4,7 +4,7 @@
 import * as E from '../js/engine.js';
 import * as F from '../js/format.js';
 import * as S from '../js/storage.js';
-import { coachMessage } from '../js/coach.js';
+import { coachMessage, checkinCelebration, decisionMessage } from '../js/coach.js';
 import { FIX } from './fixtures.js';
 
 // ── Mini-harness ────────────────────────────────────────────────────────
@@ -1353,4 +1353,88 @@ test('F24f: strażnicy (brak daty urodzenia, wiek ≤ obecny) + czystość', () 
   const before = JSON.stringify(st);
   E.projectDieWithZero(st, { deathAge: 90, projection: st.derived.projection, now: NOW });
   assertEq(JSON.stringify(st), before);
+});
+
+// ── F25: wpływ jednorazowej decyzji + komunikaty motywacyjne ─────────────
+
+test('F25a: oneOffImpact — yearsToFire i factor', () => {
+  const f = FIX.F25;
+  const imp = E.oneOffImpact(baseState(), f.amount, NOW);
+  assertClose(imp.yearsToFire, f.yearsToFire, 1e-9, 'yearsToFire');
+  assertClose(imp.factor, f.factor, f.eps, 'factor');
+});
+
+test('F25b: oneOffImpact — wartość przyszła realna', () => {
+  const f = FIX.F25;
+  const imp = E.oneOffImpact(baseState(), f.amount, NOW);
+  assertClose(imp.futureValueReal, f.futureValueReal, f.eps, 'futureValueReal');
+});
+
+test('F25c: oneOffImpact — wydatek w dniu FIRE i dni emerytury (+ wariant z g)', () => {
+  const f = FIX.F25;
+  const imp = E.oneOffImpact(baseState(), f.amount, NOW);
+  assertClose(imp.monthlySpendAtFire, f.monthlySpendAtFire, f.eps, 'monthlySpendAtFire');
+  assertClose(imp.retirementDays, f.retirementDays, f.eps, 'retirementDays');
+  const grown = E.oneOffImpact(baseState({ assumptions: { expenseGrowthReal: 0.01 } }), f.amount, NOW);
+  assertClose(grown.monthlySpendAtFire, f.grown.monthlySpendAtFire, f.eps, 'monthlySpendAtFire (g=1%)');
+});
+
+test('F25d: wiek FIRE ≤ obecny → factor 1, fv = kwota', () => {
+  const st = baseState({ assumptions: { targetFireAge: 20 } }); // < 26
+  const imp = E.oneOffImpact(st, 100, NOW);
+  assertEq(imp.yearsToFire, 0);
+  assertClose(imp.factor, 1, 1e-12, 'factor=1');
+  assertClose(imp.futureValueReal, 100, 1e-9, 'fv=kwota');
+});
+
+test('F25e: profil niekompletny → null', () => {
+  const nb = baseState();
+  nb.profile.birthDate = '';
+  assertEq(E.oneOffImpact(nb, 100, NOW), null, 'brak birthDate → null');
+  const na = baseState({ assumptions: { targetFireAge: 0 } });
+  assertEq(E.oneOffImpact(na, 100, NOW), null, 'targetFireAge 0 → null');
+});
+
+test('F25f: kwota 0 → fv 0, brak NaN', () => {
+  const imp = E.oneOffImpact(baseState(), 0, NOW);
+  assertEq(imp.futureValueReal, 0);
+  assertTrue(!Number.isNaN(imp.retirementDays), 'retirementDays nie NaN');
+});
+
+test('F25g: oneOffImpact — czystość stanu (wzorzec F15a)', () => {
+  const st = baseState();
+  const before = JSON.stringify(st);
+  E.oneOffImpact(st, 250, NOW);
+  assertEq(JSON.stringify(st), before);
+});
+
+test('F25h: checkinCelebration — 10 unikalnych, niepustych na werdykt', () => {
+  for (const v of ['crushed', 'on_plan', 'behind', 'hard']) {
+    const set = new Set();
+    for (let s = 0; s < 10; s++) {
+      const msg = checkinCelebration(v, s);
+      assertTrue(typeof msg === 'string' && msg.length > 0, `${v} seed ${s} niepusty`);
+      set.add(msg);
+    }
+    assertEq(set.size, 10, `${v}: 10 unikalnych`);
+  }
+});
+
+test('F25i: checkinCelebration — modulo, ujemny seed, fallback', () => {
+  assertEq(checkinCelebration('on_plan', 12), checkinCelebration('on_plan', 2), 'modulo 10');
+  assertTrue(typeof checkinCelebration('on_plan', -3) === 'string', 'ujemny seed bezpieczny');
+  assertEq(checkinCelebration('nieznany', 0), checkinCelebration('on_plan', 0), 'fallback on_plan');
+});
+
+test('F25j: decisionMessage — 5 unikalnych na rodzaj + fallback', () => {
+  for (const k of ['avoided', 'invest', 'impulse']) {
+    const set = new Set();
+    for (let s = 0; s < 5; s++) {
+      const msg = decisionMessage(k, s);
+      assertTrue(typeof msg === 'string' && msg.length > 0, `${k} seed ${s} niepusty`);
+      set.add(msg);
+    }
+    assertEq(set.size, 5, `${k}: 5 unikalnych`);
+  }
+  assertEq(decisionMessage('nieznany', 0), decisionMessage('avoided', 0), 'fallback avoided');
 });

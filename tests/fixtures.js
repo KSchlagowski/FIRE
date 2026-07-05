@@ -91,4 +91,17 @@ export const FIX = {
     r0: { deathAge: 36, N: 10, target: 720000 }, // q=1 (r=0, g=0): N·W₁
     eps: 0.5,
   },
+  // Wpływ jednorazowej decyzji (oneOffImpact) + selektory komunikatów.
+  // baseState: urodzony 2000-01-01, NOW = 2026-07-15, wiek 318 mies., wiek FIRE
+  // 45 → 540 mies., yearsToFire = 222/12 = 18,5; factor = 1,05^18,5.
+  F25: {
+    amount: 100,
+    yearsToFire: 18.5,
+    factor: 2.466051,
+    futureValueReal: 246.6051,
+    monthlySpendAtFire: 6000,        // cel 1,8M × WR/12
+    retirementDays: 1.2510,          // 246,6051 / (72000/365,25)
+    grown: { monthlySpendAtFire: 7176.88 }, // expenseGrowthReal 1%, plan-rok 19
+    eps: 0.01,
+  },
 };

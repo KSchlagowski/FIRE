@@ -2,7 +2,7 @@
 // Checklist wydania: 1) podbij CACHE tutaj i wersję w index.html/ui.js,
 // 2) każdy NOWY plik aplikacji musi trafić do PRECACHE.
 
-const CACHE = 'fire-v1.10.0';
+const CACHE = 'fire-v1.11.0';
 
 const PRECACHE = [
   './',
@@ -13,6 +13,7 @@ const PRECACHE = [
   './js/ui.js',
   './js/analysis.js',
   './js/simulation.js',
+  './js/motivation.js',
   './js/engine.js',
   './js/coach.js',
   './js/format.js',

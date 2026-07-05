@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (64 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (102 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -31,21 +31,111 @@ python -m http.server 8000   # serve at http://localhost:8000/ (SW works on loca
 
 ## Architecture
 
-Six ES modules under `js/`, loaded via `<script type="module" src="js/app.js">`.
+**Nine ES modules under `js/`** (loaded via `<script type="module" src="js/app.js">`)
+plus a single hand-written **`styles.css`** at the repo root. No build step, no
+bundler — the browser loads the modules directly.
 
-- **`engine.js`** — pure finance core. **Zero DOM, zero storage imports.** All
-  math lives here and is unit-tested. If logic can go here, it goes here.
+- **`engine.js`** — pure finance core (~1300 lines). **Zero DOM, zero storage
+  imports.** All math lives here and is unit-tested. If logic can go here, it goes
+  here. Section banners (`// ── … ──`) are the map: money → time → rates → FIRE
+  target → nominal loans → phased plan → replays → verdict/streak → check-in
+  mutations → projection → analysis tables/stats → the one pipeline → initial state.
 - **`format.js`** — pl-PL formatting/parsing (pure). Manual NBSP grouping so Node
   and browser produce identical strings (don't swap in `Intl` blindly — tests
   assert exact output including the non-breaking space ` `).
 - **`coach.js`** — Polish message library + deterministic variant selection (pure).
+- **`analysis.js`** — pure HTML builders for the **Analiza** screen (`#/analiza`).
+  Zero DOM, zero module state: engine results + pre-rendered SVG charts come in as
+  params, an HTML string comes out. Has a local `esc()` for user-derived text.
+- **`simulation.js`** — pure HTML builders for the **Symulacja** screen
+  (`#/symulacja`); a mirror of `analysis.js`. All calculators are read-only
+  "what-if" — **nothing here is ever persisted.** Reuses `fireCell` from `analysis.js`.
+- **`motivation.js`** — pure HTML builders for the emotional-feedback layer: the
+  post-check-in **modal** (`checkinModal`) and the **Pulpit** „Dzisiejsza decyzja"
+  card (`decisionCard`/`avoidedResult`/`spentResult`). Zero DOM/state, local `esc()`.
+  Everything ephemeral — the calculators show a message and forget (no `persist()`
+  in their code path). Money→future math comes from `engine.oneOffImpact`.
 - **`storage.js`** — `localStorage` wrapper, schema version, migration chain,
   `.bak` backup, export/import. Backend is injectable (`makeStorage(backing)`) so
   tests run in Node without a real `localStorage`.
-- **`ui.js`** — all screen renderers, hash router, SVG charts, event handling.
-  Template strings + event delegation, no framework.
+- **`ui.js`** — the **only** module that touches the DOM or holds mutable state
+  (~1900 lines): all screen renderers, hash router, SVG chart generators
+  (`chartSVG`/`stackedBarSVG`), onboarding, and event handling. Template strings +
+  event delegation, no framework. It calls the engine, then hands results to
+  `analysis.js`/`simulation.js` to build the markup.
 - **`app.js`** — bootstrap: load state → onboarding if empty → register SW →
   route → install hint.
+
+### Module layering (the dependency rule to preserve)
+
+Dependencies point **one way**, from pure leaves up to the DOM — no cycles. Keep it
+that way; it's what keeps the whole finance core unit-testable in Node. Actual import
+graph (each module imports only from lower layers):
+
+```
+L0  engine.js · format.js · storage.js   ← import NOTHING (pure leaves; storage's backing is injectable)
+L1  coach.js        imports engine, format
+L2  analysis.js     imports engine, format, coach
+L3  simulation.js   imports engine, format, analysis
+L3  motivation.js   imports format, coach
+L4  ui.js           imports engine, format, coach, analysis, simulation, motivation, storage   ← ONLY DOM + mutable state
+L5  app.js          imports ui, storage                                            ← bootstrap
+```
+
+Rules of thumb: **only `ui.js` may touch the DOM or own state.** Everything in
+L0–L3 (`engine`, `format`, `coach`, `analysis`, `simulation`) is pure — values/
+strings in → values/strings out — so the Node runner can exercise it (note "pure"
+≠ "leaf": `coach` imports `engine`, but still holds no DOM/state). A new computation
+goes in `engine.js`; a new screen's markup goes in a `*.js` builder; only the glue
+(event wiring, `state` mutation, `render` call) lives in `ui.js`.
+
+### Screens & routing
+
+Hash router in `ui.js` (`route()` on `hashchange`). The single mutable `state`
+lives at module scope in `ui.js`; `getState()` exposes it, everyone else is pure
+and receives data as params. A 5-tab bottom nav (`#tabbar` in `index.html`) maps to:
+
+| Route | Screen | Renderer |
+|-------|--------|----------|
+| `#/` | Pulpit (dashboard) | `renderDashboard` |
+| `#/checkin/:month` | miesięczny check-in | `renderCheckin` |
+| `#/history` | Historia | `renderHistory` |
+| `#/analiza` | Analiza | `renderAnaliza` → `analysis.js` |
+| `#/symulacja` | Symulacja | `renderSymulacja` → `simulation.js` |
+| `#/plan`, `#/plan/:section` | Plan hub + sub-pages | `renderPlanHub` / `renderPlanSection` |
+| `#/backup` | Kopia zapasowa | `renderBackup` |
+
+`activeRoute()` decides tab highlighting: check-in counts as **Pulpit**; `#/backup`
+and every `#/plan/*` sub-page count as **Plan**. Add a route by extending `route()`
+and, if it's a top-level tab, the `#tabbar` list in `index.html`.
+
+### Persisted state shape (see `createState`)
+
+```
+{ version, createdAt, anchorMonth,
+  profile:     { birthDate },
+  assumptions: { monthlyIncome, monthlyLivingExpenses, cashStart, portfolioStart,
+                 cashReturnReal, targetFireAge, withdrawalRate, realReturnAnnual,
+                 expenseGrowthReal, incomeGrowthReal, inflationAnnual },
+  housing:     { currentRentMonthly, housePlan: { mortgage{…Nominal}, familyLoan{…Nominal}, … } },
+  debt:        { overrides, familyOverrides },   // real & family-loan corrections
+  entries:     [ … monthly check-ins … ],
+  ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt } }
+```
+
+`state.derived` is attached at runtime by `recomputeDerived` and **stripped before
+save** — it is cache, never truth (see below). A new persisted field needs: a
+default in `createState`/`defaultAssumptions`, a `validateState` check if it's
+load-critical, and a migration step (bump `SCHEMA_VERSION`, see `migrate`).
+
+### Styling & theme
+
+Single `styles.css`, mobile-first (max-width 480px). Colors are **CSS custom props**
+on `:root`; dark is the default via `@media (prefers-color-scheme: dark)`, and a
+manual override lives in `state.ui.theme` → applied by `applyTheme()` as
+`documentElement.dataset.theme` (`light` / `dark` / absent for auto). Add a color as
+a `--var` in **all three** blocks (`:root`, the dark media query, `[data-theme="dark"]`).
+No external fonts, no CSS framework.
 
 ### The one pattern to understand: derived state via replay
 
@@ -59,6 +149,34 @@ projectFire` and caches the result on `state.derived`. `storage.save` strips
 Consequence: to change how balances evolve, edit the replay functions, not stored
 numbers. "Corrections" (real cash/portfolio/debt overrides) are entries in the
 replay chain that reset it from that month forward, not overwrites of a stored total.
+
+## Tech decisions (the *why*, so you don't "fix" them)
+
+- **No build step, no framework, raw ES modules.** The app must run forever from
+  static files served under a subpath, fully offline. A bundler/CDN/framework would
+  add a toolchain to maintain and a network dependency that breaks the offline
+  guarantee. Payoff: what you edit is what ships — debug straight in the browser,
+  no source maps. Cost: no JSX/TS; markup is template strings and types live in the
+  test suite. **Don't introduce npm runtime deps or a build.**
+- **PWA + cache-first service worker.** Offline-first is a hard requirement, so the
+  app caches itself and serves from cache. That is also why updates are fiddly — see
+  the SW gotchas and the release checklist (`cache: 'reload'` + active `reg.update()`
+  on visibility/hourly exist to beat GitHub Pages `max-age=600`).
+- **`localStorage` is the only store; no server, no account.** Privacy is the
+  product — the data never leaves the device. The price: no cross-device sync and a
+  small quota, mitigated by JSON export/import and the `.bak`-before-every-write
+  safety net. A quota error surfaces as a Polish toast, not a crash.
+- **Derived state is recomputed, never stored (replay, above).** The entry history
+  is the single source of truth; every balance/debt/streak/projection is a pure
+  function of it. This makes "editing the past" trivially correct and is the core
+  reason `engine.js` stays DOM-free.
+- **Pure engine + DOM only in `ui.js`.** So the whole money core runs under Node
+  with no browser — which is *why* the test files are `.js` with `"type": "module"`,
+  and why the HTML builders (`analysis.js`/`simulation.js`) return strings instead
+  of poking the DOM.
+- **Manual NBSP number formatting, not `Intl`.** Node and the browser must produce
+  byte-identical strings so tests can assert exact output — `Intl` varies by
+  runtime/ICU version. (See `format.js`.)
 
 ## Invariants — break these and money math goes wrong
 
@@ -137,7 +255,18 @@ verdict tiers, streak, replay determinism, projection, format/parse, storage
 cover the Analiza screen: withdrawal-phase Excel parity (year-35 nominal
 8 724 696,89 zł, depletion, nominal rate 8,15%), yearly projection residual
 identity + reconciliation, `excelProjection` parity, `projectionWith`
-purity/monotonicity, SWR table, Coast FIRE, and mortgage analytics.
+purity/monotonicity, SWR table, Coast FIRE, and mortgage analytics. F18–F24 cover
+the Symulacja/goal features: `projectionWith` "what-if" extra savings (purity, one-
+time vs recurring, edge months), the "droga do FIRE" progress bar, the **family
+loan** (`replayFamilyLoan`, annuity parity, overrides/overpayments, FIRE gated on
+`familyFreeYm`), future-value of equal contributions, `solveExtraSavingsForAge` and
+`requiredSavingsForGoal` (hit the target FIRE age, infeasibility guards), and the
+"do zera" / die-with-zero target (`dieWithZeroTargetAt`, `projectDieWithZero`).
+F25 covers the motivational layer: `oneOffImpact` (yearsToFire/factor, real
+future value, spend-at-FIRE + retirement-days incl. an expense-growth variant,
+past-target-age → factor 1, incomplete-profile → null, zero-amount, purity) and
+the seeded message selectors (`checkinCelebration`/`decisionMessage`: unique
+non-empty variants per bucket, seed modulo, negative seed, unknown-key fallback).
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.
@@ -146,7 +275,9 @@ numbers are the spec. Prefer adding a test over eyeballing a screenshot.
 
 - Keep it dependency-free and offline-first. No CDN, no fonts, no fetch to
   anything but the app's own files. No build tooling.
-- Put logic in `engine.js` (testable), presentation in `ui.js`.
+- Put logic in `engine.js` (testable); screen markup in a pure HTML builder
+  (`analysis.js`/`simulation.js` for those screens); only DOM/event/state glue in
+  `ui.js`. Keep the one-way layering (see Architecture).
 - New user-facing text is **Polish**. Match the existing tone in `coach.js`.
 - **Plans, design docs, and technical writing are in English.** Only the parts
   that ship as UI copy (or otherwise reach the user) are Polish — the app is
