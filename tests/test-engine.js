@@ -1268,3 +1268,89 @@ test('coach: pierwszy wpis ma własny wariant', () => {
   const m = coachMessage({ verdict: 'on_plan', onTrack: true, streak: 1, month: '2026-06', nextMonth: '2026-07', nextPlan: 100, isFirst: true });
   assertTrue(m.includes('Pierwszy wpis') || m.includes('Start!'), m);
 });
+
+// ── F24: cel „do zera" (die with zero) ──────────────────────────────────
+
+test('F24a: dieWithZeroTargetAt — forma zamknięta (g=0, g=1%, q=1)', () => {
+  const f = FIX.F24;
+  const t = E.dieWithZeroTargetAt(baseState(), f.startYm, f.deathAge);
+  assertEq(t.yearsN, f.N);
+  assertClose(t.target, f.target, f.eps);
+  assertClose(t.withdrawalYear1, 72000, 1e-9);
+  // g=1% (N=84) potrafi przewyższyć klasyczny cel.
+  const g1 = E.dieWithZeroTargetAt(baseState({ assumptions: { expenseGrowthReal: 0.01 } }), f.startYm, f.deathAge);
+  assertClose(g1.target, f.targetG1, f.eps);
+  assertTrue(g1.target > f.classic, 'g=1% cel > klasyczny 1,8 mln');
+  // q=1 (r=0, g=0): cel = N·W₁ = dokładnie 720 000 dla N=10.
+  const r0 = E.dieWithZeroTargetAt(baseState({ assumptions: { realReturnAnnual: 0 } }), f.startYm, f.r0.deathAge);
+  assertEq(r0.yearsN, f.r0.N);
+  assertClose(r0.target, f.r0.target, 1e-6, 'q=1 → arytmetyka całkowita');
+});
+
+test('F24b: projectDieWithZero — tożsamość replay, tabela do 0', () => {
+  const f = FIX.F24;
+  // FIRE poza horyzontem → startYm = dziś (2026-07), N = 84.
+  const st = baseState({ assumptions: { monthlyIncome: 6100 } });
+  E.recomputeDerived(st, NOW);
+  const z = E.projectDieWithZero(st, { deathAge: f.deathAge, projection: st.derived.projection, now: NOW });
+  assertEq(z.hypothetical, true);
+  assertEq(z.startYm, f.startYm);
+  assertEq(z.rows.length, f.N);
+  assertClose(z.rows[0].startReal, f.target, f.eps, 'tabela startuje od dokładnie celu');
+  assertClose(z.rows[0].endReal, f.year1EndReal, f.eps);
+  assertClose(z.rows[1].endReal, f.year2EndReal, f.eps);
+  assertClose(z.rows[z.rows.length - 1].endReal, 0, 1e-9, 'ostatni rok kończy na 0 zł');
+  for (const r of z.rows) {
+    const expected = (r.startReal - r.withdrawalReal) * (1 + z.realRate);
+    if (r.endReal !== 0) assertClose(r.endReal, expected, 1e-9, `tożsamość rekurencji rok ${r.year}`);
+    assertClose(r.endNominal / Math.pow(1 + z.inflation, r.year), r.endReal, 1e-6, `tożsamość nominal/real rok ${r.year}`);
+  }
+});
+
+test('F24c: wzrost wypłat o g realnie rocznie', () => {
+  const st = baseState({ assumptions: { monthlyIncome: 6100, expenseGrowthReal: 0.01 } });
+  E.recomputeDerived(st, NOW);
+  const z = E.projectDieWithZero(st, { deathAge: 110, projection: st.derived.projection, now: NOW });
+  assertClose(z.rows[1].withdrawalReal, z.rows[0].withdrawalReal * 1.01, 1e-6);
+});
+
+test('F24d: monotonia wieku + porównanie z celem klasycznym', () => {
+  const f = FIX.F24;
+  const st = baseState();
+  const t110 = E.dieWithZeroTargetAt(st, f.startYm, 110).target;
+  const t80 = E.dieWithZeroTargetAt(st, f.startYm, 80).target;
+  assertClose(t80, f.target54, f.eps);
+  assertTrue(t110 > t80, 'dłuższe życie → wyższy cel');
+  assertTrue(t110 < f.classic, 'g=0: cel „do zera" < klasyczny 1,8 mln');
+});
+
+test('F24e: skan FIRE „do zera" ≤ klasyczny; brak oszczędności → hypothetical', () => {
+  const st = baseState({ assumptions: { portfolioStart: 10000, cashStart: 6000 } });
+  E.recomputeDerived(st, NOW);
+  const z = E.projectDieWithZero(st, { deathAge: 110, projection: st.derived.projection, now: NOW });
+  assertEq(z.hypothetical, false);
+  assertTrue(E.ymToIdx(z.startYm) <= E.ymToIdx(z.classicFireYm), 'FIRE „do zera" nie później niż klasyczny (g=0)');
+  // income = expenses → brak nadwyżki → FIRE poza horyzontem.
+  const hyp = baseState({ assumptions: { monthlyIncome: 6000 } });
+  E.recomputeDerived(hyp, NOW);
+  const zh = E.projectDieWithZero(hyp, { deathAge: 110, projection: hyp.derived.projection, now: NOW });
+  assertEq(zh.hypothetical, true);
+  assertEq(zh.startYm, E.todayYm(NOW));
+});
+
+test('F24f: strażnicy (brak daty urodzenia, wiek ≤ obecny) + czystość', () => {
+  const nb = baseState();
+  nb.profile.birthDate = null;
+  assertEq(E.projectDieWithZero(nb, { deathAge: 110, now: NOW }), null, 'brak birthDate → null');
+  assertEq(E.dieWithZeroTargetAt(nb, '2026-07', 110), null);
+  // Wiek ≤ obecny → marker z pustą tabelą (nie null), by UI pokazał field-error.
+  const st = baseState();
+  E.recomputeDerived(st, NOW);
+  const z = E.projectDieWithZero(st, { deathAge: 20, projection: st.derived.projection, now: NOW });
+  assertTrue(z != null && z.rows.length === 0, 'marker bez wierszy');
+  assertTrue(z.yearsN < 1, 'N < 1');
+  // Czystość: stan nie mutowany (wzorzec F15a).
+  const before = JSON.stringify(st);
+  E.projectDieWithZero(st, { deathAge: 90, projection: st.derived.projection, now: NOW });
+  assertEq(JSON.stringify(st), before);
+});

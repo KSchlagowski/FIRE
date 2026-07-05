@@ -7,7 +7,7 @@ import * as Sim from './simulation.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.9.1';
+export const APP_VERSION = '1.10.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1017,7 +1017,8 @@ function renderHistory() {
 
 let anMode = 'yearly';
 let anYear = 1;
-let anSection = 'przeglad';   // sekcja Analizy: przeglad | prognoza | kredyty
+let anSection = 'przeglad';   // sekcja Analizy: przeglad | prognoza | dozera | kredyty
+let anDeathAge = 110;         // „Do zera": wiek dożycia (efemeryczny, domyślnie 110)
 
 function renderAnaliza() {
   if (!state.derived) E.recomputeDerived(state);
@@ -1035,7 +1036,7 @@ function renderAnaliza() {
   const showKredyty = !!(ma || fa);
   if (anSection === 'kredyty' && !showKredyty) anSection = 'przeglad';
 
-  const sections = [['przeglad', 'Przegląd'], ['prognoza', 'Prognoza']];
+  const sections = [['przeglad', 'Przegląd'], ['prognoza', 'Prognoza'], ['dozera', 'Do zera']];
   if (showKredyty) sections.push(['kredyty', 'Kredyty']);
   const seg = `<div class="seg" role="tablist">${sections.map(([k, l]) =>
     `<button type="button" data-ansection="${k}" class="${anSection === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
@@ -1097,6 +1098,18 @@ function renderAnaliza() {
       })
       + An.withdrawalCard({ w, chartHTML: wChart })
       + An.sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows });
+  } else if (anSection === 'dozera') {
+    const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj });
+    const zChart = z && z.rows.length > 1
+      ? chartSVG(z.rows, [
+        { get: r => r.endNominal, cls: 'line-proj' },
+        { get: r => r.endReal, cls: 'line-port' },
+      ])
+      : '';
+    body = An.dieWithZeroCard({
+      resultHTML: An.dieWithZeroResult({ z }) + zChart,
+      deathAge: anDeathAge,
+    });
   } else {
     // ── Kredyty ──
     // Wykres topnienia salda (sama rata vs z nadpłatami) — wspólny dla kredytu
@@ -1160,6 +1173,20 @@ function renderAnaliza() {
   if (yearSel) yearSel.addEventListener('change', () => {
     anYear = Number(yearSel.value) || 1;
     renderAnaliza();
+  });
+  const da = $('#an-death-age');
+  if (da) da.addEventListener('input', () => {
+    const v = Math.floor(Number(da.value));
+    anDeathAge = Number.isFinite(v) && v > 0 ? v : 110;
+    const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj });
+    const zChart = z && z.rows.length > 1
+      ? chartSVG(z.rows, [
+        { get: r => r.endNominal, cls: 'line-proj' },
+        { get: r => r.endReal, cls: 'line-port' },
+      ])
+      : '';
+    const dz = $('#dwz-result');
+    if (dz) dz.innerHTML = An.dieWithZeroResult({ z }) + zChart;
   });
 }
 

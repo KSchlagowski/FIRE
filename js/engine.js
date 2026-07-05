@@ -750,6 +750,114 @@ export function projectWithdrawal(state, opts = {}) {
   };
 }
 
+// Cel „do zera": portfel = 0 dokładnie w wieku deathAge. Wypłata rok 1 taka sama
+// jak w fireTargetAt (roczne wydatki = cel × SWR), rośnie realnie o g rocznie,
+// portfel rośnie realnie o r. Rozwiązanie P_N = 0 daje PV rosnącej renty (annuity-
+// due): cel = W₁·(1−q^N)/(1−q), q = (1+g)/(1+r); dla q ≈ 1 → cel = N·W₁.
+export function dieWithZeroTargetAt(state, ym, deathAge) {
+  const a = state.assumptions;
+  const birth = state.profile.birthDate;
+  if (!birth) return null;
+  const yearsN = deathAge - ageAt(birth, ym).years;
+  if (!(yearsN >= 1)) return null;
+  const withdrawalYear1 = fireTargetAt(state, ym) * a.withdrawalRate;
+  const g = a.expenseGrowthReal;
+  const r = a.realReturnAnnual;
+  const q = (1 + g) / (1 + r);
+  const target = Math.abs(q - 1) < 1e-12
+    ? yearsN * withdrawalYear1
+    : withdrawalYear1 * (1 - Math.pow(q, yearsN)) / (1 - q);
+  return { target, yearsN, withdrawalYear1 };
+}
+
+// Faza wypłat „do zera": tabela roczna od dokładnie celu „do zera" do 0 w wieku
+// deathAge. Skanuje prognozę o pierwszy miesiąc, w którym dług spłacony i portfel
+// ≥ cel „do zera" (cel liczony per-miesiąc — rozwiązuje cykliczność: N maleje, a
+// W₁ rośnie z latami planu). Analiza-only; nie zmienia projectFire ani warunku FIRE.
+export function projectDieWithZero(state, opts = {}) {
+  const a = state.assumptions;
+  const birth = state.profile.birthDate;
+  if (!birth) return null;
+  const deathAge = opts.deathAge != null ? opts.deathAge : 110;
+  const proj = opts.projection || null;
+  const now = todayYm(opts.now); // opts.now tylko dla determinizmu testów
+  const nowIdx = ymToIdx(now);
+
+  // Klasyczny cel + data FIRE (do porównania).
+  const targetClassic = fireTargetAt(state, now);
+  const classicFireYm = proj && proj.reached ? proj.fireYm : null;
+
+  // Skan miesiąca osiągnięcia celu „do zera".
+  let fireYm = null, dz = null;
+  if (proj && proj.series) {
+    for (const r of proj.series) {
+      if (ymToIdx(r.ym) < nowIdx) continue;
+      if (ageAt(birth, r.ym).years >= deathAge) break;
+      const t = dieWithZeroTargetAt(state, r.ym, deathAge);
+      if (!t) continue;
+      const settled = (r.debtReal || 0) <= EPS && (r.familyReal || 0) <= EPS;
+      if (settled && r.portfolio >= t.target - EPS) {
+        fireYm = r.ym;
+        dz = t;
+        break;
+      }
+    }
+  }
+
+  const hypothetical = fireYm == null;
+  const startYm = fireYm != null ? fireYm : now;
+  const startAge = ageAt(birth, startYm).years;
+  const g = a.expenseGrowthReal;
+  const r = a.realReturnAnnual;
+  const inflation = a.inflationAnnual;
+  const nominalRate = (1 + r) * (1 + inflation) - 1;
+
+  // Wiek ≤ obecny → brak lat wypłat: marker (rows puste), UI pokazuje field-error.
+  if (dz == null) dz = dieWithZeroTargetAt(state, startYm, deathAge);
+  if (dz == null) {
+    return {
+      deathAge, startYm, startAge, yearsN: deathAge - startAge,
+      target: 0, targetClassic, fireYm, classicFireYm, hypothetical,
+      realRate: r, inflation, expenseGrowth: g, nominalRate,
+      withdrawalYear1: 0, rows: [],
+    };
+  }
+
+  const { target, yearsN, withdrawalYear1: W1 } = dz;
+
+  // Tabela: zawsze od DOKŁADNIE celu (semantyka „0 w chwili śmierci"), nie od
+  // prognozowanej nadwyżki portfela. Kolumny nominalne jak w projectWithdrawal.
+  const rows = [];
+  let bal = target;
+  for (let n = 1; n <= yearsN; n++) {
+    const ym = addMonths(startYm, (n - 1) * 12);
+    const startReal = bal;
+    const withdrawalReal = W1 * Math.pow(1 + g, n - 1);
+    let endReal = (startReal - withdrawalReal) * (1 + r);
+    if (Math.abs(endReal) <= EPS) endReal = 0;
+    const growthReal = endReal - (startReal - withdrawalReal);
+    const pf1 = Math.pow(1 + inflation, n - 1);
+    const pfN = Math.pow(1 + inflation, n);
+    const startNominal = startReal * pf1;
+    const withdrawalNominal = withdrawalReal * pf1;
+    const endNominal = endReal * pfN;
+    const growthNominal = endNominal - (startNominal - withdrawalNominal);
+    rows.push({
+      year: n, ym, age: ageAt(birth, ym).years,
+      startReal, startNominal,
+      withdrawalReal, withdrawalNominal,
+      growthReal, growthNominal, endReal, endNominal,
+    });
+    bal = endReal;
+  }
+
+  return {
+    deathAge, startYm, startAge, yearsN, target, targetClassic,
+    fireYm, classicFireYm, hypothetical, realRate: r, inflation,
+    expenseGrowth: g, nominalRate, withdrawalYear1: W1, rows,
+  };
+}
+
 // Projekcja roczna (model aplikacji): serie miesięczne pogrupowane w bloki
 // 12 miesięcy roku planu (od anchorMonth). Wzrost jest REZYDUALNY:
 // saldo końc. = saldo pocz. + wpłaty + wzrost — tożsamość zachodzi dokładnie

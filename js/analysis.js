@@ -220,6 +220,62 @@ export function withdrawalCard({ w, chartHTML }) {
   </div>`;
 }
 
+// ── 4b. Życie do zera (die with zero) ───────────────────────────────────
+
+// Część wynikowa (podsumowanie + tabela) — podmieniana w #dwz-result przy
+// zmianie wieku, więc oddzielona od karty (intro + input trwają).
+export function dieWithZeroResult({ z, deathAgeRaw }) {
+  if (z == null) {
+    return '<p class="muted">Uzupełnij datę urodzenia w Plan → Profil, aby policzyć fazę wypłat „do zera”.</p>';
+  }
+  if (z.yearsN < 1 || z.rows.length === 0) {
+    return `<div class="field-error">Podaj wiek większy niż obecny (${z.startAge}).</div>`;
+  }
+  const diff = z.target - z.targetClassic;
+  const banner = z.hypothetical
+    ? `<div class="banner info small">FIRE poza horyzontem prognozy — scenariusz modelowy od dzisiejszego celu „do zera” (${money(z.target)}).</div>`
+    : '';
+  const summary = kv('Cel „do zera”', money(z.target))
+    + kv('Cel klasyczny (4%)', money(z.targetClassic))
+    + kv('Różnica vs klasyczny', signed(diff), diff <= 0 ? 'good' : 'warn-text')
+    + kv('Data FIRE „do zera”', fireCell(z.fireYm, z.classicFireYm))
+    + kv('Data FIRE klasyczna', z.classicFireYm ? esc(Fmt.formatMonthName(z.classicFireYm)) : '<span class="warn-text">poza horyzontem</span>')
+    + kv('Lata wypłat (N)', String(z.yearsN))
+    + kv('Wypłata (rok 1)', money(z.withdrawalYear1));
+
+  const headers = ['Rok', 'Wiek', 'Saldo pocz. (nom.)', 'Wypłata (nom.)', 'Wzrost (nom.)', 'Saldo końc. (nom.)', 'Saldo końc. (realnie)'];
+  const lastYear = z.rows.length ? z.rows[z.rows.length - 1].year : null;
+  const rows = z.rows.map(r => `<tr${r.year === lastYear ? ' class="reached"' : ''}>
+    <td>${r.year} <span class="muted small">${r.ym.slice(0, 4)}</span></td>
+    <td>${r.age != null ? r.age : '—'}</td>
+    <td>${money(r.startNominal)}</td>
+    <td>${money(r.withdrawalNominal)}</td>
+    <td>${money(r.growthNominal)}</td>
+    <td>${money(r.endNominal)}</td>
+    <td>${money(r.endReal)}</td>
+  </tr>`).join('');
+
+  return `${banner}${summary}
+    ${table(headers, rows)}
+    ${metodologia([
+      `Cel = W₁·(1−qᴺ)/(1−q), q = (1+g)/(1+r) = PV rosnącej renty; portfel = 0 dokładnie w wieku ${z.deathAge} (N = ${z.yearsN} lat wypłat).`,
+      `Wypłata (rok 1) = cel klasyczny × SWR = ${money(z.withdrawalYear1)}/rok; rośnie o g = ${Fmt.formatPct(z.expenseGrowth)} realnie rocznie.`,
+      `Saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r); R realne = ${Fmt.formatPct(z.realRate)}. Kwoty nominalne w cenach roku startu wypłat (indeks cen = 1 w ${esc(Fmt.formatMonthGenitive(z.startYm))}).`,
+      'Tabela startuje od dokładnie celu „do zera” (nie od prognozowanej nadwyżki portfela) — dlatego kończy się na 0 zł. Wiek N to pełne lata (podłoga z wieku).',
+    ])}`;
+}
+
+export function dieWithZeroCard({ resultHTML, deathAge }) {
+  return `<div class="card"><h2>Życie do zera ⏳</h2>
+    <p class="muted small">Klasyczny cel (4%) ma starczyć na zawsze. Tu wydajesz portfel „do zera” w założonym wieku — potrzebny kapitał zwykle mniejszy, więc FIRE bywa wcześniej. Cena: pieniądze kończą się zgodnie z planem.</p>
+    <div class="field">
+      <label for="an-death-age">Dożywam do wieku <span class="muted small">(domyślnie 110)</span></label>
+      <input id="an-death-age" type="number" inputmode="numeric" min="1" value="${deathAge}">
+    </div>
+    <div id="dwz-result">${resultHTML}</div>
+  </div>`;
+}
+
 // ── 5. Wrażliwość ───────────────────────────────────────────────────────
 
 export function fireCell(fireYm, baseFireYm, isBase = false) {

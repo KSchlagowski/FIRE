@@ -78,4 +78,17 @@ export const FIX = {
     need: { portfolioStart: 100000, targetFireAge: 40 },
     infeasible: { portfolioStart: 100000, targetFireAge: 27 },
   },
+  // Cel „do zera": PV rosnącej renty (annuity-due); portfel = 0 w wieku deathAge.
+  // Wyprowadzone z formy zamkniętej (nie z xlsx). baseState: kotwica 2026-07,
+  // urodzony 2000-01-01 → wiek 26 w 2026-07, W₁ = 72 000, r = 0,05, g = 0.
+  F24: {
+    deathAge: 110, startYm: '2026-07', N: 84,
+    target: 1486901.33,            // g=0: 72000·(1−1.05^−84)/(1−1/1.05)
+    year1EndReal: 1485646.40, year2EndReal: 1484328.72,
+    target54: 1403525.00,          // deathAge 80 → N=54 (monotonia)
+    targetG1: 1817630.42,          // g=1%: może przewyższyć klasyczny cel (N=84)
+    classic: 1800000,
+    r0: { deathAge: 36, N: 10, target: 720000 }, // q=1 (r=0, g=0): N·W₁
+    eps: 0.5,
+  },
 };
