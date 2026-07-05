@@ -7,7 +7,7 @@ import * as Sim from './simulation.js';
 import { coachMessage, verdictLabel, verdictEmoji } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.9.0';
+export const APP_VERSION = '1.9.1';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1262,7 +1262,10 @@ function renderSymulacja() {
     body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
   }
 
-  view().innerHTML = seg + body;
+  // Zakładki dokładające kwotę do planu — przypomnij, że liczy się sama nadwyżka.
+  const note = symTab === 'zwrot' ? '' : Sim.nadwyzkaNote();
+
+  view().innerHTML = seg + body + note;
 
   $$('[data-symtab]').forEach(el => el.addEventListener('click', () => {
     symTab = el.dataset.symtab;

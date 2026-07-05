@@ -23,6 +23,17 @@ function metodologia(lines) {
   </details>`;
 }
 
+// Wspólna uwaga: dla FIRE liczy się sama nadwyżka, nie jej źródło. Pokazywana
+// pod zakładkami, które dokładają kwotę do planu (nie dotyczy zakładki „Zwrot").
+export function nadwyzkaNote() {
+  return `<div class="banner info small" style="margin-top:12px">
+    Symulacja nie rozróżnia, <b>skąd</b> bierze się nadwyżka. Dodatkowe +2000&nbsp;zł/mies.
+    z podwyżki i te same +2000&nbsp;zł/mies. z cięcia wydatków dają identyczny wynik —
+    tę samą datę FIRE. Dla matematyki FIRE liczy się sama nadwyżka (dochód − wydatki),
+    nie to, którą stronę ruszysz.
+  </div>`;
+}
+
 // Wspólny komunikat „zyskujesz / tracisz N" na podstawie przesunięcia daty FIRE.
 function gainLine(simFireYm, baseFireYm) {
   if (simFireYm == null || baseFireYm == null) return '';
