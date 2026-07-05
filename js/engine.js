@@ -767,10 +767,12 @@ export function projectWithdrawal(state, opts = {}) {
   };
 }
 
-// Cel „do zera": portfel = 0 dokładnie w wieku deathAge. Wypłata rok 1 taka sama
-// jak w fireTargetAt (roczne wydatki = cel × SWR), rośnie realnie o g rocznie,
-// portfel rośnie realnie o r. Rozwiązanie P_N = 0 daje PV rosnącej renty (annuity-
-// due): cel = W₁·(1−q^N)/(1−q), q = (1+g)/(1+r); dla q ≈ 1 → cel = N·W₁.
+// Cel „do zera": portfel = 0 dokładnie w wieku deathAge. Wypłata taka sama
+// jak w fireTargetAt (roczne wydatki = cel × SWR) i STAŁA realnie po FIRE —
+// ten sam model wydatków co cel klasyczny i projectWithdrawal (expenseGrowthReal
+// działa tylko do daty FIRE, przez W₁). Portfel rośnie realnie o r. Rozwiązanie
+// P_N = 0 daje PV renty (annuity-due): cel = W₁·(1−q^N)/(1−q), q = 1/(1+r);
+// dla q ≈ 1 (r = 0) → cel = N·W₁.
 export function dieWithZeroTargetAt(state, ym, deathAge) {
   const a = state.assumptions;
   const birth = state.profile.birthDate;
@@ -778,9 +780,8 @@ export function dieWithZeroTargetAt(state, ym, deathAge) {
   const yearsN = deathAge - ageAt(birth, ym).years;
   if (!(yearsN >= 1)) return null;
   const withdrawalYear1 = fireTargetAt(state, ym) * a.withdrawalRate;
-  const g = a.expenseGrowthReal;
   const r = a.realReturnAnnual;
-  const q = (1 + g) / (1 + r);
+  const q = 1 / (1 + r);
   const target = Math.abs(q - 1) < 1e-12
     ? yearsN * withdrawalYear1
     : withdrawalYear1 * (1 - Math.pow(q, yearsN)) / (1 - q);
@@ -800,8 +801,9 @@ export function projectDieWithZero(state, opts = {}) {
   const now = todayYm(opts.now); // opts.now tylko dla determinizmu testów
   const nowIdx = ymToIdx(now);
 
-  // Klasyczny cel + data FIRE (do porównania).
-  const targetClassic = fireTargetAt(state, now);
+  // Klasyczna data FIRE (do porównania). Cel klasyczny liczony niżej, w TYM
+  // SAMYM miesiącu co cel „do zera" (startYm) — porównanie z dwóch różnych dat
+  // zawyżało „do zera" o wzrost wydatków między dziś a datą FIRE.
   const classicFireYm = proj && proj.reached ? proj.fireYm : null;
 
   // Skan miesiąca osiągnięcia celu „do zera".
@@ -824,7 +826,7 @@ export function projectDieWithZero(state, opts = {}) {
   const hypothetical = fireYm == null;
   const startYm = fireYm != null ? fireYm : now;
   const startAge = ageAt(birth, startYm).years;
-  const g = a.expenseGrowthReal;
+  const targetClassic = fireTargetAt(state, startYm);
   const r = a.realReturnAnnual;
   const inflation = a.inflationAnnual;
   const nominalRate = (1 + r) * (1 + inflation) - 1;
@@ -835,7 +837,7 @@ export function projectDieWithZero(state, opts = {}) {
     return {
       deathAge, startYm, startAge, yearsN: deathAge - startAge,
       target: 0, targetClassic, fireYm, classicFireYm, hypothetical,
-      realRate: r, inflation, expenseGrowth: g, nominalRate,
+      realRate: r, inflation, nominalRate,
       withdrawalYear1: 0, rows: [],
     };
   }
@@ -849,7 +851,7 @@ export function projectDieWithZero(state, opts = {}) {
   for (let n = 1; n <= yearsN; n++) {
     const ym = addMonths(startYm, (n - 1) * 12);
     const startReal = bal;
-    const withdrawalReal = W1 * Math.pow(1 + g, n - 1);
+    const withdrawalReal = W1; // stała realnie — jak w projectWithdrawal
     let endReal = (startReal - withdrawalReal) * (1 + r);
     if (Math.abs(endReal) <= EPS) endReal = 0;
     const growthReal = endReal - (startReal - withdrawalReal);
@@ -871,7 +873,7 @@ export function projectDieWithZero(state, opts = {}) {
   return {
     deathAge, startYm, startAge, yearsN, target, targetClassic,
     fireYm, classicFireYm, hypothetical, realRate: r, inflation,
-    expenseGrowth: g, nominalRate, withdrawalYear1: W1, rows,
+    nominalRate, withdrawalYear1: W1, rows,
   };
 }
 

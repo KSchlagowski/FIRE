@@ -1271,17 +1271,18 @@ test('coach: pierwszy wpis ma własny wariant', () => {
 
 // ── F24: cel „do zera" (die with zero) ──────────────────────────────────
 
-test('F24a: dieWithZeroTargetAt — forma zamknięta (g=0, g=1%, q=1)', () => {
+test('F24a: dieWithZeroTargetAt — forma zamknięta (stała realna wypłata, q=1)', () => {
   const f = FIX.F24;
   const t = E.dieWithZeroTargetAt(baseState(), f.startYm, f.deathAge);
   assertEq(t.yearsN, f.N);
   assertClose(t.target, f.target, f.eps);
   assertClose(t.withdrawalYear1, 72000, 1e-9);
-  // g=1% (N=84) potrafi przewyższyć klasyczny cel.
+  // g nie zmienia celu w tym samym miesiącu (kotwica: W₁ bez wzrostu) —
+  // wydatki po FIRE są stałe realnie, jak w celu klasycznym.
   const g1 = E.dieWithZeroTargetAt(baseState({ assumptions: { expenseGrowthReal: 0.01 } }), f.startYm, f.deathAge);
-  assertClose(g1.target, f.targetG1, f.eps);
-  assertTrue(g1.target > f.classic, 'g=1% cel > klasyczny 1,8 mln');
-  // q=1 (r=0, g=0): cel = N·W₁ = dokładnie 720 000 dla N=10.
+  assertClose(g1.target, f.target, f.eps, 'g działa tylko do FIRE, nie w wypłatach');
+  assertTrue(g1.target < f.classic, 'cel „do zera" < klasyczny 1,8 mln');
+  // q=1 (r=0): cel = N·W₁ = dokładnie 720 000 dla N=10.
   const r0 = E.dieWithZeroTargetAt(baseState({ assumptions: { realReturnAnnual: 0 } }), f.startYm, f.r0.deathAge);
   assertEq(r0.yearsN, f.r0.N);
   assertClose(r0.target, f.r0.target, 1e-6, 'q=1 → arytmetyka całkowita');
@@ -1307,11 +1308,13 @@ test('F24b: projectDieWithZero — tożsamość replay, tabela do 0', () => {
   }
 });
 
-test('F24c: wzrost wypłat o g realnie rocznie', () => {
+test('F24c: wypłaty stałe realnie (g działa tylko do daty FIRE)', () => {
   const st = baseState({ assumptions: { monthlyIncome: 6100, expenseGrowthReal: 0.01 } });
   E.recomputeDerived(st, NOW);
   const z = E.projectDieWithZero(st, { deathAge: 110, projection: st.derived.projection, now: NOW });
-  assertClose(z.rows[1].withdrawalReal, z.rows[0].withdrawalReal * 1.01, 1e-6);
+  for (const r of z.rows) {
+    assertClose(r.withdrawalReal, z.withdrawalYear1, 1e-9, `wypłata stała realnie, rok ${r.year}`);
+  }
 });
 
 test('F24d: monotonia wieku + porównanie z celem klasycznym', () => {
@@ -1336,6 +1339,23 @@ test('F24e: skan FIRE „do zera" ≤ klasyczny; brak oszczędności → hypothe
   const zh = E.projectDieWithZero(hyp, { deathAge: 110, projection: hyp.derived.projection, now: NOW });
   assertEq(zh.hypothetical, true);
   assertEq(zh.startYm, E.todayYm(NOW));
+});
+
+test('F24g: cel klasyczny porównywany w tym samym miesiącu co cel „do zera"', () => {
+  // g=1%: oba cele rosną z wydatkami — porównanie musi być z tej samej daty.
+  const st = baseState({ assumptions: { portfolioStart: 10000, cashStart: 6000, expenseGrowthReal: 0.01 } });
+  E.recomputeDerived(st, NOW);
+  const z = E.projectDieWithZero(st, { deathAge: 80, projection: st.derived.projection, now: NOW });
+  assertEq(z.hypothetical, false);
+  assertClose(z.targetClassic, E.fireTargetAt(st, z.startYm), 1e-9, 'klasyczny liczony w startYm');
+  assertTrue(z.targetClassic > E.fireTargetAt(st, E.todayYm(NOW)), 'w startYm wydatki już urosły (g>0)');
+  assertTrue(z.target < z.targetClassic, 'skończone wypłaty < wieczna renta 4% (ten sam miesiąc)');
+  // Ta sama tożsamość w scenariuszu hipotetycznym (startYm = dziś).
+  const hyp = baseState({ assumptions: { monthlyIncome: 6000, expenseGrowthReal: 0.01 } });
+  E.recomputeDerived(hyp, NOW);
+  const zh = E.projectDieWithZero(hyp, { deathAge: 80, projection: hyp.derived.projection, now: NOW });
+  assertClose(zh.targetClassic, E.fireTargetAt(hyp, zh.startYm), 1e-9);
+  assertTrue(zh.target < zh.targetClassic, 'hipotetycznie również < klasyczny');
 });
 
 test('F24f: strażnicy (brak daty urodzenia, wiek ≤ obecny) + czystość', () => {

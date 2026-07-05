@@ -8,7 +8,7 @@ import * as Mot from './motivation.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.13.1';
+export const APP_VERSION = '1.13.2';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu

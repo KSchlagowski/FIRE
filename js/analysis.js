@@ -236,7 +236,7 @@ export function dieWithZeroResult({ z, deathAgeRaw }) {
     ? `<div class="banner info small">FIRE poza horyzontem prognozy — scenariusz modelowy od dzisiejszego celu „do zera” (${money(z.target)}).</div>`
     : '';
   const summary = kv('Cel „do zera”', money(z.target))
-    + kv('Cel klasyczny (4%)', money(z.targetClassic))
+    + kv('Cel klasyczny (4%, ten sam miesiąc)', money(z.targetClassic))
     + kv('Różnica vs klasyczny', signed(diff), diff <= 0 ? 'good' : 'warn-text')
     + kv('Data FIRE „do zera”', fireCell(z.fireYm, z.classicFireYm))
     + kv('Data FIRE klasyczna', z.classicFireYm ? esc(Fmt.formatMonthName(z.classicFireYm)) : '<span class="warn-text">poza horyzontem</span>')
@@ -258,8 +258,9 @@ export function dieWithZeroResult({ z, deathAgeRaw }) {
   return `${banner}${summary}
     ${table(headers, rows)}
     ${metodologia([
-      `Cel = W₁·(1−qᴺ)/(1−q), q = (1+g)/(1+r) = PV rosnącej renty; portfel = 0 dokładnie w wieku ${z.deathAge} (N = ${z.yearsN} lat wypłat).`,
-      `Wypłata (rok 1) = cel klasyczny × SWR = ${money(z.withdrawalYear1)}/rok; rośnie o g = ${Fmt.formatPct(z.expenseGrowth)} realnie rocznie.`,
+      `Cel = W₁·(1−qᴺ)/(1−q), q = 1/(1+r) = PV renty o stałej realnej wypłacie; portfel = 0 dokładnie w wieku ${z.deathAge} (N = ${z.yearsN} lat wypłat).`,
+      `Wypłata = cel klasyczny × SWR = ${money(z.withdrawalYear1)}/rok, stała realnie (nominalnie rośnie z inflacją) — ten sam model wydatków co klasyczna faza wypłat.`,
+      `Cel klasyczny do porównania liczony w tym samym miesiącu co cel „do zera” (${esc(Fmt.formatMonthGenitive(z.startYm))}) — oba cele rosną z wydatkami, więc porównanie z dwóch dat byłoby mylące.`,
       `Saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r); R realne = ${Fmt.formatPct(z.realRate)}. Kwoty nominalne w cenach roku startu wypłat (indeks cen = 1 w ${esc(Fmt.formatMonthGenitive(z.startYm))}).`,
       'Tabela startuje od dokładnie celu „do zera” (nie od prognozowanej nadwyżki portfela) — dlatego kończy się na 0 zł. Wiek N to pełne lata (podłoga z wieku).',
     ])}`;
