@@ -302,6 +302,10 @@ details.section summary { cursor: pointer; font-weight: 600; min-height: 40px; d
 .chart .axis { stroke: var(--line); stroke-width: 1; }
 .chart .bar-principal { fill: var(--accent); }
 .chart .bar-interest { fill: var(--flame); }
+/* Blade „duchy" kontraktu obok pełnych słupków — opacity zamiast nowych
+   custom propów, więc działa w obu motywach bez zmian w trzech blokach. */
+.chart .bar-principal-ghost { fill: var(--accent); opacity: .35; }
+.chart .bar-interest-ghost { fill: var(--flame); opacity: .35; }
 .chart rect { stroke: var(--card, transparent); stroke-width: .5; }
 .legend { display: flex; flex-wrap: wrap; gap: .75rem; font-size: .75rem; color: var(--muted); margin-top: .3rem; }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }

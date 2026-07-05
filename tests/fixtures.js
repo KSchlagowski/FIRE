@@ -104,4 +104,13 @@ export const FIX = {
     grown: { monthlySpendAtFire: 7176.88 }, // expenseGrowthReal 1%, plan-rok 19
     eps: 0.01,
   },
+  // „Ile zostało do spłaty" + suwak nadpłaty (F26): tylko parametry wejściowe —
+  // wartości oczekiwane liczone w testach z form zamkniętych (annuitet, kredyt F3).
+  F26: {
+    overpayment: 50000, overpayMonth: '2026-03', // wpis nadpłaty na stanie f17State
+    famRate: 0.035,                              // rodzinny z odsetkami dla testu zamrożenia
+    frozenOverride: { month: '2026-06', balanceNominal: 30000 },
+    upOverride: { month: '2026-03', balanceNominal: 50000 }, // hipoteka f20State w górę
+    simple: { bal: 12000, payment: 1000, extra: 1000, months: 6 }, // 0%: rachunek całkowity
+  },
 };

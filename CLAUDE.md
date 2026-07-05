@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (102 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (121 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -267,6 +267,13 @@ future value, spend-at-FIRE + retirement-days incl. an expense-growth variant,
 past-target-age → factor 1, incomplete-profile → null, zero-amount, purity) and
 the seeded message selectors (`checkinCelebration`/`decisionMessage`: unique
 non-empty variants per bucket, seed modulo, negative seed, unknown-key fallback).
+F26 covers the "ile zostało do spłaty" loan charts + overpayment slider:
+`yearlyRemainingToPay` (contract identities `p_k + i_k ≈ A × remaining months`,
+closed-form principal), `loanPathWithProjection` (purity, history→projection seam
+continuity, zero at `debtFreeYm`, the frozen-balance and zero-trim guards),
+`remainingToPayComparison` (two-way zero padding when an upward override outlives
+the contract), and `remainingSchedule`'s `extraMonthly` param (0 ≡ 3-arg call,
+strict monotonicity in X, 0% integer case).
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

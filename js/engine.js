@@ -179,6 +179,23 @@ export function yearlyPrincipalInterest(rows, groupBy = 12) {
   return years;
 }
 
+// „Ile zostało do spłaty" na początku każdego roku kredytu: kapitał (saldo)
+// + wszystkie przyszłe odsetki (suma sufiksowa, jeden przebieg wsteczny).
+// Tożsamość (kontrakt annuitetowy): principal_k + interest_k ≈ A × pozostałe raty.
+export function yearlyRemainingToPay(rows, principal, groupBy = 12) {
+  const suffix = new Array(rows.length + 1).fill(0);
+  for (let i = rows.length - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + rows[i].interest;
+  const years = [];
+  for (let k = 0; k * groupBy < rows.length; k++) {
+    years.push({
+      year: k + 1,
+      principal: k === 0 ? principal : rows[k * groupBy - 1].balNominal,
+      interest: suffix[k * groupBy],
+    });
+  }
+  return years;
+}
+
 // ── Plan fazowy (benchmark, nie stan faktyczny) ─────────────────────────
 // Rata w planie deflowana schodkowo rocznie: A·(1+infl)^−(t−1).
 // Świadomy błąd: benchmark lekko konserwatywny (deflator roczny zamiast miesięcznego).
@@ -1101,11 +1118,11 @@ export function planVsActualStats(entries) {
 }
 
 // Harmonogram "sama rata" od zadanego salda (cap 1200 kroków).
-export function remainingSchedule(balNominal, j, payment) {
+export function remainingSchedule(balNominal, j, payment, extraMonthly = 0) {
   const rows = [];
   let bal = balNominal, totalInterest = 0;
   for (let n = 0; bal > 0 && n < 1200; n++) {
-    const step = mortgageStep(bal, j, payment);
+    const step = mortgageStep(bal, j, payment, extraMonthly);
     bal = step.bal;
     totalInterest += step.interest;
     rows.push({ n: n + 1, balNominal: bal, interest: step.interest });
@@ -1187,6 +1204,52 @@ export function familyLoanAnalytics(state, family, projection) {
     payment: A, rateMonthly: j, lastYm, scheduleRows: rem.rows,
     principal: fl.principal, rateNominal: fl.rateNominal, termMonths: N,
   };
+}
+
+// Miesięczna ścieżka kredytu od startu do spłaty: historia (replay) +
+// prognoza (seria projectFire przeliczona na nominał). Odsetki prognozy
+// odtwarzane jak w mortgageStep: saldo poprzedniego miesiąca × j.
+// Dwa bezpieczniki: ścieżka kończy się na pierwszym zerowym saldzie
+// (spłacony kredyt nie ciągnie zer do horyzontu) oraz na zamrożonym saldzie
+// (prognoza przestaje krokować dług rodzinny po endMonth — korekta w górę
+// zostawiłaby wieczne saldo; nie dorabiamy mu fantomowych odsetek).
+export function loanPathWithProjection(state, loanRes, projection, realField, j) {
+  const infl = state.assumptions.inflationAnnual;
+  const anchor = state.anchorMonth;
+  const path = [];
+  let prevBal = null;
+  for (const r of loanRes.rows) {
+    path.push({ ym: r.ym, balNominal: r.balNominal, interest: r.interest });
+    prevBal = r.balNominal;
+    if (r.balNominal === 0) return path;
+  }
+  for (const r of projection.series) {
+    if (!r.projected) continue;
+    const bal = toNominal(r[realField] || 0, anchor, r.ym, infl);
+    if (prevBal != null && bal > 0 && Math.abs(bal - prevBal) < EPS) break; // saldo zamrożone
+    path.push({ ym: r.ym, balNominal: bal, interest: (prevBal || 0) * j });
+    if (bal === 0) break;
+    prevBal = bal;
+  }
+  return path;
+}
+
+// Zestawienie „ile zostało do spłaty" rok po roku: kontrakt (bez nadpłat)
+// vs ścieżka faktyczna (historia + prognoza). Krótsza strona dopełniana
+// zerami w OBIE strony — korekta salda w górę potrafi wydłużyć ścieżkę
+// faktyczną ponad kontrakt. Dopełnianie tutaj, nie w UI: pod testami Node.
+export function remainingToPayComparison(principal, contractRows, actualRows, groupBy = 12) {
+  const c = yearlyRemainingToPay(contractRows, principal, groupBy);
+  const a = yearlyRemainingToPay(actualRows, principal, groupBy);
+  const rows = [];
+  for (let k = 0; k < Math.max(c.length, a.length); k++) {
+    rows.push({
+      year: k + 1,
+      cPrincipal: c[k] ? c[k].principal : 0, cInterest: c[k] ? c[k].interest : 0,
+      aPrincipal: a[k] ? a[k].principal : 0, aInterest: a[k] ? a[k].interest : 0,
+    });
+  }
+  return rows;
 }
 
 // Statystyki FIRE: FI%, majątek netto (bez wartości domu), runway, Coast FIRE.

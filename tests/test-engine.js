@@ -1438,3 +1438,140 @@ test('F25j: decisionMessage — 5 unikalnych na rodzaj + fallback', () => {
   }
   assertEq(decisionMessage('nieznany', 0), decisionMessage('avoided', 0), 'fallback avoided');
 });
+
+// ── F26: „Ile zostało do spłaty" + suwak nadpłaty ───────────────────────
+
+test('F26a: yearlyRemainingToPay — tożsamości kontraktu (kredyt F3)', () => {
+  const mtg = { principal: 1100000, rateNominal: 0.07, termYears: 15, startMonth: '2026-01', paymentOverrideMonthly: null };
+  const rows = E.amortizationSchedule(mtg);
+  const years = E.yearlyRemainingToPay(rows, mtg.principal);
+  assertEq(years.length, 15, '15 lat kredytu');
+  assertClose(years[0].principal, 1100000, 1e-6, 'rok 1: kapitał = principal');
+  assertClose(years[0].interest, FIX.F17.contractInterest, FIX.F17.eps, 'rok 1: odsetki = Σ odsetek kontraktu');
+  const A = E.mortgagePayment(mtg);
+  years.forEach((yk, i) => {
+    assertClose(yk.principal + yk.interest, A * (180 - 12 * i), 0.05, `rok ${i + 1}: p+i = A × pozostałe raty`);
+  });
+  for (let i = 1; i < years.length; i++) {
+    assertTrue(years[i].principal + years[i].interest < years[i - 1].principal + years[i - 1].interest,
+      `rok ${i + 1}: suma ściśle maleje`);
+  }
+  // Kapitał roku 3 z formy zamkniętej: saldo po 24 ratach.
+  const j = E.monthlyRate(mtg.rateNominal);
+  const p3 = mtg.principal * Math.pow(1 + j, 24) - A * (Math.pow(1 + j, 24) - 1) / j;
+  assertClose(years[2].principal, p3, 0.01, 'rok 3: kapitał z formy zamkniętej');
+});
+
+test('F26b: loanPathWithProjection — czystość, szew historia→prognoza, zero w debtFreeYm', () => {
+  const st = f17State();
+  st.entries.push(entry(FIX.F26.overpayMonth, 60000, 6000, { overpayment: FIX.F26.overpayment }));
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  const ma = E.mortgageAnalytics(st, d.debt, d.projection);
+  const before = JSON.stringify(st);
+  const path = E.loanPathWithProjection(st, d.debt, d.projection, 'debtReal', ma.rateMonthly);
+  assertEq(JSON.stringify(st), before, 'czystość stanu');
+  assertEq(path[0].ym, '2026-01', 'start = start kredytu');
+  for (let i = 1; i < path.length; i++) {
+    assertEq(path[i].ym, E.addMonths(path[i - 1].ym, 1), 'miesiące ciągłe (bez dziury na szwie)');
+  }
+  const histLen = d.debt.rows.length;
+  assertClose(path[histLen].interest, d.debt.balanceNominal * ma.rateMonthly, 0.01,
+    'pierwszy prognozowany miesiąc: odsetki = saldo końca historii × j');
+  const last = path[path.length - 1];
+  assertEq(last.balNominal, 0, 'ścieżka kończy się na saldzie 0');
+  assertEq(last.ym, d.projection.debtFreeYm, 'zero dokładnie w debtFreeYm');
+});
+
+test('F26c: rodzinny bez nadpłat ≡ kontrakt (0%, liczby całkowite)', () => {
+  const st = f20State();
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  const fa = E.familyLoanAnalytics(st, d.family, d.projection);
+  const path = E.loanPathWithProjection(st, d.family, d.projection, 'familyReal', fa.rateMonthly);
+  const contract = E.amortizationScheduleN(24000, 0, 12);
+  assertEq(path.length, contract.length, 'długość = kontrakt (12 mies.)');
+  path.forEach((p, i) => {
+    assertClose(p.balNominal, contract[i].balNominal, 1e-9, `mies. ${i + 1}: saldo`);
+    assertClose(p.interest, contract[i].interest, 1e-9, `mies. ${i + 1}: odsetki`);
+  });
+  const years = E.yearlyRemainingToPay(path, 24000);
+  assertEq(years.length, 1);
+  assertClose(years[0].principal, 24000, 1e-9);
+  assertClose(years[0].interest, 0, 1e-9);
+});
+
+test('F26d: nadpłaty — spłata wcześniej niż kontrakt (miesiące), rocznie a ≤ c', () => {
+  const st = f17State();
+  st.entries.push(entry(FIX.F26.overpayMonth, 60000, 6000, { overpayment: FIX.F26.overpayment }));
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  const ma = E.mortgageAnalytics(st, d.debt, d.projection);
+  const contract = E.amortizationSchedule(st.housing.housePlan.mortgage);
+  const path = E.loanPathWithProjection(st, d.debt, d.projection, 'debtReal', ma.rateMonthly);
+  const payoffYm = path[path.length - 1].ym;
+  assertTrue(E.ymToIdx(payoffYm) < E.ymToIdx(ma.contractPayoffYm), 'spłata przed kontraktem (indeks miesiąca)');
+  const rows = E.remainingToPayComparison(1100000, contract, path);
+  rows.forEach(r => {
+    assertTrue(r.aPrincipal + r.aInterest <= r.cPrincipal + r.cInterest + 1, `rok ${r.year}: z nadpłatami ≤ kontrakt`);
+  });
+});
+
+test('F26e: zamrożone saldo (korekta w górę po oknie) — ścieżka się kończy, bez fantomowych odsetek', () => {
+  const st = f20State({ rateNominal: FIX.F26.famRate });
+  st.debt.familyOverrides = [FIX.F26.frozenOverride];
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  assertTrue(d.projection.familyFreeYm == null, 'dług rodzinny nigdy nie spłacony w prognozie');
+  const fa = E.familyLoanAnalytics(st, d.family, d.projection);
+  const path = E.loanPathWithProjection(st, d.family, d.projection, 'familyReal', fa.rateMonthly);
+  assertEq(path[path.length - 1].ym, '2026-12', 'ścieżka urwana na końcu okna spłaty');
+  assertEq(path.length, 12, '12 wierszy, nie 720');
+  assertTrue(path[path.length - 1].balNominal > 0, 'saldo zamrożone > 0');
+});
+
+test('F26f: korekta w górę → ścieżka dłuższa niż kontrakt, kontrakt dopełniony zerami', () => {
+  const st = f20State();
+  st.debt.overrides = [FIX.F26.upOverride];
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  const ma = E.mortgageAnalytics(st, d.debt, d.projection);
+  const contract = E.amortizationSchedule(st.housing.housePlan.mortgage);
+  const path = E.loanPathWithProjection(st, d.debt, d.projection, 'debtReal', ma.rateMonthly);
+  assertTrue(path.length > contract.length, 'ścieżka faktyczna dłuższa niż kontrakt');
+  const rows = E.remainingToPayComparison(12000, contract, path);
+  assertEq(rows.length, Math.ceil(path.length / 12), 'liczba lat = dłuższa strona');
+  const lastYear = rows[rows.length - 1];
+  assertEq(lastYear.cPrincipal, 0, 'kontrakt dopełniony zerem (kapitał)');
+  assertEq(lastYear.cInterest, 0, 'kontrakt dopełniony zerem (odsetki)');
+  assertTrue(lastYear.aPrincipal > 0, 'strona faktyczna wciąż niesie saldo');
+});
+
+test('F26g: remainingSchedule — extra 0 ≡ wywołanie 3-argumentowe', () => {
+  const j = E.monthlyRate(0.07);
+  const A = E.annuityPayment(1100000, j, 180, null);
+  const a = E.remainingSchedule(1100000, j, A);
+  const b = E.remainingSchedule(1100000, j, A, 0);
+  assertEq(JSON.stringify(b), JSON.stringify(a), 'identyczny wynik');
+});
+
+test('F26h: stała nadpłata — mniej miesięcy i odsetek, monotonicznie w X', () => {
+  const j = E.monthlyRate(0.07);
+  const A = E.annuityPayment(1100000, j, 180, null);
+  let prev = E.remainingSchedule(1100000, j, A);
+  for (const X of [500, 1000, 2000, 5000]) {
+    const cur = E.remainingSchedule(1100000, j, A, X);
+    assertTrue(cur.months < prev.months, `X=${X}: ściśle mniej miesięcy`);
+    assertTrue(cur.totalInterest < prev.totalInterest, `X=${X}: ściśle mniej odsetek`);
+    prev = cur;
+  }
+});
+
+test('F26i: 0% — rachunek całkowity; ogromna nadpłata → 1 miesiąc', () => {
+  const f = FIX.F26.simple;
+  const r = E.remainingSchedule(f.bal, 0, f.payment, f.extra);
+  assertEq(r.months, f.months, '12 000 przy 2 000/mies. → 6 mies.');
+  assertClose(r.totalInterest, 0, 1e-9, 'zero odsetek przy 0%');
+  const one = E.remainingSchedule(f.bal, 0, f.payment, 1e9);
+  assertEq(one.months, 1, 'nadpłata ponad saldo → spłata w 1 miesiąc');
+});

@@ -8,7 +8,7 @@ import * as Mot from './motivation.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.11.0';
+export const APP_VERSION = '1.12.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -166,32 +166,38 @@ export function chartSVG(rows, defs, { height = 170 } = {}) {
 // Słupkowy skumulowany: dla każdego rzędu (rok) pionowy słupek złożony
 // z segmentów (kapitał + odsetki) piętrzonych od 0. Te same konwencje
 // viewBox/osi co chartSVG; etykiety lat na osi X, zł na osi Y.
+// Segment może mieć `group` (domyślnie 0) — grupy stoją obok siebie w rzędzie
+// (kontrakt vs z nadpłatami); skala = maksimum sumy pojedynczej grupy.
+// Dla jednej grupy wzory redukują się dokładnie do wariantu bez grup.
 export function stackedBarSVG(rows, segments, { height = 170 } = {}) {
   if (!rows.length) return '';
   const W = 440, H = height, padL = 48, padR = 8, padT = 10, padB = 20;
+  const G = 1 + Math.max(0, ...segments.map(s => s.group || 0));
   let max = 0;
   for (const r of rows) {
-    let sum = 0;
-    for (const s of segments) sum += Math.max(0, s.get(r) || 0);
-    max = Math.max(max, sum);
+    const sums = new Array(G).fill(0);
+    for (const s of segments) sums[s.group || 0] += Math.max(0, s.get(r) || 0);
+    max = Math.max(max, ...sums);
   }
   if (max <= 0) max = 1;
   const n = rows.length;
   const innerW = W - padL - padR;
   const slot = innerW / n;
-  const bw = Math.max(2, Math.min(slot * 0.7, 28));
+  const bw = Math.max(2, Math.min(slot * 0.7 / G, 28));
   const y = v => padT + (1 - Math.min(v, max) / max) * (H - padT - padB);
   const y0 = y(0), yM = y(max), yH = y(max / 2);
   const bars = [];
   rows.forEach((r, i) => {
     const cx = padL + slot * (i + 0.5);
-    let base = 0;
+    const bases = new Array(G).fill(0);
     for (const s of segments) {
+      const g = s.group || 0;
       const v = Math.max(0, s.get(r) || 0);
       if (v <= 0) continue;
-      const yTop = y(base + v), yBot = y(base);
-      bars.push(`<rect class="${s.cls}" x="${(cx - bw / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, yBot - yTop).toFixed(1)}"/>`);
-      base += v;
+      const gx = cx + (g - (G - 1) / 2) * (bw + 1);
+      const yTop = y(bases[g] + v), yBot = y(bases[g]);
+      bars.push(`<rect class="${s.cls}" x="${(gx - bw / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, yBot - yTop).toFixed(1)}"/>`);
+      bases[g] += v;
     }
   });
   const labelStep = Math.ceil(n / 8);
@@ -1217,16 +1223,36 @@ function renderAnaliza() {
       ])
       : '';
 
-    const debtChart = meltChart(ma, d.debt, 'debtReal');
-    const mtgBar = ma ? piBars(E.yearlyPrincipalInterest(E.amortizationSchedule(hp.mortgage))) : '';
-    const familyChart = meltChart(fa, fam, 'familyReal');
-    const flBar = fa && hp.familyLoan
-      ? piBars(E.yearlyPrincipalInterest(
-        E.amortizationScheduleN(hp.familyLoan.principal, hp.familyLoan.rateNominal, E.familyLoanTermMonths(hp.familyLoan), hp.familyLoan.paymentOverrideMonthly)))
-      : '';
+    // Słupki „ile zostało do spłaty": kapitał NA odsetkach (odwrotnie niż
+    // struktura rat), kontrakt jako blade tło obok pełnej ścieżki faktycznej.
+    const remainingBars = (analytics, loanRes, realField, contractRows, principal) => {
+      if (!analytics || !contractRows.length) return '';
+      const actual = E.loanPathWithProjection(state, loanRes, proj, realField, analytics.rateMonthly);
+      const rows = E.remainingToPayComparison(principal, contractRows, actual);
+      return rows.length
+        ? stackedBarSVG(rows, [
+          { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
+          { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
+          { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
+          { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
+        ])
+        : '';
+    };
 
-    body = (ma ? An.mortgageCard({ ma, chartHTML: debtChart, barHTML: mtgBar }) : '')
-      + (fa ? An.familyLoanCard({ fa, chartHTML: familyChart, barHTML: flBar }) : '');
+    // Harmonogramy kontraktowe liczone raz — współdzielone przez oba wykresy.
+    const mtgSched = ma ? E.amortizationSchedule(hp.mortgage) : [];
+    const flSched = fa && hp.familyLoan
+      ? E.amortizationScheduleN(hp.familyLoan.principal, hp.familyLoan.rateNominal, E.familyLoanTermMonths(hp.familyLoan), hp.familyLoan.paymentOverrideMonthly)
+      : [];
+    const debtChart = meltChart(ma, d.debt, 'debtReal');
+    const mtgBar = mtgSched.length ? piBars(E.yearlyPrincipalInterest(mtgSched)) : '';
+    const familyChart = meltChart(fa, fam, 'familyReal');
+    const flBar = flSched.length ? piBars(E.yearlyPrincipalInterest(flSched)) : '';
+    const mtgRemaining = ma ? remainingBars(ma, d.debt, 'debtReal', mtgSched, hp.mortgage.principal) : '';
+    const flRemaining = fa ? remainingBars(fa, fam, 'familyReal', flSched, hp.familyLoan.principal) : '';
+
+    body = (ma ? An.mortgageCard({ ma, chartHTML: debtChart, barHTML: mtgBar, remainingBarHTML: mtgRemaining }) : '')
+      + (fa ? An.familyLoanCard({ fa, chartHTML: familyChart, barHTML: flBar, remainingBarHTML: flRemaining }) : '');
   }
 
   view().innerHTML = seg + body;
@@ -1272,6 +1298,8 @@ let symAge = '';          // Cel: wiek FIRE
 let symLatte = '';        // Efekt małych wydatków
 let symMore = null;       // Suwak „oszczędzaj więcej" (zł/mies.)
 let symReturn = null;     // Suwak „wpływ zwrotu" (realny zwrot roczny, ułamek)
+let symOverpay = 500;     // Suwak „nadpłata kredytu" (zł/mies.)
+let symOverpayLoan = 'mortgage'; // Nadpłata: który kredyt (mortgage/family)
 
 const SYM_CAP = 100000;   // górny limit dopłaty w „Cel: wiek FIRE"
 
@@ -1326,6 +1354,45 @@ function renderSymulacja() {
     return Sim.moreSavingsResult({ extra, sim, baseFireYm });
   };
 
+  // ── Nadpłata kredytu: analityka tylko dla aktywnych (saldo > 0) długów ──
+  const hp = state.housing.housePlan;
+  const houseOn = !!(hp && hp.enabled);
+  const opMa = houseOn && d.debt.active ? E.mortgageAnalytics(state, d.debt, proj) : null;
+  const opFa = houseOn && d.family && d.family.active ? E.familyLoanAnalytics(state, d.family, proj) : null;
+  const showNadplata = !!(opMa || opFa);
+  if (symTab === 'nadplata' && !showNadplata) symTab = 'cojesli';
+  const opLoans = [
+    ...(opMa ? [{ key: 'mortgage', label: 'Kredyt 🏠' }] : []),
+    ...(opFa ? [{ key: 'family', label: 'Dług rodzinny 👨‍👩‍👧' }] : []),
+  ];
+  if (symOverpayLoan === 'family' ? !opFa : !opMa) symOverpayLoan = opLoans.length ? opLoans[0].key : 'mortgage';
+
+  const overpayResult = () => {
+    const an = symOverpayLoan === 'family' ? opFa : opMa;
+    if (!an) return '';
+    const X = symOverpay == null ? 0 : Number(symOverpay);
+    if (!X) return '<p class="muted small">Przesuń suwak, aby zobaczyć efekt stałej nadpłaty.</p>';
+    const base = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment);
+    const sim = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment, X);
+    const chartRows = E.remainingToPayComparison(an.balanceNominal, base.rows, sim.rows);
+    const chartHTML = chartRows.length
+      ? stackedBarSVG(chartRows, [
+        { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
+        { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
+        { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
+        { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
+      ])
+      : '';
+    return Sim.overpaymentResult({
+      amount: X,
+      basePayoffYm: E.addMonths(an.lastYm, base.months),
+      payoffYm: E.addMonths(an.lastYm, sim.months),
+      monthsSaved: base.months - sim.months,
+      interestSaved: base.totalInterest - sim.totalInterest,
+      chartHTML,
+    });
+  };
+
   const retMin = Math.round((a.realReturnAnnual - 0.03) * 1000) / 1000;
   const retMax = Math.round((a.realReturnAnnual + 0.03) * 1000) / 1000;
   const returnResult = () => {
@@ -1342,6 +1409,7 @@ function renderSymulacja() {
     ['latte', 'Małe wydatki'],
     ['wiecej', 'Więcej'],
     ['zwrot', 'Zwrot'],
+    ...(showNadplata ? [['nadplata', 'Nadpłata']] : []),
   ];
   const seg = `<div class="seg seg-scroll" role="tablist">${tabs.map(([k, l]) =>
     `<button type="button" data-symtab="${k}" class="${symTab === k ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`;
@@ -1355,12 +1423,15 @@ function renderSymulacja() {
     body = Sim.latteCard({ amountValue: symLatte, resultHTML: latteResult() });
   } else if (symTab === 'wiecej') {
     body = Sim.moreSavingsCard({ value: symMore, max: moreMax, resultHTML: moreResult() });
+  } else if (symTab === 'nadplata') {
+    body = Sim.overpaymentCard({ loans: opLoans, activeLoan: symOverpayLoan, amount: symOverpay, maxAmount: moreMax, resultHTML: overpayResult() });
   } else {
     body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
   }
 
   // Zakładki dokładające kwotę do planu — przypomnij, że liczy się sama nadwyżka.
-  const note = symTab === 'zwrot' ? '' : Sim.nadwyzkaNote();
+  // Nie dotyczy „Zwrotu" ani „Nadpłaty" (czysty rachunek kredytowy).
+  const note = symTab === 'zwrot' || symTab === 'nadplata' ? '' : Sim.nadwyzkaNote();
 
   view().innerHTML = seg + body + note;
 
@@ -1393,6 +1464,17 @@ function renderSymulacja() {
       $('#sym-more-val').textContent = Fmt.formatPLN(Number(symMore));
       $('#sym-more-result').innerHTML = moreResult();
     });
+  } else if (symTab === 'nadplata') {
+    const opEl = $('#sym-overpay');
+    if (opEl) opEl.addEventListener('input', () => {
+      symOverpay = opEl.value;
+      $('#sym-overpay-val').textContent = Fmt.formatPLN(Number(symOverpay));
+      $('#sym-overpay-result').innerHTML = overpayResult();
+    });
+    $$('[data-oploan]').forEach(el => el.addEventListener('click', () => {
+      symOverpayLoan = el.dataset.oploan;
+      renderSymulacja();
+    }));
   } else {
     const retEl = $('#sym-return');
     if (retEl) retEl.addEventListener('input', () => {

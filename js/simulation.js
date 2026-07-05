@@ -172,6 +172,48 @@ export function moreSavingsCard({ value, max, resultHTML }) {
   </div>`;
 }
 
+// ── 4a. Nadpłata kredytu (suwak) ─────────────────────────────────────────
+// Kalkulator czysto kredytowy: punktem wyjścia jest spłata „przy samej racie"
+// (bieżące saldo + rata kontraktowa) — niezależnie od strategii prognozy FIRE,
+// która i tak nadpłaca kredyt hipoteczny nadwyżką. Nic nie zapisujemy.
+
+export function overpaymentResult({ amount, basePayoffYm, payoffYm, monthsSaved, interestSaved, chartHTML }) {
+  return [
+    kv('Spłata przy samej racie', esc(Fmt.formatMonthName(basePayoffYm))),
+    kv(`Spłata z nadpłatą ${money(amount)}/mies.`, esc(Fmt.formatMonthName(payoffYm))),
+    kv('Szybciej o', monthsSaved > 0 ? Fmt.formatYearsMonths(monthsSaved) : '—', monthsSaved > 0 ? 'good' : ''),
+    kv('Odsetki zaoszczędzone', money(Math.round(interestSaved)), interestSaved > 0.005 ? 'good' : ''),
+    chartHTML ? `<h3>Ile zostało do spłaty: kapitał + przyszłe odsetki</h3>${chartHTML}
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>kapitał</span>
+        <span><i style="background:var(--flame)"></i>odsetki</span>
+        <span><i style="background:var(--accent);opacity:.35"></i><i style="background:var(--flame);opacity:.35"></i>sama rata (blade)</span>
+        <span><i style="background:var(--accent)"></i><i style="background:var(--flame)"></i>z nadpłatą (pełne)</span>
+      </div>` : '',
+  ].join('');
+}
+
+export function overpaymentCard({ loans, activeLoan, amount, maxAmount, resultHTML }) {
+  const v = amount == null ? 0 : Number(amount);
+  const toggle = loans.length > 1
+    ? `<div class="seg" role="tablist">${loans.map(l =>
+      `<button type="button" data-oploan="${l.key}" class="${l.key === activeLoan ? 'on' : ''}">${l.label}</button>`).join('')}</div>`
+    : '';
+  return `<div class="card"><h2>Nadpłata kredytu 🧮</h2>
+    <p class="muted small">Stała miesięczna nadpłata ponad ratę — zobacz, o ile skraca spłatę i ile odsetek oszczędza. Czysta symulacja, niczego nie zapisujemy.</p>
+    ${toggle}
+    <label class="field"><span class="lbl">Nadpłata <b id="sym-overpay-val">${esc(Fmt.formatPLN(v))}</b>/mies.</span>
+      <input type="range" id="sym-overpay" min="0" max="${maxAmount}" step="100" value="${v}">
+    </label>
+    <div id="sym-overpay-result">${resultHTML}</div>
+    ${metodologia([
+      'Punkt wyjścia to spłata „przy samej racie”: bieżące saldo + rata kontraktowa, bez nadpłat. Prognoza FIRE i tak nadpłaca kredyt hipoteczny całą nadwyżką — ten kalkulator odpowiada na ogólniejsze „co daje stała nadpłata X”, niezależnie od tej strategii.',
+      'Nadpłata dochodzi do raty w każdym miesiącu aż do spłaty; nadwyżka ostatniego miesiąca nie przepada w rachunku odsetek.',
+      'Słupek = stan na początku roku spłaty: saldo kapitału + wszystkie przyszłe odsetki.',
+    ])}
+  </div>`;
+}
+
 // ── 5. Wpływ zwrotu (suwak) ──────────────────────────────────────────────
 
 export function returnResult({ newReturn, baseReturn, sim, baseFireYm }) {

@@ -324,7 +324,24 @@ function barLegend() {
   return `<div class="legend"><span><i style="background:var(--accent)"></i>kapitał</span><span><i style="background:var(--flame)"></i>odsetki</span></div>`;
 }
 
-export function mortgageCard({ ma, chartHTML, barHTML }) {
+// Legenda słupków „ile zostało do spłaty": kolory jak wyżej, blade = kontrakt.
+function remainingLegend(overLabel) {
+  return `<div class="legend">
+    <span><i style="background:var(--accent)"></i>kapitał</span>
+    <span><i style="background:var(--flame)"></i>odsetki</span>
+    <span><i style="background:var(--accent);opacity:.35"></i><i style="background:var(--flame);opacity:.35"></i>kontrakt (blade)</span>
+    <span><i style="background:var(--accent)"></i><i style="background:var(--flame)"></i>${overLabel}</span>
+  </div>`;
+}
+
+// Sekcja „ile zostało do spłaty" (współdzielona przez oba kredyty).
+function remainingSection(remainingBarHTML, overLabel) {
+  if (!remainingBarHTML) return '';
+  return `<h3>Ile zostało do spłaty: kapitał + przyszłe odsetki</h3>${remainingBarHTML}${remainingLegend(overLabel)}
+    <p class="muted small">Słupek = stan na początku roku kredytu: saldo kapitału + wszystkie przyszłe odsetki. Pełne słupki kończą się wcześniej niż blade — to miesiące szybszej wolności od długu.</p>`;
+}
+
+export function mortgageCard({ ma, chartHTML, barHTML, remainingBarHTML }) {
   const saved = ma.interestSavedSoFar;
   return `<div class="card"><h2>Kredyt 🏠</h2>
     ${kv('Saldo (nominalnie)', money(ma.balanceNominal))}
@@ -332,6 +349,7 @@ export function mortgageCard({ ma, chartHTML, barHTML }) {
     ${kv('Kapitał spłacony', money(ma.paidPrincipal))}
     ${kv('Nadpłaty łącznie', money(ma.overpaidTotal))}
     ${kv('Odsetki pozostałe (sama rata)', money(ma.scheduleOnlyRemainingInterest))}
+    ${kv('Pozostało do spłaty (sama rata)', money(ma.balanceNominal + ma.scheduleOnlyRemainingInterest))}
     ${kv('Oszczędność z nadpłat (dotychczas)', money(saved), saved > 0.005 ? 'good' : '')}
     ${ma.monthsAheadOfContract > 0 ? kv('Przed harmonogramem kontraktu', `${ma.monthsAheadOfContract} mies.`, 'good') : ''}
     ${kv('Spłata wg kontraktu', esc(Fmt.formatMonthName(ma.contractPayoffYm)))}
@@ -339,19 +357,21 @@ export function mortgageCard({ ma, chartHTML, barHTML }) {
     ${kv('Spłata prognozowana (z nadpłatami)', ma.projectedPayoffYm ? esc(Fmt.formatMonthName(ma.projectedPayoffYm)) : '—')}
     ${chartHTML ? `<h3>Saldo nominalne: sama rata vs z nadpłatami</h3>${chartHTML}
       <div class="legend"><span><i style="background:var(--danger)"></i>historia + prognoza z nadpłatami</span><span><i style="background:var(--muted)"></i>sama rata</span></div>` : ''}
+    ${remainingSection(remainingBarHTML, 'z nadpłatami (pełne)')}
     ${barHTML ? `<h3>Struktura rat: kapitał vs odsetki</h3>${barHTML}${barLegend()}
       <p class="muted small">Rozkład kontraktowy (bez nadpłat) po latach kredytu — odsetki maleją, kapitał rośnie.</p>` : ''}
     ${metodologia([
       `Rata = ${money(ma.payment, 2)}/mies. (annuitet, nominalnie — kredyt to jeden z dwóch nominalnych kontraktów, obok długu rodzinnego).`,
       `Oszczędność = Σ odsetek kontraktu − zapłacone − pozostałe wg harmonogramu = ${money(ma.contractTotalInterest)} − ${money(ma.paidInterest)} − ${money(ma.scheduleOnlyRemainingInterest)} = ${money(saved)}`,
       'Prognoza „z nadpłatami” zakłada strategię aplikacji: cała miesięczna nadwyżka nadpłaca kredyt, nadmiar wraca do portfela.',
+      'Wykres „Ile zostało do spłaty”: na początku każdego roku kredytu saldo kapitału + suma wszystkich przyszłych odsetek; blade słupki = kontrakt bez nadpłat, pełne = historia z nadpłatami + prognoza.',
     ])}
   </div>`;
 }
 
 // ── 6a. Dług rodzinny ───────────────────────────────────────────────────
 
-export function familyLoanCard({ fa, chartHTML, barHTML }) {
+export function familyLoanCard({ fa, chartHTML, barHTML, remainingBarHTML }) {
   const saved = fa.interestSavedSoFar;
   return `<div class="card"><h2>Dług rodzinny 👨‍👩‍👧</h2>
     ${kv('Saldo (nominalnie)', money(fa.balanceNominal))}
@@ -359,6 +379,7 @@ export function familyLoanCard({ fa, chartHTML, barHTML }) {
     ${kv('Kapitał spłacony', money(fa.paidPrincipal))}
     ${kv('Nadpłaty łącznie', money(fa.overpaidTotal))}
     ${kv('Odsetki pozostałe (sama rata)', money(fa.scheduleOnlyRemainingInterest))}
+    ${kv('Pozostało do spłaty (sama rata)', money(fa.balanceNominal + fa.scheduleOnlyRemainingInterest))}
     ${kv('Oszczędność z nadpłat (dotychczas)', money(saved), saved > 0.005 ? 'good' : '')}
     ${fa.monthsAheadOfContract > 0 ? kv('Przed harmonogramem kontraktu', `${fa.monthsAheadOfContract} mies.`, 'good') : ''}
     ${kv('Spłata wg kontraktu', esc(Fmt.formatMonthName(fa.contractPayoffYm)))}
@@ -366,12 +387,14 @@ export function familyLoanCard({ fa, chartHTML, barHTML }) {
     ${kv('Spłata prognozowana (z nadpłatami)', fa.projectedPayoffYm ? esc(Fmt.formatMonthName(fa.projectedPayoffYm)) : '—')}
     ${chartHTML ? `<h3>Saldo nominalne: sama rata vs z nadpłatami</h3>${chartHTML}
       <div class="legend"><span><i style="background:var(--danger)"></i>historia + prognoza z nadpłatami</span><span><i style="background:var(--muted)"></i>sama rata</span></div>` : ''}
+    ${remainingSection(remainingBarHTML, 'z nadpłatami (tylko jawne z check-inu)')}
     ${barHTML ? `<h3>Struktura rat: kapitał vs odsetki</h3>${barHTML}${barLegend()}
       <p class="muted small">Rozkład kontraktowy (bez nadpłat) po latach spłaty.</p>` : ''}
     ${metodologia([
       `Rata = ${money(fa.payment, 2)}/mies. (annuitet z okna spłaty, nominalnie — dług rodzinny to drugi nominalny kontrakt w aplikacji).`,
       `Oszczędność = Σ odsetek kontraktu − zapłacone − pozostałe wg harmonogramu = ${money(fa.contractTotalInterest)} − ${money(fa.paidInterest)} − ${money(fa.scheduleOnlyRemainingInterest)} = ${money(saved)}`,
       'Dług rodzinny ma harmonogram stały — nie jest agresywnie nadpłacany; przyspieszają go tylko jawne nadpłaty z check-inu.',
+      'Wykres „Ile zostało do spłaty”: na początku każdego roku spłaty saldo kapitału + suma wszystkich przyszłych odsetek; blade słupki = kontrakt, pełne = historia (z jawnymi nadpłatami) + prognoza.',
     ])}
   </div>`;
 }
