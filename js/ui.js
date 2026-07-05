@@ -8,7 +8,7 @@ import * as Mot from './motivation.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.13.0';
+export const APP_VERSION = '1.13.1';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1374,8 +1374,9 @@ function renderSymulacja() {
   const overpayResult = () => {
     const an = symOverpayLoan === 'family' ? opFa : opMa;
     if (!an) return '';
-    const X = symOverpay == null ? 0 : Number(symOverpay);
-    if (!X) return '<p class="muted small">Przesuń suwak, aby zobaczyć efekt stałej nadpłaty.</p>';
+    const raw = symOverpay == null ? '' : String(symOverpay);
+    const X = raw.trim() === '' ? 0 : Fmt.parsePLN(raw);
+    if (X == null || X < 0) return '<div class="field-error">Podaj nadpłatę: 0 lub więcej.</div>';
     const base = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment);
     const sim = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment, X);
     const chartRows = E.remainingToPayComparison(an.balanceNominal, base.rows, sim.rows);
@@ -1421,10 +1422,12 @@ function renderSymulacja() {
     const N = Math.round(T * 12);
     if (!(N > 0)) return '<p class="muted small">Podaj okres kredytu w latach.</p>'; // annuityPayment rzuca dla N<=0
     const payment = E.annuityPayment(P, j, N);
-    const extra = symLoanOp == null ? 0 : Number(symLoanOp);
+    const rawOp = symLoanOp == null ? '' : String(symLoanOp);
+    const extra = rawOp.trim() === '' ? 0 : Fmt.parsePLN(rawOp);
+    if (extra == null || extra < 0) return '<div class="field-error">Podaj nadpłatę: 0 lub więcej.</div>';
     const base = E.remainingSchedule(P, j, payment);
     const sim = extra > 0 ? E.remainingSchedule(P, j, payment, extra) : base;
-    const chartRows = extra > 0 ? E.remainingToPayComparison(P, base.rows, sim.rows) : [];
+    const chartRows = E.remainingToPayComparison(P, base.rows, sim.rows);
     const chartHTML = chartRows.length
       ? stackedBarSVG(chartRows, [
         { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
@@ -1471,9 +1474,9 @@ function renderSymulacja() {
   } else if (symTab === 'wiecej') {
     body = Sim.moreSavingsCard({ value: symMore, max: moreMax, resultHTML: moreResult() });
   } else if (symTab === 'kredyt') {
-    body = Sim.loanCalcCard({ principal: loanP, rate: loanR, term: loanT, amount: symLoanOp, maxAmount: moreMax, resultHTML: loanCalcResult() });
+    body = Sim.loanCalcCard({ principal: loanP, rate: loanR, term: loanT, amount: symLoanOp, resultHTML: loanCalcResult() });
   } else if (symTab === 'nadplata') {
-    body = Sim.overpaymentCard({ loans: opLoans, activeLoan: symOverpayLoan, amount: symOverpay, maxAmount: moreMax, resultHTML: overpayResult() });
+    body = Sim.overpaymentCard({ loans: opLoans, activeLoan: symOverpayLoan, amount: symOverpay, resultHTML: overpayResult() });
   } else {
     body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
   }
@@ -1521,14 +1524,12 @@ function renderSymulacja() {
     const opEl = $('#sym-loan-op');
     if (opEl) opEl.addEventListener('input', () => {
       symLoanOp = opEl.value;
-      $('#sym-loan-op-val').textContent = Fmt.formatPLN(Number(symLoanOp));
       $('#sym-loan-result').innerHTML = loanCalcResult();
     });
   } else if (symTab === 'nadplata') {
     const opEl = $('#sym-overpay');
     if (opEl) opEl.addEventListener('input', () => {
       symOverpay = opEl.value;
-      $('#sym-overpay-val').textContent = Fmt.formatPLN(Number(symOverpay));
       $('#sym-overpay-result').innerHTML = overpayResult();
     });
     $$('[data-oploan]').forEach(el => el.addEventListener('click', () => {

@@ -193,8 +193,8 @@ export function overpaymentResult({ amount, basePayoffYm, payoffYm, monthsSaved,
   ].join('');
 }
 
-export function overpaymentCard({ loans, activeLoan, amount, maxAmount, resultHTML }) {
-  const v = amount == null ? 0 : Number(amount);
+export function overpaymentCard({ loans, activeLoan, amount, resultHTML }) {
+  const v = amount == null ? '' : String(amount);
   const toggle = loans.length > 1
     ? `<div class="seg" role="tablist">${loans.map(l =>
       `<button type="button" data-oploan="${l.key}" class="${l.key === activeLoan ? 'on' : ''}">${l.label}</button>`).join('')}</div>`
@@ -202,8 +202,8 @@ export function overpaymentCard({ loans, activeLoan, amount, maxAmount, resultHT
   return `<div class="card"><h2>Nadpłata kredytu 🧮</h2>
     <p class="muted small">Stała miesięczna nadpłata ponad ratę — zobacz, o ile skraca spłatę i ile odsetek oszczędza. Czysta symulacja, niczego nie zapisujemy.</p>
     ${toggle}
-    <label class="field"><span class="lbl">Nadpłata <b id="sym-overpay-val">${esc(Fmt.formatPLN(v))}</b>/mies.</span>
-      <input type="range" id="sym-overpay" min="0" max="${maxAmount}" step="100" value="${v}">
+    <label class="field"><span class="lbl">Nadpłata <span class="muted">(zł/mies.)</span></span>
+      <input type="text" inputmode="decimal" id="sym-overpay" value="${esc(v)}" placeholder="np. 500">
     </label>
     <div id="sym-overpay-result">${resultHTML}</div>
     ${metodologia([
@@ -224,27 +224,23 @@ export function loanCalcResult({ payment, baseMonths, extra, simMonths, baseInte
   const rows = [
     kv('Rata miesięczna', money(payment, 2)),
     kv('Spłata przy samej racie', esc(Fmt.formatYearsMonths(baseMonths))),
+    kv(`Spłata z nadpłatą ${money(extra)}/mies.`, esc(Fmt.formatYearsMonths(simMonths))),
+    kv('Szybciej o', baseMonths - simMonths > 0 ? Fmt.formatYearsMonths(baseMonths - simMonths) : '—', baseMonths - simMonths > 0 ? 'good' : ''),
+    kv('Odsetki łącznie (sama rata)', money(Math.round(baseInterest))),
+    kv('Odsetki zaoszczędzone', money(Math.round(interestSaved)), interestSaved > 0.005 ? 'good' : ''),
+    chartHTML ? `<h3>Ile zostało do spłaty: kapitał + przyszłe odsetki</h3>${chartHTML}
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>kapitał</span>
+        <span><i style="background:var(--flame)"></i>odsetki</span>
+        <span><i style="background:var(--accent);opacity:.35"></i><i style="background:var(--flame);opacity:.35"></i>sama rata (blade)</span>
+        <span><i style="background:var(--accent)"></i><i style="background:var(--flame)"></i>z nadpłatą (pełne)</span>
+      </div>` : '',
   ];
-  if (extra > 0) {
-    rows.push(
-      kv(`Spłata z nadpłatą ${money(extra)}/mies.`, esc(Fmt.formatYearsMonths(simMonths))),
-      kv('Szybciej o', baseMonths - simMonths > 0 ? Fmt.formatYearsMonths(baseMonths - simMonths) : '—', baseMonths - simMonths > 0 ? 'good' : ''),
-      kv('Odsetki łącznie (sama rata)', money(Math.round(baseInterest))),
-      kv('Odsetki zaoszczędzone', money(Math.round(interestSaved)), interestSaved > 0.005 ? 'good' : ''),
-      chartHTML ? `<h3>Ile zostało do spłaty: kapitał + przyszłe odsetki</h3>${chartHTML}
-        <div class="legend">
-          <span><i style="background:var(--accent)"></i>kapitał</span>
-          <span><i style="background:var(--flame)"></i>odsetki</span>
-          <span><i style="background:var(--accent);opacity:.35"></i><i style="background:var(--flame);opacity:.35"></i>sama rata (blade)</span>
-          <span><i style="background:var(--accent)"></i><i style="background:var(--flame)"></i>z nadpłatą (pełne)</span>
-        </div>` : '',
-    );
-  }
   return rows.join('');
 }
 
-export function loanCalcCard({ principal, rate, term, amount, maxAmount, resultHTML }) {
-  const v = amount == null ? 0 : Number(amount);
+export function loanCalcCard({ principal, rate, term, amount, resultHTML }) {
+  const v = amount == null ? '' : String(amount);
   return `<div class="card"><h2>Kalkulator kredytu 🧮</h2>
     <p class="muted small">Policz ratę i amortyzację kredytu, którego jeszcze nie masz — plus efekt stałej nadpłaty. Czysta symulacja, niczego nie zapisujemy.</p>
     <label class="field"><span class="lbl">Kwota kredytu (zł)</span>
@@ -253,8 +249,8 @@ export function loanCalcCard({ principal, rate, term, amount, maxAmount, resultH
       <input type="text" inputmode="decimal" id="sym-loan-rate" value="${esc(String(rate))}"></label>
     <label class="field"><span class="lbl">Okres kredytu (lata)</span>
       <input type="text" inputmode="numeric" id="sym-loan-term" value="${esc(String(term))}"></label>
-    <label class="field"><span class="lbl">Nadpłata <b id="sym-loan-op-val">${esc(Fmt.formatPLN(v))}</b>/mies.</span>
-      <input type="range" id="sym-loan-op" min="0" max="${maxAmount}" step="100" value="${v}">
+    <label class="field"><span class="lbl">Nadpłata <span class="muted">(zł/mies.)</span></span>
+      <input type="text" inputmode="decimal" id="sym-loan-op" value="${esc(v)}" placeholder="np. 500">
     </label>
     <div id="sym-loan-result">${resultHTML}</div>
     ${metodologia([
