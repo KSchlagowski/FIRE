@@ -57,6 +57,7 @@ function baseState(partial = {}) {
       expenseGrowthReal: 0,
       incomeGrowthReal: 0,
       inflationAnnual: 0.03,
+      postRetirementReturnReal: 0.05, // == realReturnAnnual → liczby F13/F24 bez zmian
     },
     housing: { currentRentMonthly: 0 },
   }, partial), NOW);
@@ -452,20 +453,35 @@ test('F11: odzysk z .bak po korupcji', () => {
   assertEq(res.state.assumptions.monthlyIncome, 10000, '.bak trzyma poprzedni pełny zapis');
 });
 
-test('F11: v2 round-trip = identyczność; migracja v1→v2; nowsza wersja odrzucona', () => {
+test('F11: v3 round-trip; migracja v1→2→3 i v2→3; nowsza wersja odrzucona', () => {
   const st = baseState();
-  assertEq(st.version, 2, 'nowy stan = v2');
-  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 2);
-  // v1 (bez długu rodzinnego) → v2: dokładany familyLoan (wyłączony) + familyOverrides.
+  assertEq(st.version, 3, 'nowy stan = v3');
+  assertEq(st.version, S.SCHEMA_VERSION, 'engine i storage zsynchronizowane');
+  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 3);
+  // v2 → v3: dokładany realny zwrot po FIRE (obligacje) — domyślnie 2%.
+  const v2 = JSON.parse(JSON.stringify(st));
+  v2.version = 2;
+  delete v2.assumptions.postRetirementReturnReal;
+  const m2 = S.migrate(S.validateState(v2));
+  assertEq(m2.version, 3);
+  assertEq(m2.assumptions.postRetirementReturnReal, 0.02, 'domyślna marża EDO 2%');
+  // Istniejąca jawna wartość przeżywa migrację bez zmian.
+  const v2b = JSON.parse(JSON.stringify(st));
+  v2b.version = 2;
+  v2b.assumptions.postRetirementReturnReal = 0.03;
+  assertEq(S.migrate(S.validateState(v2b)).assumptions.postRetirementReturnReal, 0.03, 'jawna wartość nietknięta');
+  // v1 (bez długu rodzinnego, bez zwrotu po FIRE) → łańcuch 1→2→3 w jednym przebiegu.
   const v1 = JSON.parse(JSON.stringify(st));
   v1.version = 1;
   delete v1.housing.housePlan.familyLoan;
   delete v1.debt.familyOverrides;
+  delete v1.assumptions.postRetirementReturnReal;
   const migrated = S.migrate(S.validateState(v1));
-  assertEq(migrated.version, 2);
+  assertEq(migrated.version, 3);
   assertTrue(migrated.housing.housePlan.familyLoan && migrated.housing.housePlan.familyLoan.enabled === false, 'familyLoan dodany, wyłączony');
   assertTrue(Array.isArray(migrated.debt.familyOverrides) && migrated.debt.familyOverrides.length === 0, 'familyOverrides = []');
-  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99/v3 odrzucona');
+  assertEq(migrated.assumptions.postRetirementReturnReal, 0.02, 'zwrot po FIRE dodany w łańcuchu');
+  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99/v4 odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: 'inna-apka', version: 1, state: {} })), 'obcy plik odrzucony');
 });
 
@@ -659,7 +675,8 @@ test('F13b: domyślny start = fireYm z portfelem z serii', () => {
 
 test('F13c: r=0 → wyczerpanie dokładnie w roku 10', () => {
   const f = FIX.F13.depletionR0;
-  const st = baseState({ assumptions: { realReturnAnnual: 0 } });
+  // Faza wypłat czyta teraz zwrot po FIRE — zerujemy go, by uzyskać r=0.
+  const st = baseState({ assumptions: { realReturnAnnual: 0, postRetirementReturnReal: 0 } });
   const w = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: f.startReal });
   assertEq(w.depletedYear, f.years);
   assertEq(w.rows.length, f.years);
@@ -1292,8 +1309,8 @@ test('F24a: dieWithZeroTargetAt — forma zamknięta (stała realna wypłata, q=
   const g1 = E.dieWithZeroTargetAt(baseState({ assumptions: { expenseGrowthReal: 0.01 } }), f.startYm, f.deathAge);
   assertClose(g1.target, f.target, f.eps, 'g działa tylko do FIRE, nie w wypłatach');
   assertTrue(g1.target < f.classic, 'cel „do zera" < klasyczny 1,8 mln');
-  // q=1 (r=0): cel = N·W₁ = dokładnie 720 000 dla N=10.
-  const r0 = E.dieWithZeroTargetAt(baseState({ assumptions: { realReturnAnnual: 0 } }), f.startYm, f.r0.deathAge);
+  // q=1 (r=0): cel = N·W₁ = dokładnie 720 000 dla N=10. Faza wypłat = zwrot po FIRE.
+  const r0 = E.dieWithZeroTargetAt(baseState({ assumptions: { realReturnAnnual: 0, postRetirementReturnReal: 0 } }), f.startYm, f.r0.deathAge);
   assertEq(r0.yearsN, f.r0.N);
   assertClose(r0.target, f.r0.target, 1e-6, 'q=1 → arytmetyka całkowita');
 });
@@ -1640,4 +1657,76 @@ test('F26i: 0% — rachunek całkowity; ogromna nadpłata → 1 miesiąc', () =>
   assertClose(r.totalInterest, 0, 1e-9, 'zero odsetek przy 0%');
   const one = E.remainingSchedule(f.bal, 0, f.payment, 1e9);
   assertEq(one.months, 1, 'nadpłata ponad saldo → spłata w 1 miesiąc');
+});
+
+// ── F27/F28: obligacje po FIRE (postRetirementReturnReal) ────────────────
+
+test('F27a: retirementOpts — domyślna, override, fallback, czystość', () => {
+  const st = E.createState();
+  assertEq(E.retirementOpts(st).postReturnReal, 0.02, 'nowy stan → domyślna marża EDO 2%');
+  assertEq(E.retirementOpts(st, { postReturnReal: 0.045 }).postReturnReal, 0.045, 'override wygrywa');
+  // Brak założenia w stanie → fallback 0.02.
+  const noField = E.createState();
+  delete noField.assumptions.postRetirementReturnReal;
+  assertEq(E.retirementOpts(noField).postReturnReal, 0.02, 'brak pola → 0.02');
+  // Czystość: stan nie mutowany.
+  const before = JSON.stringify(st);
+  E.retirementOpts(st, { postReturnReal: 0.03 });
+  assertEq(JSON.stringify(st), before, 'stan nietknięty');
+});
+
+test('F27b: projectWithdrawal — szew niesie zwrot po FIRE, liczby F13 zachowane', () => {
+  const f = FIX.F13;
+  const st = baseState(); // postRetirementReturnReal 0.05 == realReturnAnnual
+  const w = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: f.startReal });
+  assertEq(w.ro.postReturnReal, 0.05, 'ro niesie zwrot po FIRE z założeń');
+  assertClose(w.nominalRate, f.nominalRate, 1e-9, 'nominalRate F13 zachowany przez szew');
+  assertClose(w.rows[0].endReal, f.year1.endReal, f.eps, 'liczby F13 bez zmian');
+});
+
+test('F27c: przełącznik na obligacje wyczerpuje portfel 4% (kontrola formy zamkniętej)', () => {
+  const f = FIX.F27.depleted;
+  const st = baseState({ assumptions: { postRetirementReturnReal: f.rPost } });
+  const w = E.projectWithdrawal(st, {
+    startYm: '2026-07', startPortfolioReal: f.start,
+    withdrawalRealYearly: f.wYear, years: 40,
+  });
+  assertEq(w.depletedYear, f.year, 'depleted w roku z fixtury');
+  // Kontrola: najmniejsze N z W₁·(1−q^N)/(1−q) > P₀, q = 1/(1+rPost).
+  const q = 1 / (1 + f.rPost);
+  let N = 1;
+  while (!(f.wYear * (1 - Math.pow(q, N)) / (1 - q) > f.start)) N++;
+  assertEq(w.depletedYear, N, 'zgodność z formą zamkniętą renty');
+});
+
+test('F27f: createState().version == SCHEMA_VERSION (strażnik synchronizacji modułów)', () => {
+  assertEq(E.createState().version, S.SCHEMA_VERSION, 'engine (L0) i storage zsynchronizowane');
+});
+
+test('F28a: dieWithZeroTargetAt — parytet legacy z jawnym ro 0.05', () => {
+  const f = FIX.F24;
+  const ro = { postReturnReal: 0.05 };
+  const t = E.dieWithZeroTargetAt(baseState(), f.startYm, f.deathAge, ro);
+  assertClose(t.target, f.target, f.eps, 'cel „do zera" F24 odtworzony');
+  const r0 = E.dieWithZeroTargetAt(baseState(), f.startYm, f.r0.deathAge, { postReturnReal: 0 });
+  assertClose(r0.target, f.r0.target, 1e-6, 'q=1 (r=0) → 720 000');
+});
+
+test('F28d: czułość — niższy zwrot po FIRE podnosi cel „do zera"; ścieżka what-if działa', () => {
+  const f = FIX.F24;
+  const st = baseState();
+  const tLow = E.dieWithZeroTargetAt(st, f.startYm, f.deathAge, { postReturnReal: 0.02 }).target;
+  const tHigh = E.dieWithZeroTargetAt(st, f.startYm, f.deathAge, { postReturnReal: 0.05 }).target;
+  assertTrue(tLow > tHigh, 'niższy zwrot → wyższy cel „do zera"');
+  // What-if end-to-end przez projectDieWithZero. Zerowe oszczędności (dochód =
+  // wydatki) → portfel nie dogoni celu → hypothetical, startYm = dziś dla obu
+  // przebiegów, więc porównanie celów jest czyste (bez przesunięcia miesiąca skanu).
+  const base = baseState({ assumptions: { monthlyIncome: 6000 } });
+  E.recomputeDerived(base, NOW);
+  const proj = base.derived.projection;
+  const zLow = E.projectDieWithZero(base, { deathAge: 90, projection: proj, now: NOW, ro: { postReturnReal: 0.02 } });
+  const zHigh = E.projectDieWithZero(base, { deathAge: 90, projection: proj, now: NOW, ro: { postReturnReal: 0.05 } });
+  assertTrue(zLow.hypothetical && zLow.startYm === zHigh.startYm, 'oba hipotetyczne, ten sam startYm');
+  assertEq(zLow.realRate, 0.02, 'realRate niesie zwrot po FIRE z what-if');
+  assertTrue(zLow.target > zHigh.target, 'niższy zwrot → wyższy cel (ścieżka what-if)');
 });

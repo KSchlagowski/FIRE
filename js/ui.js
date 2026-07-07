@@ -8,7 +8,7 @@ import * as Mot from './motivation.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.13.2';
+export const APP_VERSION = '1.14.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1304,6 +1304,7 @@ let symLoanP = null;   // Kalkulator kredytu: kwota (null = użyj seeda)
 let symLoanR = null;   // Kalkulator kredytu: oprocentowanie roczne % (null = seed)
 let symLoanT = null;   // Kalkulator kredytu: okres w latach (null = seed)
 let symLoanOp = 0;     // Kalkulator kredytu: nadpłata zł/mies.
+let symRetPost = null; // Emerytura: zwrot po FIRE (ułamek; null = z ustawień)
 
 const SYM_CAP = 100000;   // górny limit dopłaty w „Cel: wiek FIRE"
 
@@ -1452,12 +1453,21 @@ function renderSymulacja() {
     return Sim.returnResult({ newReturn, baseReturn: a.realReturnAnnual, sim, baseFireYm });
   };
 
+  const retirementResult = () => {
+    const ro = E.retirementOpts(state, symRetPost == null ? {} : { postReturnReal: Number(symRetPost) });
+    const dz = E.projectDieWithZero(state, { deathAge: 90, projection: proj, ro });
+    const dzBase = E.projectDieWithZero(state, { deathAge: 90, projection: proj });
+    const w = E.projectWithdrawal(state, { projection: proj, ro });
+    return Sim.retirementResult({ ro, dz, dzBase, w, deathAge: 90 });
+  };
+
   const tabs = [
     ['cojesli', 'Co jeśli?'],
     ['wiek', 'Cel: wiek'],
     ['latte', 'Małe wydatki'],
     ['wiecej', 'Więcej'],
     ['zwrot', 'Zwrot'],
+    ['emerytura', 'Emerytura'],
     ['kredyt', 'Kredyt'],
     ...(showNadplata ? [['nadplata', 'Nadpłata']] : []),
   ];
@@ -1477,13 +1487,18 @@ function renderSymulacja() {
     body = Sim.loanCalcCard({ principal: loanP, rate: loanR, term: loanT, amount: symLoanOp, resultHTML: loanCalcResult() });
   } else if (symTab === 'nadplata') {
     body = Sim.overpaymentCard({ loans: opLoans, activeLoan: symOverpayLoan, amount: symOverpay, resultHTML: overpayResult() });
+  } else if (symTab === 'emerytura') {
+    body = Sim.retirementCard({
+      value: symRetPost == null ? a.postRetirementReturnReal : Number(symRetPost),
+      base: a.postRetirementReturnReal, resultHTML: retirementResult(),
+    });
   } else {
     body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
   }
 
   // Zakładki dokładające kwotę do planu — przypomnij, że liczy się sama nadwyżka.
-  // Nie dotyczy „Zwrotu" ani „Nadpłaty" (czysty rachunek kredytowy).
-  const note = symTab === 'zwrot' || symTab === 'nadplata' || symTab === 'kredyt' ? '' : Sim.nadwyzkaNote();
+  // Nie dotyczy „Zwrotu", „Nadpłaty", „Kredytu" ani „Emerytury" (czyste podglądy).
+  const note = symTab === 'zwrot' || symTab === 'nadplata' || symTab === 'kredyt' || symTab === 'emerytura' ? '' : Sim.nadwyzkaNote();
 
   view().innerHTML = seg + body + note;
 
@@ -1536,6 +1551,13 @@ function renderSymulacja() {
       symOverpayLoan = el.dataset.oploan;
       renderSymulacja();
     }));
+  } else if (symTab === 'emerytura') {
+    const postEl = $('#sym-ret-post');
+    if (postEl) postEl.addEventListener('input', () => {
+      symRetPost = postEl.value;
+      $('#sym-ret-post-val').textContent = Fmt.formatPct(Number(symRetPost));
+      $('#sym-ret-result').innerHTML = retirementResult();
+    });
   } else {
     const retEl = $('#sym-return');
     if (retEl) retEl.addEventListener('input', () => {
@@ -1597,6 +1619,8 @@ function renderPlanFire() {
     ${field({ id: 'pl-gexp', label: 'Realny wzrost wydatków', suffix: '%/rok', value: pctVal(a.expenseGrowthReal), tipText: 'Cel ruchomy: kwota FIRE rośnie razem z planowanym wzrostem stylu życia.' })}
     ${field({ id: 'pl-ginc', label: 'Realny wzrost dochodów', suffix: '%/rok', value: pctVal(a.incomeGrowthReal), tipText: '3% realnie rocznie to ambitne podwyżki. Ustaw 0 dla ostrożnej prognozy.' })}
     ${field({ id: 'pl-cashret', label: 'Realny zwrot z gotówki', suffix: '%/rok', value: pctVal(a.cashReturnReal), tipText: 'Lokaty ≈ inflacja, stąd domyślnie 0% realnie.' })}
+    <h3>Po przejściu na FIRE</h3>
+    ${field({ id: 'pl-postret', label: 'Realny zwrot po FIRE', suffix: '%/rok', value: pctVal(a.postRetirementReturnReal), tipText: 'Po przejściu na FIRE wiele osób przenosi pieniądze w bezpieczniejsze miejsca, np. obligacje skarbowe. Detaliczne obligacje 10-letnie (EDO) płacą inflację + ok. 2% marży — ta marża to Twój realny zysk. Wpisz, ile ponad inflację ma zarabiać portfel, gdy przestaniesz pracować. Mniejszy zwrot = portfel wolniej się odbudowuje, więc musi być większy na starcie.' })}
   </div>
   <button id="pl-save" class="primary wide">Zapisz</button>
   ${planBack}`;
@@ -1613,6 +1637,7 @@ function renderPlanFire() {
       ['gexp', () => parsePct('pl-gexp')],
       ['ginc', () => parsePct('pl-ginc')],
       ['cashret', () => parsePct('pl-cashret')],
+      ['postret', () => parsePct('pl-postret')],
     ];
     const vals = {};
     for (const [k, get] of specs) { const r = get(); if (r.error) return planFail(`Popraw pola formularza: ${r.error}`); vals[k] = r.value; }
@@ -1622,7 +1647,7 @@ function renderPlanFire() {
     Object.assign(state.assumptions, {
       targetFireAge: vals.fireage, withdrawalRate: vals.wr, realReturnAnnual: vals.ret,
       inflationAnnual: vals.infl, expenseGrowthReal: vals.gexp, incomeGrowthReal: vals.ginc,
-      cashReturnReal: vals.cashret,
+      cashReturnReal: vals.cashret, postRetirementReturnReal: vals.postret,
     });
     try { E.recomputeDerived(state); } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
     persist();

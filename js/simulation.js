@@ -12,6 +12,7 @@ function esc(s) {
 }
 
 const money = (v, dec = 0) => Fmt.formatPLN(v, dec);
+const signed = v => (v >= 0 ? '+' : '') + money(v);
 
 function kv(label, val, cls = '') {
   return `<div class="kv"><span>${label}</span><b${cls ? ` class="${cls}"` : ''}>${val}</b></div>`;
@@ -285,5 +286,45 @@ export function returnCard({ value, min, max, baseReturn, resultHTML }) {
       'Suwak zmienia tylko realny zwrot roczny i przelicza całą prognozę (± 3 pp wokół Twojego założenia).',
       'Pokrywa się z tabelą Wrażliwość w Analizie — tu jest interaktywnie.',
     ])}
+  </div>`;
+}
+
+// ── 6. Emerytura po FIRE: zwrot po FIRE (suwak) ──────────────────────────
+
+export function retirementResult({ ro, dz, dzBase, w, deathAge }) {
+  if (dz == null) {
+    return '<p class="muted">Uzupełnij datę urodzenia w Plan → Profil, aby policzyć fazę emerytalną.</p>';
+  }
+  const diff = dz.target - dzBase.target;
+  let longevity;
+  if (w.depletedYear) {
+    const k = w.depletedYear;
+    const age = w.rows[k - 1] ? w.rows[k - 1].age : null;
+    longevity = kv('Portfel przy Twojej stopie wypłat wystarcza',
+      `do wieku ${age != null ? age : '—'} <span class="muted small">(${k}. rok wypłat)</span>`, 'warn-text');
+  } else {
+    longevity = kv('Portfel przy Twojej stopie wypłat wystarcza', `ponad ${w.rows.length} lat`, 'good');
+  }
+  return [
+    kv(`Cel „do zera” (do wieku ${deathAge})`, money(dz.target)),
+    kv('Zmiana vs Twoje ustawienie', signed(diff), diff <= 0 ? 'good' : 'warn-text'),
+    kv('Data FIRE „do zera”', fireCell(dz.fireYm, dzBase.fireYm)),
+    longevity,
+    metodologia([
+      'Każda zmiana przelicza fazę wypłat od nowa: po FIRE portfel rośnie o podany realny zwrot, a wypłaty pokrywają Twoje wydatki.',
+      'Niczego nie zapisujemy — to podgląd; ustawienie na stałe jest w Plan → Profil i FIRE.',
+    ]),
+  ].join('');
+}
+
+export function retirementCard({ value, base, resultHTML }) {
+  const v = value == null ? base : Number(value);
+  return `<div class="card"><h2>Emerytura po FIRE 🏖️</h2>
+    <p class="muted small">Po przejściu na FIRE wiele osób przenosi pieniądze w bezpieczniejsze instrumenty, np. obligacje skarbowe — portfel rośnie wolniej, więc musi wystarczyć na dłużej. Przesuń suwak i sprawdź, co to zmienia. Czysta symulacja — niczego nie zapisujemy.</p>
+    <label class="field"><span class="lbl">Realny zwrot po FIRE <b id="sym-ret-post-val">${esc(Fmt.formatPct(v))}</b></span>
+      <input type="range" id="sym-ret-post" min="0" max="0.06" step="0.0025" value="${v}">
+    </label>
+    <p class="muted small">Twoje ustawienie: ${esc(Fmt.formatPct(base))}</p>
+    <div id="sym-ret-result">${resultHTML}</div>
   </div>`;
 }

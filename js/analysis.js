@@ -207,12 +207,14 @@ export function withdrawalCard({ w, chartHTML }) {
   const depletionWarn = w.depletedYear
     ? `<div class="banner danger small">⚠️ Portfel wyczerpuje się w ${w.depletedYear}. roku wypłat — rozważ niższą stopę wypłat lub większy portfel.</div>`
     : '';
+  const postRateBanner = `<div class="banner info small">Po FIRE portfel pracuje na ${Fmt.formatPct(w.realRate)} realnie — tak, jakby pieniądze leżały w bezpieczniejszych instrumentach (np. obligacjach). Zmienisz to w Plan → Profil i FIRE.</div>`;
   return `<div class="card"><h2>Faza wypłat 🏖️</h2>
-    ${banner}${depletionWarn}
+    ${banner}${postRateBanner}${depletionWarn}
     ${chartHTML ? `${chartHTML}<div class="legend"><span><i style="background:var(--accent)"></i>saldo (— realnie, ⋯ nominalnie)</span></div>` : ''}
     ${table(headers, rows)}
     ${metodologia([
       `Wypłata (rok 1) = cel × SWR = ${money(target)} × ${Fmt.formatPct(w.swr)} = ${money(w.withdrawalRealYearly)}/rok; rośnie z inflacją ${Fmt.formatPct(w.inflation)}.`,
+      `Po FIRE portfel rośnie o realny zwrot po FIRE (${Fmt.formatPct(w.realRate)}), nie o zwrot z fazy oszczędzania — po przejściu na emeryturę zwykle inwestuje się bezpieczniej.`,
       `R nominalne = (1+${Fmt.formatPct(w.realRate)})·(1+${Fmt.formatPct(w.inflation)}) − 1 = ${Fmt.formatPct(w.nominalRate)}`,
       'Saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r) — rekurencja w dzisiejszych zł; kolumny nominalne = realne × (1+inflacja)^n.',
       `Kwoty nominalne w złotówkach z cen roku przejścia na FIRE (indeks cen = 1 w ${esc(Fmt.formatMonthGenitive(w.startYm))}).`,
@@ -262,6 +264,7 @@ export function dieWithZeroResult({ z, deathAgeRaw }) {
       `Wypłata = cel klasyczny × SWR = ${money(z.withdrawalYear1)}/rok, stała realnie (nominalnie rośnie z inflacją) — ten sam model wydatków co klasyczna faza wypłat.`,
       `Cel klasyczny do porównania liczony w tym samym miesiącu co cel „do zera” (${esc(Fmt.formatMonthGenitive(z.startYm))}) — oba cele rosną z wydatkami, więc porównanie z dwóch dat byłoby mylące.`,
       `Saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r); R realne = ${Fmt.formatPct(z.realRate)}. Kwoty nominalne w cenach roku startu wypłat (indeks cen = 1 w ${esc(Fmt.formatMonthGenitive(z.startYm))}).`,
+      `Portfel rośnie o realny zwrot po FIRE (${Fmt.formatPct(z.realRate)}) — ustawisz go w Plan → Profil i FIRE.`,
       'Tabela startuje od dokładnie celu „do zera” (nie od prognozowanej nadwyżki portfela) — dlatego kończy się na 0 zł. Wiek N to pełne lata (podłoga z wieku).',
     ])}`;
 }

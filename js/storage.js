@@ -1,7 +1,7 @@
 // storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
 // migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const KEY = 'fireApp';
 export const BAK = 'fireApp.bak';
 export const APP_TAG = 'fire-companion';
@@ -53,7 +53,14 @@ export function migrate(s) {
       if (!Array.isArray(cur.debt.familyOverrides)) cur.debt.familyOverrides = [];
       cur.version = 2;
       // fall-through
-    case 2:
+    case 2: {
+      // v2 → v3: realny zwrot po FIRE (obligacje) — domyślnie marża EDO 2%.
+      const a = cur.assumptions || (cur.assumptions = {});
+      if (typeof a.postRetirementReturnReal !== 'number') a.postRetirementReturnReal = 0.02;
+      cur.version = 3;
+    }
+    // fall-through
+    case 3:
       break;
     default:
       throw new Error(`Nieznana wersja schematu: ${cur.version}`);

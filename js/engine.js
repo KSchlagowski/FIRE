@@ -711,11 +711,24 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
 // Funkcje czyste, liczone przy renderze ekranu #/analiza — NIE w
 // recomputeDerived (potrzebne tylko tam, a recompute biegnie po każdej mutacji).
 
+// ── Faza emerytalna: opcje ──────────────────────────────────────────────
+// Jeden znormalizowany obiekt opcji fazy emerytalnej (wypłat). Domyślne wartości
+// z zapisanych założeń; `overrides` to what-ify z Symulacji (nic nie zapisują).
+// Kolejne pola (mrożenie wydatków, ZUS…) dojdą tu w przyszłych funkcjach.
+export function retirementOpts(state, overrides = {}) {
+  const a = state.assumptions;
+  return {
+    postReturnReal: overrides.postReturnReal != null ? overrides.postReturnReal
+      : (a.postRetirementReturnReal != null ? a.postRetirementReturnReal : 0.02),
+  };
+}
+
 // Faza wypłat: rekurencja w REALNYCH zł, kolumny nominalne pochodne.
 // Epoka nominalna = startYm (indeks cen 1 w miesiącu przejścia na FIRE —
 // konwencja arkusza Faza wypłat): start_n = real·(1+i)^(n−1), end_n = real·(1+i)^n.
 export function projectWithdrawal(state, opts = {}) {
   const a = state.assumptions;
+  const ro = opts.ro || retirementOpts(state);
   const proj = opts.projection || null;
   const reached = !!(proj && proj.reached);
   const hypothetical = opts.startYm == null && !reached;
@@ -727,7 +740,7 @@ export function projectWithdrawal(state, opts = {}) {
   }
   const years = opts.years || 35;
   const swr = a.withdrawalRate;
-  const realRate = a.realReturnAnnual;
+  const realRate = ro.postReturnReal;
   const inflation = a.inflationAnnual;
   const nominalRate = (1 + realRate) * (1 + inflation) - 1;
   const withdrawalRealYearly = opts.withdrawalRealYearly != null
@@ -763,7 +776,7 @@ export function projectWithdrawal(state, opts = {}) {
   }
   return {
     startYm, startAge, hypothetical, swr, realRate, inflation, nominalRate,
-    withdrawalRealYearly, priceFactorAtStart, rows, depletedYear,
+    withdrawalRealYearly, priceFactorAtStart, rows, depletedYear, ro,
   };
 }
 
@@ -772,15 +785,16 @@ export function projectWithdrawal(state, opts = {}) {
 // ten sam model wydatków co cel klasyczny i projectWithdrawal (expenseGrowthReal
 // działa tylko do daty FIRE, przez W₁). Portfel rośnie realnie o r. Rozwiązanie
 // P_N = 0 daje PV renty (annuity-due): cel = W₁·(1−q^N)/(1−q), q = 1/(1+r);
-// dla q ≈ 1 (r = 0) → cel = N·W₁.
-export function dieWithZeroTargetAt(state, ym, deathAge) {
+// dla q ≈ 1 (r = 0) → cel = N·W₁. Portfel rośnie realnie o zwrot po FIRE
+// (obligacje) z `ro.postReturnReal`, nie o zwrot z fazy oszczędzania.
+export function dieWithZeroTargetAt(state, ym, deathAge, ro = retirementOpts(state)) {
   const a = state.assumptions;
   const birth = state.profile.birthDate;
   if (!birth) return null;
   const yearsN = deathAge - ageAt(birth, ym).years;
   if (!(yearsN >= 1)) return null;
   const withdrawalYear1 = fireTargetAt(state, ym) * a.withdrawalRate;
-  const r = a.realReturnAnnual;
+  const r = ro.postReturnReal;
   const q = 1 / (1 + r);
   const target = Math.abs(q - 1) < 1e-12
     ? yearsN * withdrawalYear1
@@ -794,6 +808,7 @@ export function dieWithZeroTargetAt(state, ym, deathAge) {
 // W₁ rośnie z latami planu). Analiza-only; nie zmienia projectFire ani warunku FIRE.
 export function projectDieWithZero(state, opts = {}) {
   const a = state.assumptions;
+  const ro = opts.ro || retirementOpts(state);
   const birth = state.profile.birthDate;
   if (!birth) return null;
   const deathAge = opts.deathAge != null ? opts.deathAge : 110;
@@ -826,7 +841,7 @@ export function projectDieWithZero(state, opts = {}) {
       if (ymToIdx(r.ym) < nowIdx) continue;
       if (ymToIdx(r.ym) < gateIdx) continue;
       if (ageAt(birth, r.ym).years >= deathAge) break;
-      const t = dieWithZeroTargetAt(state, r.ym, deathAge);
+      const t = dieWithZeroTargetAt(state, r.ym, deathAge, ro);
       if (!t) continue;
       const settled = (r.debtReal || 0) <= EPS && (r.familyReal || 0) <= EPS;
       if (settled && r.portfolio >= t.target - EPS) {
@@ -841,18 +856,18 @@ export function projectDieWithZero(state, opts = {}) {
   const startYm = fireYm != null ? fireYm : now;
   const startAge = ageAt(birth, startYm).years;
   const targetClassic = fireTargetAt(state, startYm);
-  const r = a.realReturnAnnual;
+  const r = ro.postReturnReal;
   const inflation = a.inflationAnnual;
   const nominalRate = (1 + r) * (1 + inflation) - 1;
 
   // Wiek ≤ obecny → brak lat wypłat: marker (rows puste), UI pokazuje field-error.
-  if (dz == null) dz = dieWithZeroTargetAt(state, startYm, deathAge);
+  if (dz == null) dz = dieWithZeroTargetAt(state, startYm, deathAge, ro);
   if (dz == null) {
     return {
       deathAge, startYm, startAge, yearsN: deathAge - startAge,
       target: 0, targetClassic, fireYm, classicFireYm, hypothetical,
       realRate: r, inflation, nominalRate,
-      withdrawalYear1: 0, rows: [],
+      withdrawalYear1: 0, rows: [], ro,
     };
   }
 
@@ -887,7 +902,7 @@ export function projectDieWithZero(state, opts = {}) {
   return {
     deathAge, startYm, startAge, yearsN, target, targetClassic,
     fireYm, classicFireYm, hypothetical, realRate: r, inflation,
-    nominalRate, withdrawalYear1: W1, rows,
+    nominalRate, withdrawalYear1: W1, rows, ro,
   };
 }
 
@@ -1379,12 +1394,13 @@ export function defaultAssumptions() {
     expenseGrowthReal: 0.01,
     incomeGrowthReal: 0.03,
     inflationAnnual: 0.03,
+    postRetirementReturnReal: 0.02, // realny zwrot po FIRE (marża EDO, przed podatkiem)
   };
 }
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 2,
+    version: 3,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },
