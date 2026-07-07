@@ -5,10 +5,11 @@ import * as Fmt from './format.js';
 import * as An from './analysis.js';
 import * as Sim from './simulation.js';
 import * as Mot from './motivation.js';
+import { chartSVG, stackedBarSVG } from './charts.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.15.0';
+export const APP_VERSION = '1.16.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -113,107 +114,6 @@ function parsePct(id, { required = true, min = -0.5, max = 1 } = {}) {
   return { value: p };
 }
 
-function formatShort(x) {
-  const a = Math.abs(x);
-  if (a >= 1e6) return (x / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace('.', ',').replace(/,0$/, '') + ' mln';
-  if (a >= 1e3) return Math.round(x / 1e3) + ' tys.';
-  return String(Math.round(x));
-}
-
-// ── Wykres SVG (≤120 punktów po decymacji) ──────────────────────────────
-
-export function chartSVG(rows, defs, { height = 170 } = {}) {
-  if (!rows.length) return '';
-  const step = Math.ceil(rows.length / 120);
-  const pts = rows.filter((_, i) => i % step === 0 || i === rows.length - 1);
-  const W = 440, H = height, padL = 48, padR = 8, padT = 10, padB = 20;
-  let max = 0;
-  for (const r of pts) for (const d of defs) max = Math.max(max, d.get(r) || 0);
-  if (max <= 0) max = 1;
-  const x = i => padL + i * (W - padL - padR) / Math.max(1, pts.length - 1);
-  const y = v => padT + (1 - Math.min(v, max) / max) * (H - padT - padB);
-  const lines = [];
-  for (const d of defs) {
-    if (d.split) {
-      const hist = [], proj = [];
-      pts.forEach((r, i) => {
-        const p = `${x(i).toFixed(1)},${y(d.get(r) || 0).toFixed(1)}`;
-        if (r.projected) { if (proj.length === 0 && hist.length) proj.push(hist[hist.length - 1]); proj.push(p); }
-        else hist.push(p);
-      });
-      if (hist.length > 1) lines.push(`<polyline class="${d.cls}" points="${hist.join(' ')}"/>`);
-      if (proj.length > 1) lines.push(`<polyline class="${d.clsProj || d.cls}" points="${proj.join(' ')}"/>`);
-    } else {
-      const p = pts.map((r, i) => `${x(i).toFixed(1)},${y(d.get(r) || 0).toFixed(1)}`);
-      lines.push(`<polyline class="${d.cls}" points="${p.join(' ')}"/>`);
-    }
-  }
-  const y0 = y(0), yM = y(max), yH = y(max / 2);
-  const first = pts[0].ym.slice(0, 4), last = pts[pts.length - 1].ym.slice(0, 4);
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">
-    <line class="axis" x1="${padL}" y1="${y0}" x2="${W - padR}" y2="${y0}"/>
-    <line class="axis" x1="${padL}" y1="${yM}" x2="${W - padR}" y2="${yM}" opacity=".4"/>
-    <line class="axis" x1="${padL}" y1="${yH}" x2="${W - padR}" y2="${yH}" opacity=".4"/>
-    <text x="${padL - 4}" y="${y0 + 3}" text-anchor="end">0</text>
-    <text x="${padL - 4}" y="${yH + 3}" text-anchor="end">${formatShort(max / 2)}</text>
-    <text x="${padL - 4}" y="${yM + 3}" text-anchor="end">${formatShort(max)}</text>
-    <text x="${padL}" y="${H - 4}">${first}</text>
-    <text x="${W - padR}" y="${H - 4}" text-anchor="end">${last}</text>
-    ${lines.join('')}
-  </svg>`;
-}
-
-// Słupkowy skumulowany: dla każdego rzędu (rok) pionowy słupek złożony
-// z segmentów (kapitał + odsetki) piętrzonych od 0. Te same konwencje
-// viewBox/osi co chartSVG; etykiety lat na osi X, zł na osi Y.
-// Segment może mieć `group` (domyślnie 0) — grupy stoją obok siebie w rzędzie
-// (kontrakt vs z nadpłatami); skala = maksimum sumy pojedynczej grupy.
-// Dla jednej grupy wzory redukują się dokładnie do wariantu bez grup.
-export function stackedBarSVG(rows, segments, { height = 170 } = {}) {
-  if (!rows.length) return '';
-  const W = 440, H = height, padL = 48, padR = 8, padT = 10, padB = 20;
-  const G = 1 + Math.max(0, ...segments.map(s => s.group || 0));
-  let max = 0;
-  for (const r of rows) {
-    const sums = new Array(G).fill(0);
-    for (const s of segments) sums[s.group || 0] += Math.max(0, s.get(r) || 0);
-    max = Math.max(max, ...sums);
-  }
-  if (max <= 0) max = 1;
-  const n = rows.length;
-  const innerW = W - padL - padR;
-  const slot = innerW / n;
-  const bw = Math.max(2, Math.min(slot * 0.7 / G, 28));
-  const y = v => padT + (1 - Math.min(v, max) / max) * (H - padT - padB);
-  const y0 = y(0), yM = y(max), yH = y(max / 2);
-  const bars = [];
-  rows.forEach((r, i) => {
-    const cx = padL + slot * (i + 0.5);
-    const bases = new Array(G).fill(0);
-    for (const s of segments) {
-      const g = s.group || 0;
-      const v = Math.max(0, s.get(r) || 0);
-      if (v <= 0) continue;
-      const gx = cx + (g - (G - 1) / 2) * (bw + 1);
-      const yTop = y(bases[g] + v), yBot = y(bases[g]);
-      bars.push(`<rect class="${s.cls}" x="${(gx - bw / 2).toFixed(1)}" y="${yTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, yBot - yTop).toFixed(1)}"/>`);
-      bases[g] += v;
-    }
-  });
-  const labelStep = Math.ceil(n / 8);
-  const xLabels = rows.map((r, i) => (i % labelStep === 0 || i === n - 1)
-    ? `<text x="${(padL + slot * (i + 0.5)).toFixed(1)}" y="${H - 4}" text-anchor="middle">${esc(String(r.year))}</text>` : '').join('');
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">
-    <line class="axis" x1="${padL}" y1="${y0}" x2="${W - padR}" y2="${y0}"/>
-    <line class="axis" x1="${padL}" y1="${yM}" x2="${W - padR}" y2="${yM}" opacity=".4"/>
-    <line class="axis" x1="${padL}" y1="${yH}" x2="${W - padR}" y2="${yH}" opacity=".4"/>
-    <text x="${padL - 4}" y="${y0 + 3}" text-anchor="end">0</text>
-    <text x="${padL - 4}" y="${yH + 3}" text-anchor="end">${formatShort(max / 2)}</text>
-    <text x="${padL - 4}" y="${yM + 3}" text-anchor="end">${formatShort(max)}</text>
-    ${bars.join('')}${xLabels}
-  </svg>`;
-}
-
 function ringSVG(pct, sublabel = 'celu FIRE') {
   const r = 80, c = 2 * Math.PI * r;
   const dash = Math.max(0, Math.min(pct, 1)) * c;
@@ -231,6 +131,76 @@ function ringSVG(pct, sublabel = 'celu FIRE') {
   </div>`;
 }
 
+// ── Wykres na pełnym ekranie ────────────────────────────────────────────
+// Rejestr domknięć przebudowujących wykres, po jednym na miejsce (key). Wykres
+// idzie do czystych builderów jako gotowy string, więc warstwy niżej nie zmieniają
+// sygnatur; tutaj owijamy go przyciskiem „⛶" i zapamiętujemy closure `build`,
+// którą nakładka woła ponownie w dowolnym rozmiarze. Klucze stałe per miejsce →
+// podmiany (suwaki, pola) NADPISUJĄ wpis zamiast go mnożyć; route() czyści mapę.
+
+const chartZoom = new Map();   // key → { title, build, legendHTML }
+
+function zoomable(key, title, build, { legendHTML = '' } = {}) {
+  const html = build({});                       // renderowanie w karcie, opcje domyślne
+  if (!html) return '';                         // pusty wykres → bez przycisku
+  chartZoom.set(key, { title, build, legendHTML });
+  return `<div class="chart-zoom">${html}
+    <button type="button" class="chart-zoom-btn" data-chart-zoom="${key}" aria-label="Pokaż wykres na pełnym ekranie">⛶</button></div>`;
+}
+
+let chartFullKey = null, chartFullResizeT = null, chartFullKeyHandler = null;
+
+function openChartFull(key) {
+  const reg = chartZoom.get(key);
+  if (!reg || chartFullKey) return;
+  chartFullKey = key;
+  history.pushState({ chartFull: true }, '');   // D7: własny wpis historii (usuwalny fallback)
+  const el = document.getElementById('chart-full');
+  el.innerHTML = `<div class="chart-full-head"><b>${esc(reg.title)}</b>
+      <button type="button" class="chart-zoom-btn" data-chart-close aria-label="Zamknij">✕</button>
+    </div><div class="chart-full-body"></div>`;
+  el.hidden = false;
+  renderChartFullBody();
+  chartFullKeyHandler = e => { if (e.key === 'Escape') closeChartFull(); };
+  document.addEventListener('keydown', chartFullKeyHandler);
+  window.addEventListener('resize', onChartFullResize);
+}
+
+// Decyzja o orientacji z pomiaru pudełka (nie z sensora): pudełko poziome →
+// rysuj normalnie; pionowe (blokada auto-obrotu) → rysuj dla transpozycji i
+// obróć wrapper o 90° CSS. Mierzymy flex-box wprost, omijając kwirki iOS 100vh.
+function renderChartFullBody() {
+  const reg = chartZoom.get(chartFullKey);
+  const body = document.querySelector('#chart-full .chart-full-body');
+  if (!reg || !body) return;
+  const box = body.getBoundingClientRect();
+  const landscape = box.width >= box.height;
+  const long = Math.max(box.width, box.height), short = Math.min(box.width, box.height);
+  const W = 800, H = Math.max(240, Math.min(620, Math.round(W * short / Math.max(1, long))));
+  const svg = reg.build({ width: W, height: H, detail: true, maxPoints: 240 });
+  if (landscape) {
+    body.innerHTML = svg + reg.legendHTML;
+  } else {
+    body.innerHTML = `<div class="cf-rot" style="width:${Math.round(box.height)}px">${svg}${reg.legendHTML}</div>`;
+  }
+}
+
+function onChartFullResize() {
+  clearTimeout(chartFullResizeT);
+  chartFullResizeT = setTimeout(renderChartFullBody, 150);
+}
+
+function closeChartFull({ keepHistory = false } = {}) {
+  if (chartFullKey == null) return;
+  chartFullKey = null;
+  clearTimeout(chartFullResizeT);
+  const el = document.getElementById('chart-full');
+  if (el) { el.hidden = true; el.innerHTML = ''; }
+  if (chartFullKeyHandler) { document.removeEventListener('keydown', chartFullKeyHandler); chartFullKeyHandler = null; }
+  window.removeEventListener('resize', onChartFullResize);
+  if (!keepHistory) history.back();             // skonsumuj wpis wepchnięty przy otwarciu
+}
+
 // ── Router ──────────────────────────────────────────────────────────────
 
 export function startApp(loaded) {
@@ -240,6 +210,16 @@ export function startApp(loaded) {
     applyTheme();
   }
   $('#header-month').textContent = Fmt.formatMonthName(E.todayYm());
+  // Jeden delegowany listener na cały dokument — przeżywa podmiany innerHTML
+  // dynamicznych poddrzew (wyniki suwaków), inaczej niż wiązanie per-render.
+  document.addEventListener('click', e => {
+    const zoomBtn = e.target.closest('[data-chart-zoom]');
+    if (zoomBtn) return openChartFull(zoomBtn.dataset.chartZoom);
+    if (e.target.closest('[data-chart-close]')) closeChartFull();
+  });
+  window.addEventListener('popstate', () => {
+    if (chartFullKey) closeChartFull({ keepHistory: true });
+  });
   window.addEventListener('hashchange', route);
   route();
 }
@@ -254,6 +234,8 @@ function applyTheme() {
 
 function route() {
   closeModal(); // nawigacja wstecz nie może zostawić martwej nakładki
+  closeChartFull({ keepHistory: true }); // ta sama zasada dla nakładki wykresu
+  chartZoom.clear();                     // rejestr odbudowuje się przy renderze ekranu
   const hash = location.hash || '#/';
   const tabbar = document.getElementById('tabbar');
   if (!state) {
@@ -704,11 +686,12 @@ function renderDashboard() {
     </div>`;
     const debtRows = proj.series.filter(r => r.debtReal > 0 || (r.familyReal || 0) > 0 || !r.projected);
     if (debtRows.length > 1) {
+      const debtLegend = famOn ? '<div class="legend"><span><i style="background:var(--danger)"></i>kredyt + dług rodzinny (realnie)</span></div>' : '';
       html += `<div class="card"><h2>Krzywa topnienia długu</h2>
-        ${chartSVG(debtRows, [
+        ${zoomable('dash-dlug', 'Krzywa topnienia długu', o => chartSVG(debtRows, [
         { get: r => r.debtReal + (r.familyReal || 0), cls: 'line-debt' },
-      ])}
-        ${famOn ? '<div class="legend"><span><i style="background:var(--danger)"></i>kredyt + dług rodzinny (realnie)</span></div>' : ''}
+      ], o), { legendHTML: debtLegend })}
+        ${debtLegend}
       </div>`;
     }
   } else {
@@ -728,12 +711,13 @@ function renderDashboard() {
     </div>`;
     const rows = proj.series;
     if (rows.length > 1) {
+      const portLegend = '<div class="legend"><span><i style="background:var(--accent)"></i>portfel (— historia, ⋯ prognoza)</span><span><i style="background:var(--muted)"></i>cel ruchomy</span></div>';
       html += `<div class="card"><h2>Portfel vs cel</h2>
-        ${chartSVG(rows, [
+        ${zoomable('dash-portfel', 'Portfel vs cel', o => chartSVG(rows, [
         { get: r => r.target, cls: 'line-target' },
         { get: r => r.portfolio, cls: 'line-port', clsProj: 'line-proj', split: true },
-      ])}
-        <div class="legend"><span><i style="background:var(--accent)"></i>portfel (— historia, ⋯ prognoza)</span><span><i style="background:var(--muted)"></i>cel ruchomy</span></div>
+      ], o), { legendHTML: portLegend })}
+        ${portLegend}
       </div>`;
     }
   }
@@ -1126,10 +1110,10 @@ function renderAnaliza() {
     const pva = E.planVsActualStats(state.entries);
     // chartSVG skaluje od 0 — skumulowany wykres tylko przy seriach ≥ 0.
     const cumChart = pva.cumRows.length > 1 && pva.cumRows.every(r => r.cumNet >= 0 && r.cumPlanned >= 0)
-      ? chartSVG(pva.cumRows, [
+      ? zoomable('an-plan-cum', 'Skumulowane: odłożone vs plan', o => chartSVG(pva.cumRows, [
         { get: r => r.cumPlanned, cls: 'line-target' },
         { get: r => r.cumNet, cls: 'line-port' },
-      ])
+      ], o), { legendHTML: An.cumLegend() })
       : '';
     body = An.statsCard({ fi, cvg, balances: d.balances, a, nowYm })
       + An.planPerfCard({ sav, pva, chartHTML: cumChart });
@@ -1158,10 +1142,10 @@ function renderAnaliza() {
       fireYm: r.isUser ? baseFireYm : vFire(E.projectionWith(state, { assumptions: { withdrawalRate: r.swr } })),
     }));
     const wChart = w.rows.length > 1
-      ? chartSVG(w.rows, [
+      ? zoomable('an-wyplaty', 'Faza wypłat: saldo portfela', o => chartSVG(w.rows, [
         { get: r => r.endNominal, cls: 'line-proj' },
         { get: r => r.endReal, cls: 'line-port' },
-      ])
+      ], o), { legendHTML: An.withdrawalLegend() })
       : '';
 
     body = goalSavingsHTML(E.requiredSavingsForGoal(state))
@@ -1177,10 +1161,10 @@ function renderAnaliza() {
   } else if (anSection === 'dozera') {
     const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj });
     const zChart = z && z.rows.length > 1
-      ? chartSVG(z.rows, [
+      ? zoomable('an-dozera', 'Do zera: saldo portfela', o => chartSVG(z.rows, [
         { get: r => r.endNominal, cls: 'line-proj' },
         { get: r => r.endReal, cls: 'line-port' },
-      ])
+      ], o), { legendHTML: An.withdrawalLegend() })
       : '';
     body = An.dieWithZeroCard({
       resultHTML: An.dieWithZeroResult({ z }) + zChart,
@@ -1190,7 +1174,7 @@ function renderAnaliza() {
     // ── Kredyty ──
     // Wykres topnienia salda (sama rata vs z nadpłatami) — wspólny dla kredytu
     // i długu rodzinnego; realField wskazuje pole realne w serii prognozy.
-    const meltChart = (analytics, loanRes, realField) => {
+    const meltChart = (analytics, loanRes, realField, zoom) => {
       if (!analytics || loanRes.rows.length <= 1) return '';
       const histBy = new Map(loanRes.rows.map(r => [r.ym, r.balNominal]));
       const schedBy = new Map(analytics.scheduleRows.map((r, i) => [E.addMonths(analytics.lastYm, i + 1), r.balNominal]));
@@ -1209,33 +1193,33 @@ function renderAnaliza() {
         });
       }
       return rows.length > 1
-        ? chartSVG(rows, [
+        ? zoomable(zoom.key, zoom.title, o => chartSVG(rows, [
           { get: r => r.sched, cls: 'line-debt-dash' },
           { get: r => r.over, cls: 'line-debt' },
-        ])
+        ], o), { legendHTML: An.meltLegend() })
         : '';
     };
     // Słupki kapitał/odsetki wg kontraktu (deterministyczne, bez nadpłat).
-    const piBars = rows => rows.length
-      ? stackedBarSVG(rows, [
+    const piBars = (rows, zoom) => rows.length
+      ? zoomable(zoom.key, zoom.title, o => stackedBarSVG(rows, [
         { get: r => r.principal, cls: 'bar-principal' },
         { get: r => r.interest, cls: 'bar-interest' },
-      ])
+      ], o), { legendHTML: An.barLegend() })
       : '';
 
     // Słupki „ile zostało do spłaty": kapitał NA odsetkach (odwrotnie niż
     // struktura rat), kontrakt jako blade tło obok pełnej ścieżki faktycznej.
-    const remainingBars = (analytics, loanRes, realField, contractRows, principal) => {
+    const remainingBars = (analytics, loanRes, realField, contractRows, principal, zoom) => {
       if (!analytics || !contractRows.length) return '';
       const actual = E.loanPathWithProjection(state, loanRes, proj, realField, analytics.rateMonthly);
       const rows = E.remainingToPayComparison(principal, contractRows, actual);
       return rows.length
-        ? stackedBarSVG(rows, [
+        ? zoomable(zoom.key, zoom.title, o => stackedBarSVG(rows, [
           { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
           { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
           { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
           { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
-        ])
+        ], o), { legendHTML: An.remainingLegend(zoom.overLabel) })
         : '';
     };
 
@@ -1244,12 +1228,12 @@ function renderAnaliza() {
     const flSched = fa && hp.familyLoan
       ? E.amortizationScheduleN(hp.familyLoan.principal, hp.familyLoan.rateNominal, E.familyLoanTermMonths(hp.familyLoan), hp.familyLoan.paymentOverrideMonthly)
       : [];
-    const debtChart = meltChart(ma, d.debt, 'debtReal');
-    const mtgBar = mtgSched.length ? piBars(E.yearlyPrincipalInterest(mtgSched)) : '';
-    const familyChart = meltChart(fa, fam, 'familyReal');
-    const flBar = flSched.length ? piBars(E.yearlyPrincipalInterest(flSched)) : '';
-    const mtgRemaining = ma ? remainingBars(ma, d.debt, 'debtReal', mtgSched, hp.mortgage.principal) : '';
-    const flRemaining = fa ? remainingBars(fa, fam, 'familyReal', flSched, hp.familyLoan.principal) : '';
+    const debtChart = meltChart(ma, d.debt, 'debtReal', { key: 'an-mtg-melt', title: 'Kredyt: saldo — sama rata vs z nadpłatami' });
+    const mtgBar = mtgSched.length ? piBars(E.yearlyPrincipalInterest(mtgSched), { key: 'an-mtg-raty', title: 'Kredyt: struktura rat' }) : '';
+    const familyChart = meltChart(fa, fam, 'familyReal', { key: 'an-fl-melt', title: 'Dług rodzinny: saldo — sama rata vs z nadpłatami' });
+    const flBar = flSched.length ? piBars(E.yearlyPrincipalInterest(flSched), { key: 'an-fl-raty', title: 'Dług rodzinny: struktura rat' }) : '';
+    const mtgRemaining = ma ? remainingBars(ma, d.debt, 'debtReal', mtgSched, hp.mortgage.principal, { key: 'an-mtg-dozaplaty', title: 'Kredyt: ile zostało do spłaty', overLabel: 'z nadpłatami (pełne)' }) : '';
+    const flRemaining = fa ? remainingBars(fa, fam, 'familyReal', flSched, hp.familyLoan.principal, { key: 'an-fl-dozaplaty', title: 'Dług rodzinny: ile zostało do spłaty', overLabel: 'z nadpłatami (tylko jawne z check-inu)' }) : '';
 
     body = (ma ? An.mortgageCard({ ma, chartHTML: debtChart, barHTML: mtgBar, remainingBarHTML: mtgRemaining }) : '')
       + (fa ? An.familyLoanCard({ fa, chartHTML: familyChart, barHTML: flBar, remainingBarHTML: flRemaining }) : '');
@@ -1276,10 +1260,10 @@ function renderAnaliza() {
     anDeathAge = Number.isFinite(v) && v > 0 ? v : 110;
     const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj });
     const zChart = z && z.rows.length > 1
-      ? chartSVG(z.rows, [
+      ? zoomable('an-dozera', 'Do zera: saldo portfela', o => chartSVG(z.rows, [
         { get: r => r.endNominal, cls: 'line-proj' },
         { get: r => r.endReal, cls: 'line-port' },
-      ])
+      ], o), { legendHTML: An.withdrawalLegend() })
       : '';
     const dz = $('#dwz-result');
     if (dz) dz.innerHTML = An.dieWithZeroResult({ z }) + zChart;
@@ -1383,12 +1367,12 @@ function renderSymulacja() {
     const sim = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment, X);
     const chartRows = E.remainingToPayComparison(an.balanceNominal, base.rows, sim.rows);
     const chartHTML = chartRows.length
-      ? stackedBarSVG(chartRows, [
+      ? zoomable('sym-nadplata', 'Nadpłata: ile zostało do spłaty', o => stackedBarSVG(chartRows, [
         { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
         { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
         { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
         { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
-      ])
+      ], o), { legendHTML: Sim.remainingCmpLegend() })
       : '';
     return Sim.overpaymentResult({
       amount: X,
@@ -1431,12 +1415,12 @@ function renderSymulacja() {
     const sim = extra > 0 ? E.remainingSchedule(P, j, payment, extra) : base;
     const chartRows = E.remainingToPayComparison(P, base.rows, sim.rows);
     const chartHTML = chartRows.length
-      ? stackedBarSVG(chartRows, [
+      ? zoomable('sym-kredyt', 'Kalkulator kredytu: ile zostało do spłaty', o => stackedBarSVG(chartRows, [
         { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
         { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
         { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
         { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
-      ])
+      ], o), { legendHTML: Sim.remainingCmpLegend() })
       : '';
     return Sim.loanCalcResult({
       payment, baseMonths: base.months, extra, simMonths: sim.months,

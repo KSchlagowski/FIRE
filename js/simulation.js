@@ -35,6 +35,18 @@ export function nadwyzkaNote() {
   </div>`;
 }
 
+// Legenda słupków „ile zostało do spłaty" — identyczna dla nadpłaty i
+// kalkulatora kredytu; wyeksportowana, by nakładka pełnoekranowa użyła jej
+// pod powiększonym wykresem (jedno źródło prawdy).
+export function remainingCmpLegend() {
+  return `<div class="legend">
+        <span><i style="background:var(--accent)"></i>kapitał</span>
+        <span><i style="background:var(--flame)"></i>odsetki</span>
+        <span><i style="background:var(--accent);opacity:.35"></i><i style="background:var(--flame);opacity:.35"></i>sama rata (blade)</span>
+        <span><i style="background:var(--accent)"></i><i style="background:var(--flame)"></i>z nadpłatą (pełne)</span>
+      </div>`;
+}
+
 // Wspólny komunikat „zyskujesz / tracisz N" na podstawie przesunięcia daty FIRE.
 function gainLine(simFireYm, baseFireYm) {
   if (simFireYm == null || baseFireYm == null) return '';
@@ -185,12 +197,7 @@ export function overpaymentResult({ amount, basePayoffYm, payoffYm, monthsSaved,
     kv('Szybciej o', monthsSaved > 0 ? Fmt.formatYearsMonths(monthsSaved) : '—', monthsSaved > 0 ? 'good' : ''),
     kv('Odsetki zaoszczędzone', money(Math.round(interestSaved)), interestSaved > 0.005 ? 'good' : ''),
     chartHTML ? `<h3>Ile zostało do spłaty: kapitał + przyszłe odsetki</h3>${chartHTML}
-      <div class="legend">
-        <span><i style="background:var(--accent)"></i>kapitał</span>
-        <span><i style="background:var(--flame)"></i>odsetki</span>
-        <span><i style="background:var(--accent);opacity:.35"></i><i style="background:var(--flame);opacity:.35"></i>sama rata (blade)</span>
-        <span><i style="background:var(--accent)"></i><i style="background:var(--flame)"></i>z nadpłatą (pełne)</span>
-      </div>` : '',
+      ${remainingCmpLegend()}` : '',
   ].join('');
 }
 
@@ -230,12 +237,7 @@ export function loanCalcResult({ payment, baseMonths, extra, simMonths, baseInte
     kv('Odsetki łącznie (sama rata)', money(Math.round(baseInterest))),
     kv('Odsetki zaoszczędzone', money(Math.round(interestSaved)), interestSaved > 0.005 ? 'good' : ''),
     chartHTML ? `<h3>Ile zostało do spłaty: kapitał + przyszłe odsetki</h3>${chartHTML}
-      <div class="legend">
-        <span><i style="background:var(--accent)"></i>kapitał</span>
-        <span><i style="background:var(--flame)"></i>odsetki</span>
-        <span><i style="background:var(--accent);opacity:.35"></i><i style="background:var(--flame);opacity:.35"></i>sama rata (blade)</span>
-        <span><i style="background:var(--accent)"></i><i style="background:var(--flame)"></i>z nadpłatą (pełne)</span>
-      </div>` : '',
+      ${remainingCmpLegend()}` : '',
   ];
   return rows.join('');
 }

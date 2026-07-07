@@ -5,6 +5,7 @@ import * as E from '../js/engine.js';
 import * as F from '../js/format.js';
 import * as S from '../js/storage.js';
 import { coachMessage, checkinCelebration, decisionMessage } from '../js/coach.js';
+import { chartSVG, stackedBarSVG } from '../js/charts.js';
 import { FIX } from './fixtures.js';
 
 // ── Mini-harness ────────────────────────────────────────────────────────
@@ -1826,4 +1827,82 @@ test('F28f: projectDieWithZero — end-to-end z wyłączonym mrożeniem', () => 
   const idxOrInf = ym => ym == null ? Infinity : E.ymToIdx(ym);
   assertTrue(idxOrInf(zOff.fireYm) >= idxOrInf(zOn.fireYm), 'wyższy cel → data „do zera" nie wcześniejsza');
   assertEq(zOff.hypothetical, zOn.hypothetical, 'flaga hypothetical strukturalnie bez zmian');
+});
+
+// ── F29: charts.js — buildery SVG (opcje width/maxPoints/detail) ─────────
+// Czyste asercje na stringach (bez DOM). Domyślne wyjście ma być bajt-w-bajt
+// jak przed wydzieleniem modułu; opcje obsługują nakładkę pełnoekranową.
+
+// formatShort jest prywatne w charts.js — replikujemy do asercji etykiet Y.
+function fmtShort(x) {
+  const a = Math.abs(x);
+  if (a >= 1e6) return (x / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace('.', ',').replace(/,0$/, '') + ' mln';
+  if (a >= 1e3) return Math.round(x / 1e3) + ' tys.';
+  return String(Math.round(x));
+}
+function lineRows(months, startYm = '2026-01') {
+  const base = E.ymToIdx(startYm);
+  const rows = [];
+  for (let i = 0; i < months; i++) rows.push({ ym: E.idxToYm(base + i), a: i * 10000, b: i * 5000 });
+  return rows;
+}
+function barRows(years, startYear = 2026) {
+  const rows = [];
+  for (let i = 0; i < years; i++) rows.push({ year: startYear + i, principal: 1000 + i * 100, interest: 500 });
+  return rows;
+}
+const LINE_DEFS = [{ get: r => r.a, cls: 'line-port' }, { get: r => r.b, cls: 'line-target' }];
+const BAR_SEGS = [{ get: r => r.principal, cls: 'bar-principal' }, { get: r => r.interest, cls: 'bar-interest' }];
+
+test('F29a: chartSVG — domyślne wyjście (viewBox, 3 osie, etykiety Y/X) i czystość', () => {
+  const rows = lineRows(36); // 2026-01 … 2028-12, max a = 350 000
+  const svg = chartSVG(rows, LINE_DEFS);
+  assertTrue(svg.includes('viewBox="0 0 440 170"'), 'domyślny viewBox 440×170');
+  assertEq((svg.match(/class="axis"/g) || []).length, 3, 'dokładnie 3 linie osi');
+  assertTrue(svg.includes('>0</text>'), 'etykieta Y = 0');
+  assertTrue(svg.includes(`>${fmtShort(350000 / 2)}</text>`), 'etykieta Y = ½ max (175 tys.)');
+  assertTrue(svg.includes(`>${fmtShort(350000)}</text>`), 'etykieta Y = max (350 tys.)');
+  assertTrue(svg.includes('>2026</text>'), 'pierwszy rok (kotwica start)');
+  assertTrue(svg.includes('text-anchor="end">2028</text>'), 'ostatni rok (kotwica end)');
+  assertEq(chartSVG(rows, LINE_DEFS), svg, 'czystość: dwa wywołania identyczne');
+});
+
+test('F29b: chartSVG/stackedBarSVG — opcja rozmiaru (width/height), zero NaN', () => {
+  const line = chartSVG(lineRows(36), LINE_DEFS, { width: 800, height: 360 });
+  assertTrue(line.includes('viewBox="0 0 800 360"'), 'viewBox liniowy 800×360');
+  assertTrue(!/NaN/.test(line), 'brak NaN w wykresie liniowym');
+  const bar = stackedBarSVG(barRows(20), BAR_SEGS, { width: 800, height: 360 });
+  assertTrue(bar.includes('viewBox="0 0 800 360"'), 'viewBox słupków 800×360');
+  assertTrue(!/NaN/.test(bar), 'brak NaN w słupkach');
+});
+
+test('F29c: chartSVG — decymacja do maxPoints, ostatni punkt na prawej krawędzi', () => {
+  const svg = chartSVG(lineRows(500), [{ get: r => r.a, cls: 'line-port' }], { maxPoints: 240 });
+  const pts = svg.match(/points="([^"]+)"/)[1].split(' ');
+  assertTrue(pts.length <= 241, `≤241 punktów po decymacji, było ${pts.length}`);
+  const lastX = Number(pts[pts.length - 1].split(',')[0]);
+  assertClose(lastX, 440 - 8, 0.5, 'ostatni punkt na x = width − padR (ostatni rząd uwzględniony)');
+});
+
+test('F29d: chartSVG detail — 5 etykiet Y, pośrednie lata bez duplikatów; bez detail 2 etykiety X', () => {
+  const rows = lineRows(361); // 30 lat miesięcznie
+  const oneDef = [{ get: r => r.a, cls: 'line-port' }];
+  const det = chartSVG(rows, oneDef, { width: 800, height: 360, detail: true });
+  assertEq((det.match(/x="44"/g) || []).length, 5, 'detail → 5 etykiet Y (x = padL−4)');
+  const mids = [...det.matchAll(/text-anchor="middle">(\d{4})</g)].map(m => m[1]);
+  assertTrue(mids.length >= 4, `≥4 pośrednich etykiet lat, było ${mids.length}`);
+  for (let i = 1; i < mids.length; i++) assertTrue(mids[i] !== mids[i - 1], 'brak sąsiadujących duplikatów lat');
+  const plain = chartSVG(rows, oneDef, { width: 800, height: 360 });
+  assertEq((plain.match(/y="356"/g) || []).length, 2, 'bez detail → dokładnie 2 etykiety X');
+});
+
+test('F29e: stackedBarSVG detail — gęstsze etykiety lat na szerokim płótnie; domyślne bez zmian', () => {
+  const rows = barRows(30);
+  const plain = stackedBarSVG(rows, BAR_SEGS);
+  const plainLabels = (plain.match(/text-anchor="middle"/g) || []).length;
+  assertEq(plainLabels, 9, 'domyślnie krok ceil(30/8)=4 → 9 etykiet lat');
+  const detLabels = (stackedBarSVG(rows, BAR_SEGS, { width: 800, detail: true }).match(/text-anchor="middle"/g) || []).length;
+  assertTrue(detLabels > plainLabels, `detail gęstsze: ${detLabels} > ${plainLabels}`);
+  assertTrue(plain.includes('viewBox="0 0 440 170"'), 'domyślny viewBox słupków bez zmian');
+  assertEq((plain.match(/class="axis"/g) || []).length, 3, 'domyślnie 3 osie');
 });

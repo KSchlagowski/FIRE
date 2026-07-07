@@ -37,6 +37,18 @@ function metodologia(lines) {
   </details>`;
 }
 
+// ── Legendy wykresów (jedno źródło prawdy: karta i nakładka pełnoekranowa) ─
+// Wyeksportowane, by ui.js użył ich pod wykresem powiększonym bez duplikatów.
+export function cumLegend() {
+  return `<div class="legend"><span><i style="background:var(--accent)"></i>odłożone</span><span><i style="background:var(--muted)"></i>plan</span></div>`;
+}
+export function withdrawalLegend() {
+  return `<div class="legend"><span><i style="background:var(--accent)"></i>saldo (— realnie, ⋯ nominalnie)</span></div>`;
+}
+export function meltLegend() {
+  return `<div class="legend"><span><i style="background:var(--danger)"></i>historia + prognoza z nadpłatami</span><span><i style="background:var(--muted)"></i>sama rata</span></div>`;
+}
+
 // ── 1. Statystyki FIRE ──────────────────────────────────────────────────
 
 export function statsCard({ fi, cvg, balances, a, nowYm }) {
@@ -89,7 +101,7 @@ export function planPerfCard({ sav, pva, chartHTML }) {
     ${pva.best ? kv('Najlepszy miesiąc', `${esc(Fmt.formatMonthName(pva.best.ym))} (${signed(pva.best.delta)})`) : ''}
     ${pva.worst ? kv('Najsłabszy miesiąc', `${esc(Fmt.formatMonthName(pva.worst.ym))} (${signed(pva.worst.delta)})`) : ''}
     ${chartHTML ? `<h3>Skumulowane: odłożone vs plan</h3>${chartHTML}
-      <div class="legend"><span><i style="background:var(--accent)"></i>odłożone</span><span><i style="background:var(--muted)"></i>plan</span></div>` : ''}
+      ${cumLegend()}` : ''}
     ${metodologia([
       'Stopa oszczędzania = (zarobione − wydane) ÷ zarobione.',
       'Plan każdego miesiąca to snapshot zamrożony przy zapisie wpisu — późniejsza zmiana założeń nie przepisuje przeszłości.',
@@ -210,7 +222,7 @@ export function withdrawalCard({ w, chartHTML }) {
   const postRateBanner = `<div class="banner info small">Po FIRE portfel pracuje na ${Fmt.formatPct(w.realRate)} realnie — tak, jakby pieniądze leżały w bezpieczniejszych instrumentach (np. obligacjach). Zmienisz to w Plan → Profil i FIRE.</div>`;
   return `<div class="card"><h2>Faza wypłat 🏖️</h2>
     ${banner}${postRateBanner}${depletionWarn}
-    ${chartHTML ? `${chartHTML}<div class="legend"><span><i style="background:var(--accent)"></i>saldo (— realnie, ⋯ nominalnie)</span></div>` : ''}
+    ${chartHTML ? `${chartHTML}${withdrawalLegend()}` : ''}
     ${table(headers, rows)}
     ${metodologia([
       `Wypłata (rok 1) = cel × SWR = ${money(target)} × ${Fmt.formatPct(w.swr)} = ${money(w.withdrawalRealYearly)}/rok; rośnie z inflacją ${Fmt.formatPct(w.inflation)}.`,
@@ -330,12 +342,12 @@ export function sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows }
 // ── 6. Kredyt ───────────────────────────────────────────────────────────
 
 // Legenda słupków kapitał/odsetki (współdzielona przez kredyt i dług rodzinny).
-function barLegend() {
+export function barLegend() {
   return `<div class="legend"><span><i style="background:var(--accent)"></i>kapitał</span><span><i style="background:var(--flame)"></i>odsetki</span></div>`;
 }
 
 // Legenda słupków „ile zostało do spłaty": kolory jak wyżej, blade = kontrakt.
-function remainingLegend(overLabel) {
+export function remainingLegend(overLabel) {
   return `<div class="legend">
     <span><i style="background:var(--accent)"></i>kapitał</span>
     <span><i style="background:var(--flame)"></i>odsetki</span>
@@ -366,7 +378,7 @@ export function mortgageCard({ ma, chartHTML, barHTML, remainingBarHTML }) {
     ${kv('Spłata przy samej racie', esc(Fmt.formatMonthName(ma.scheduleOnlyPayoffYm)))}
     ${kv('Spłata prognozowana (z nadpłatami)', ma.projectedPayoffYm ? esc(Fmt.formatMonthName(ma.projectedPayoffYm)) : '—')}
     ${chartHTML ? `<h3>Saldo nominalne: sama rata vs z nadpłatami</h3>${chartHTML}
-      <div class="legend"><span><i style="background:var(--danger)"></i>historia + prognoza z nadpłatami</span><span><i style="background:var(--muted)"></i>sama rata</span></div>` : ''}
+      ${meltLegend()}` : ''}
     ${remainingSection(remainingBarHTML, 'z nadpłatami (pełne)')}
     ${barHTML ? `<h3>Struktura rat: kapitał vs odsetki</h3>${barHTML}${barLegend()}
       <p class="muted small">Rozkład kontraktowy (bez nadpłat) po latach kredytu — odsetki maleją, kapitał rośnie.</p>` : ''}
@@ -396,7 +408,7 @@ export function familyLoanCard({ fa, chartHTML, barHTML, remainingBarHTML }) {
     ${kv('Spłata przy samej racie', esc(Fmt.formatMonthName(fa.scheduleOnlyPayoffYm)))}
     ${kv('Spłata prognozowana (z nadpłatami)', fa.projectedPayoffYm ? esc(Fmt.formatMonthName(fa.projectedPayoffYm)) : '—')}
     ${chartHTML ? `<h3>Saldo nominalne: sama rata vs z nadpłatami</h3>${chartHTML}
-      <div class="legend"><span><i style="background:var(--danger)"></i>historia + prognoza z nadpłatami</span><span><i style="background:var(--muted)"></i>sama rata</span></div>` : ''}
+      ${meltLegend()}` : ''}
     ${remainingSection(remainingBarHTML, 'z nadpłatami (tylko jawne z check-inu)')}
     ${barHTML ? `<h3>Struktura rat: kapitał vs odsetki</h3>${barHTML}${barLegend()}
       <p class="muted small">Rozkład kontraktowy (bez nadpłat) po latach spłaty.</p>` : ''}

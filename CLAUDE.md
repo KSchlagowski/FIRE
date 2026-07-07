@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (121 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (141 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -31,7 +31,7 @@ python -m http.server 8000   # serve at http://localhost:8000/ (SW works on loca
 
 ## Architecture
 
-**Nine ES modules under `js/`** (loaded via `<script type="module" src="js/app.js">`)
+**Ten ES modules under `js/`** (loaded via `<script type="module" src="js/app.js">`)
 plus a single hand-written **`styles.css`** at the repo root. No build step, no
 bundler — the browser loads the modules directly.
 
@@ -44,6 +44,10 @@ bundler — the browser loads the modules directly.
   and browser produce identical strings (don't swap in `Intl` blindly — tests
   assert exact output including the non-breaking space ` `).
 - **`coach.js`** — Polish message library + deterministic variant selection (pure).
+- **`charts.js`** — pure SVG chart builders (`chartSVG`/`stackedBarSVG` + private
+  `formatShort`), **zero imports** (L0 leaf), local `esc()`. `width`/`maxPoints`/
+  `detail` options drive the fullscreen-landscape overlay; at defaults the output
+  is byte-identical to before the split (guarded by F29).
 - **`analysis.js`** — pure HTML builders for the **Analiza** screen (`#/analiza`).
   Zero DOM, zero module state: engine results + pre-rendered SVG charts come in as
   params, an HTML string comes out. Has a local `esc()` for user-derived text.
@@ -59,10 +63,11 @@ bundler — the browser loads the modules directly.
   `.bak` backup, export/import. Backend is injectable (`makeStorage(backing)`) so
   tests run in Node without a real `localStorage`.
 - **`ui.js`** — the **only** module that touches the DOM or holds mutable state
-  (~1900 lines): all screen renderers, hash router, SVG chart generators
-  (`chartSVG`/`stackedBarSVG`), onboarding, and event handling. Template strings +
-  event delegation, no framework. It calls the engine, then hands results to
-  `analysis.js`/`simulation.js` to build the markup.
+  (~1900 lines): all screen renderers, hash router, onboarding, event handling, and
+  the fullscreen-landscape chart overlay (`zoomable` registry + `#chart-full`). It
+  imports the SVG builders from `charts.js` and the progress ring `ringSVG` stays
+  local. Template strings + event delegation, no framework. It calls the engine,
+  then hands results to `analysis.js`/`simulation.js` to build the markup.
 - **`app.js`** — bootstrap: load state → onboarding if empty → register SW →
   route → install hint.
 
@@ -73,12 +78,12 @@ that way; it's what keeps the whole finance core unit-testable in Node. Actual i
 graph (each module imports only from lower layers):
 
 ```
-L0  engine.js · format.js · storage.js   ← import NOTHING (pure leaves; storage's backing is injectable)
+L0  engine.js · format.js · storage.js · charts.js   ← import NOTHING (pure leaves; storage's backing is injectable)
 L1  coach.js        imports engine, format
 L2  analysis.js     imports engine, format, coach
 L3  simulation.js   imports engine, format, analysis
 L3  motivation.js   imports format, coach
-L4  ui.js           imports engine, format, coach, analysis, simulation, motivation, storage   ← ONLY DOM + mutable state
+L4  ui.js           imports engine, format, coach, analysis, simulation, motivation, charts, storage   ← ONLY DOM + mutable state
 L5  app.js          imports ui, storage                                            ← bootstrap
 ```
 
@@ -273,7 +278,12 @@ closed-form principal), `loanPathWithProjection` (purity, history→projection s
 continuity, zero at `debtFreeYm`, the frozen-balance and zero-trim guards),
 `remainingToPayComparison` (two-way zero padding when an upward override outlives
 the contract), and `remainingSchedule`'s `extraMonthly` param (0 ≡ 3-arg call,
-strict monotonicity in X, 0% integer case).
+strict monotonicity in X, 0% integer case). F29 covers `charts.js`: default
+output parity/purity (`viewBox`, 3 axis lines, Y/X labels), the `width`/`height`
+size options (no `NaN`), `maxPoints` decimation (last row kept at the right edge),
+and the `detail` flag (5 Y labels, intermediate no-duplicate year labels on lines,
+denser year labels on bars). The fullscreen overlay itself is DOM (`ui.js`) —
+covered by manual QA, not Node.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.
