@@ -309,22 +309,28 @@ export function retirementResult({ ro, dz, dzBase, w, deathAge }) {
     kv(`Cel „do zera” (do wieku ${deathAge})`, money(dz.target)),
     kv('Zmiana vs Twoje ustawienie', signed(diff), diff <= 0 ? 'good' : 'warn-text'),
     kv('Data FIRE „do zera”', fireCell(dz.fireYm, dzBase.fireYm)),
+    kv('Wydatki po FIRE', ro.freezeExpenses ? 'stałe realnie'
+      : 'rosną o ' + Fmt.formatPct(w.withdrawalGrowthReal) + ' realnie/rok'),
     longevity,
     metodologia([
       'Każda zmiana przelicza fazę wypłat od nowa: po FIRE portfel rośnie o podany realny zwrot, a wypłaty pokrywają Twoje wydatki.',
+      'Odznaczenie „wydatki przestają rosnąć” podnosi wypłaty co roku o realny wzrost wydatków — portfel musi być większy albo skończy się wcześniej.',
       'Niczego nie zapisujemy — to podgląd; ustawienie na stałe jest w Plan → Profil i FIRE.',
     ]),
   ].join('');
 }
 
-export function retirementCard({ value, base, resultHTML }) {
+export function retirementCard({ value, base, freeze, resultHTML }) {
   const v = value == null ? base : Number(value);
   return `<div class="card"><h2>Emerytura po FIRE 🏖️</h2>
-    <p class="muted small">Po przejściu na FIRE wiele osób przenosi pieniądze w bezpieczniejsze instrumenty, np. obligacje skarbowe — portfel rośnie wolniej, więc musi wystarczyć na dłużej. Przesuń suwak i sprawdź, co to zmienia. Czysta symulacja — niczego nie zapisujemy.</p>
+    <p class="muted small">Po przejściu na FIRE wiele osób przenosi pieniądze w bezpieczniejsze instrumenty, np. obligacje skarbowe — portfel rośnie wolniej, więc musi wystarczyć na dłużej. Przesuń suwak i sprawdź, co to zmienia. Możesz też sprawdzić, co się stanie, gdy wydatki będą rosły dalej także na emeryturze. Czysta symulacja — niczego nie zapisujemy.</p>
     <label class="field"><span class="lbl">Realny zwrot po FIRE <b id="sym-ret-post-val">${esc(Fmt.formatPct(v))}</b></span>
       <input type="range" id="sym-ret-post" min="0" max="0.06" step="0.0025" value="${v}">
     </label>
     <p class="muted small">Twoje ustawienie: ${esc(Fmt.formatPct(base))}</p>
+    <label class="field"><span class="lbl">
+      <input type="checkbox" id="sym-ret-freeze" ${freeze ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
+      Wydatki przestają rosnąć po FIRE</span></label>
     <div id="sym-ret-result">${resultHTML}</div>
   </div>`;
 }

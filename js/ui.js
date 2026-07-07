@@ -8,7 +8,7 @@ import * as Mot from './motivation.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.14.0';
+export const APP_VERSION = '1.15.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1305,6 +1305,7 @@ let symLoanR = null;   // Kalkulator kredytu: oprocentowanie roczne % (null = se
 let symLoanT = null;   // Kalkulator kredytu: okres w latach (null = seed)
 let symLoanOp = 0;     // Kalkulator kredytu: nadpłata zł/mies.
 let symRetPost = null; // Emerytura: zwrot po FIRE (ułamek; null = z ustawień)
+let symRetFreeze = null; // Emerytura: mrożenie wydatków po FIRE (null = z ustawień)
 
 const SYM_CAP = 100000;   // górny limit dopłaty w „Cel: wiek FIRE"
 
@@ -1454,7 +1455,10 @@ function renderSymulacja() {
   };
 
   const retirementResult = () => {
-    const ro = E.retirementOpts(state, symRetPost == null ? {} : { postReturnReal: Number(symRetPost) });
+    const overrides = {};
+    if (symRetPost != null) overrides.postReturnReal = Number(symRetPost);
+    if (symRetFreeze != null) overrides.freezeExpenses = symRetFreeze;
+    const ro = E.retirementOpts(state, overrides);
     const dz = E.projectDieWithZero(state, { deathAge: 90, projection: proj, ro });
     const dzBase = E.projectDieWithZero(state, { deathAge: 90, projection: proj });
     const w = E.projectWithdrawal(state, { projection: proj, ro });
@@ -1490,7 +1494,9 @@ function renderSymulacja() {
   } else if (symTab === 'emerytura') {
     body = Sim.retirementCard({
       value: symRetPost == null ? a.postRetirementReturnReal : Number(symRetPost),
-      base: a.postRetirementReturnReal, resultHTML: retirementResult(),
+      base: a.postRetirementReturnReal,
+      freeze: symRetFreeze == null ? a.freezeExpensesAtRetirement : symRetFreeze,
+      resultHTML: retirementResult(),
     });
   } else {
     body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
@@ -1558,6 +1564,11 @@ function renderSymulacja() {
       $('#sym-ret-post-val').textContent = Fmt.formatPct(Number(symRetPost));
       $('#sym-ret-result').innerHTML = retirementResult();
     });
+    const freezeEl = $('#sym-ret-freeze');
+    if (freezeEl) freezeEl.addEventListener('change', () => {
+      symRetFreeze = freezeEl.checked;
+      $('#sym-ret-result').innerHTML = retirementResult();
+    });
   } else {
     const retEl = $('#sym-return');
     if (retEl) retEl.addEventListener('input', () => {
@@ -1621,6 +1632,9 @@ function renderPlanFire() {
     ${field({ id: 'pl-cashret', label: 'Realny zwrot z gotówki', suffix: '%/rok', value: pctVal(a.cashReturnReal), tipText: 'Lokaty ≈ inflacja, stąd domyślnie 0% realnie.' })}
     <h3>Po przejściu na FIRE</h3>
     ${field({ id: 'pl-postret', label: 'Realny zwrot po FIRE', suffix: '%/rok', value: pctVal(a.postRetirementReturnReal), tipText: 'Po przejściu na FIRE wiele osób przenosi pieniądze w bezpieczniejsze miejsca, np. obligacje skarbowe. Detaliczne obligacje 10-letnie (EDO) płacą inflację + ok. 2% marży — ta marża to Twój realny zysk. Wpisz, ile ponad inflację ma zarabiać portfel, gdy przestaniesz pracować. Mniejszy zwrot = portfel wolniej się odbudowuje, więc musi być większy na starcie.' })}
+    <label class="field"><span class="lbl">
+      <input type="checkbox" id="pl-freeze" ${a.freezeExpensesAtRetirement ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
+      Wydatki przestają rosnąć po FIRE${tip('Zaznaczone: po przejściu na FIRE Twoje wydatki są stałe w dzisiejszych złotówkach — rosną już tylko z inflacją. Odznaczone: zakładasz, że styl życia drożeje dalej (o „realny wzrost wydatków”) także na emeryturze — to ostrożniejsze założenie, portfel musi być większy.')}</span></label>
   </div>
   <button id="pl-save" class="primary wide">Zapisz</button>
   ${planBack}`;
@@ -1648,6 +1662,7 @@ function renderPlanFire() {
       targetFireAge: vals.fireage, withdrawalRate: vals.wr, realReturnAnnual: vals.ret,
       inflationAnnual: vals.infl, expenseGrowthReal: vals.gexp, incomeGrowthReal: vals.ginc,
       cashReturnReal: vals.cashret, postRetirementReturnReal: vals.postret,
+      freezeExpensesAtRetirement: $('#pl-freeze').checked,
     });
     try { E.recomputeDerived(state); } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
     persist();

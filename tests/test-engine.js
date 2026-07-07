@@ -58,6 +58,7 @@ function baseState(partial = {}) {
       incomeGrowthReal: 0,
       inflationAnnual: 0.03,
       postRetirementReturnReal: 0.05, // == realReturnAnnual → liczby F13/F24 bez zmian
+      freezeExpensesAtRetirement: true, // legacy: wydatki stałe realnie po FIRE
     },
     housing: { currentRentMonthly: 0 },
   }, partial), NOW);
@@ -453,35 +454,51 @@ test('F11: odzysk z .bak po korupcji', () => {
   assertEq(res.state.assumptions.monthlyIncome, 10000, '.bak trzyma poprzedni pełny zapis');
 });
 
-test('F11: v3 round-trip; migracja v1→2→3 i v2→3; nowsza wersja odrzucona', () => {
+test('F11: v4 round-trip; migracja v1→…→4, v2→…→4, v3→4; nowsza wersja odrzucona', () => {
   const st = baseState();
-  assertEq(st.version, 3, 'nowy stan = v3');
+  assertEq(st.version, 4, 'nowy stan = v4');
   assertEq(st.version, S.SCHEMA_VERSION, 'engine i storage zsynchronizowane');
-  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 3);
-  // v2 → v3: dokładany realny zwrot po FIRE (obligacje) — domyślnie 2%.
+  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 4);
+  // v3 → v4: dokładane mrożenie wydatków po FIRE — domyślnie true (stałe realnie).
+  const v3 = JSON.parse(JSON.stringify(st));
+  v3.version = 3;
+  delete v3.assumptions.freezeExpensesAtRetirement;
+  const m3 = S.migrate(S.validateState(v3));
+  assertEq(m3.version, 4);
+  assertEq(m3.assumptions.freezeExpensesAtRetirement, true, 'domyślnie stałe realnie');
+  // Jawne false przeżywa migrację bez zmian.
+  const v3b = JSON.parse(JSON.stringify(st));
+  v3b.version = 3;
+  v3b.assumptions.freezeExpensesAtRetirement = false;
+  assertEq(S.migrate(S.validateState(v3b)).assumptions.freezeExpensesAtRetirement, false, 'jawne false nietknięte');
+  // v2 → v4: oba nowe pola (zwrot po FIRE + mrożenie) dołożone w jednym przebiegu.
   const v2 = JSON.parse(JSON.stringify(st));
   v2.version = 2;
   delete v2.assumptions.postRetirementReturnReal;
+  delete v2.assumptions.freezeExpensesAtRetirement;
   const m2 = S.migrate(S.validateState(v2));
-  assertEq(m2.version, 3);
+  assertEq(m2.version, 4, 'łańcuch 2→3→4');
   assertEq(m2.assumptions.postRetirementReturnReal, 0.02, 'domyślna marża EDO 2%');
-  // Istniejąca jawna wartość przeżywa migrację bez zmian.
+  assertEq(m2.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dołożone');
+  // Istniejąca jawna wartość zwrotu po FIRE przeżywa migrację bez zmian.
   const v2b = JSON.parse(JSON.stringify(st));
   v2b.version = 2;
   v2b.assumptions.postRetirementReturnReal = 0.03;
   assertEq(S.migrate(S.validateState(v2b)).assumptions.postRetirementReturnReal, 0.03, 'jawna wartość nietknięta');
-  // v1 (bez długu rodzinnego, bez zwrotu po FIRE) → łańcuch 1→2→3 w jednym przebiegu.
+  // v1 (bez długu rodzinnego, zwrotu po FIRE, mrożenia) → łańcuch 1→2→3→4.
   const v1 = JSON.parse(JSON.stringify(st));
   v1.version = 1;
   delete v1.housing.housePlan.familyLoan;
   delete v1.debt.familyOverrides;
   delete v1.assumptions.postRetirementReturnReal;
+  delete v1.assumptions.freezeExpensesAtRetirement;
   const migrated = S.migrate(S.validateState(v1));
-  assertEq(migrated.version, 3);
+  assertEq(migrated.version, 4);
   assertTrue(migrated.housing.housePlan.familyLoan && migrated.housing.housePlan.familyLoan.enabled === false, 'familyLoan dodany, wyłączony');
   assertTrue(Array.isArray(migrated.debt.familyOverrides) && migrated.debt.familyOverrides.length === 0, 'familyOverrides = []');
   assertEq(migrated.assumptions.postRetirementReturnReal, 0.02, 'zwrot po FIRE dodany w łańcuchu');
-  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99/v4 odrzucona');
+  assertEq(migrated.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dodane w łańcuchu');
+  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99/v5 odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: 'inna-apka', version: 1, state: {} })), 'obcy plik odrzucony');
 });
 
@@ -1729,4 +1746,84 @@ test('F28d: czułość — niższy zwrot po FIRE podnosi cel „do zera"; ście�
   assertTrue(zLow.hypothetical && zLow.startYm === zHigh.startYm, 'oba hipotetyczne, ten sam startYm');
   assertEq(zLow.realRate, 0.02, 'realRate niesie zwrot po FIRE z what-if');
   assertTrue(zLow.target > zHigh.target, 'niższy zwrot → wyższy cel (ścieżka what-if)');
+});
+
+// ── F27g/F28b/e/f: mrożenie wzrostu wydatków po FIRE (freezeExpenses) ─────
+
+test('F27g: retirementOpts — pole freezeExpenses (domyślna, założenie, override, czystość)', () => {
+  const st = E.createState(); // defaultAssumptions → freezeExpensesAtRetirement true
+  assertEq(E.retirementOpts(st).freezeExpenses, true, 'nowy stan → mrożenie true');
+  const off = E.createState({ assumptions: { freezeExpensesAtRetirement: false } });
+  assertEq(E.retirementOpts(off).freezeExpenses, false, 'założenie false → false');
+  // Override wygrywa nad założeniem w obie strony.
+  assertEq(E.retirementOpts(st, { freezeExpenses: false }).freezeExpenses, false, 'override false > założenie true');
+  assertEq(E.retirementOpts(off, { freezeExpenses: true }).freezeExpenses, true, 'override true > założenie false');
+  // Brak założenia → fallback true.
+  const noField = E.createState();
+  delete noField.assumptions.freezeExpensesAtRetirement;
+  assertEq(E.retirementOpts(noField).freezeExpenses, true, 'brak pola → true');
+  // Czystość: stan nie mutowany.
+  const before = JSON.stringify(st);
+  E.retirementOpts(st, { freezeExpenses: false });
+  assertEq(JSON.stringify(st), before, 'stan nietknięty');
+});
+
+test('F27d: projectWithdrawal — wypłaty rosną o G przy wyłączonym mrożeniu, płaskie przy włączonym', () => {
+  const g = FIX.F28.growth.g; // 0.01
+  const st = baseState({ assumptions: { expenseGrowthReal: g } });
+  const common = { startYm: '2026-07', startPortfolioReal: 5000000, withdrawalRealYearly: 72000, years: 12 };
+  const wOff = E.projectWithdrawal(st, { ...common, ro: E.retirementOpts(st, { freezeExpenses: false }) });
+  assertClose(wOff.withdrawalGrowthReal, g, 1e-12, 'off → wzrost wypłat = G−1');
+  for (const n of [1, 2, 10]) {
+    const row = wOff.rows[n - 1];
+    assertClose(row.withdrawalReal, 72000 * Math.pow(1 + g, n - 1), 1e-6, `wypłata realna rok ${n}`);
+    assertClose(row.withdrawalNominal, row.withdrawalReal * Math.pow(1 + wOff.inflation, n - 1), 1e-6, `wypłata nominalna rok ${n}`);
+  }
+  const wOn = E.projectWithdrawal(st, { ...common, ro: E.retirementOpts(st, { freezeExpenses: true }) });
+  assertEq(wOn.withdrawalGrowthReal, 0, 'on → wzrost 0');
+  for (const n of [1, 2, 10]) assertClose(wOn.rows[n - 1].withdrawalReal, 72000, 1e-9, `płaska wypłata rok ${n}`);
+  // Monotonia: rosnące wypłaty nie wydłużają portfela (oba się wyczerpują).
+  const dep = { startYm: '2026-07', startPortfolioReal: 1000000, withdrawalRealYearly: 72000, years: 60 };
+  const depOff = E.projectWithdrawal(st, { ...dep, ro: E.retirementOpts(st, { freezeExpenses: false, postReturnReal: 0.02 }) });
+  const depOn = E.projectWithdrawal(st, { ...dep, ro: E.retirementOpts(st, { freezeExpenses: true, postReturnReal: 0.02 }) });
+  assertTrue(depOff.depletedYear != null && depOn.depletedYear != null, 'oba się wyczerpują');
+  assertTrue(depOff.depletedYear <= depOn.depletedYear, 'wzrost wypłat nie wydłuża portfela');
+});
+
+test('F28b: dieWithZeroTargetAt — wariant z rosnącymi wydatkami (x = G/(1+r))', () => {
+  const g = FIX.F28.growth.g; // 0.01
+  const st = baseState({ assumptions: { expenseGrowthReal: g } });
+  const ym = '2026-07', deathAge = 110;
+  const tOff = E.dieWithZeroTargetAt(st, ym, deathAge, E.retirementOpts(st, { freezeExpenses: false, postReturnReal: 0.05 }));
+  const tOn = E.dieWithZeroTargetAt(st, ym, deathAge, E.retirementOpts(st, { freezeExpenses: true, postReturnReal: 0.05 }));
+  const x = (1 + g) / 1.05;
+  const expect = tOff.withdrawalYear1 * (1 - Math.pow(x, tOff.yearsN)) / (1 - x);
+  assertClose(tOff.target, expect, 1e-6, 'cel wg formy zamkniętej x = G/(1+r)');
+  assertTrue(tOff.target > tOn.target, 'rosnące wydatki → cel wyższy niż przy stałych');
+});
+
+test('F28e: dieWithZeroTargetAt — krawędź x = 1 (wzrost = zwrot → cel = N·W₁)', () => {
+  const st = baseState({ assumptions: { expenseGrowthReal: 0.01, postRetirementReturnReal: 0.01 } });
+  const t = E.dieWithZeroTargetAt(st, '2026-07', 110, E.retirementOpts(st, { freezeExpenses: false }));
+  assertClose(t.target, t.yearsN * t.withdrawalYear1, 1e-9, 'wzrost kasuje zwrot → cel = N·W₁');
+});
+
+test('F28f: projectDieWithZero — end-to-end z wyłączonym mrożeniem', () => {
+  const g = FIX.F28.growth.g; // 0.01
+  const st = baseState({ assumptions: { monthlyIncome: 6000, expenseGrowthReal: g } });
+  E.recomputeDerived(st, NOW);
+  const proj = st.derived.projection;
+  const zOff = E.projectDieWithZero(st, { deathAge: 90, projection: proj, now: NOW, ro: E.retirementOpts(st, { freezeExpenses: false }) });
+  const zOn = E.projectDieWithZero(st, { deathAge: 90, projection: proj, now: NOW, ro: E.retirementOpts(st, { freezeExpenses: true }) });
+  assertClose(zOff.withdrawalGrowthReal, g, 1e-12, 'wynik niesie wzrost wypłat');
+  for (const n of [1, 2, 10]) {
+    assertClose(zOff.rows[n - 1].withdrawalReal, zOff.withdrawalYear1 * Math.pow(1 + g, n - 1), 1e-6, `wypłata rok ${n}`);
+  }
+  // Tabela zawsze od dokładnie celu → ostatni rok kończy się na 0.
+  assertEq(zOff.rows[zOff.rows.length - 1].endReal, 0, 'dokładnie 0 w roku N');
+  assertTrue(zOff.target > zOn.target, 'rosnące wydatki → wyższy cel „do zera"');
+  // Wyższy cel ⇒ data „do zera" nie wcześniejsza (null = nieosiągnięte = +∞).
+  const idxOrInf = ym => ym == null ? Infinity : E.ymToIdx(ym);
+  assertTrue(idxOrInf(zOff.fireYm) >= idxOrInf(zOn.fireYm), 'wyższy cel → data „do zera" nie wcześniejsza');
+  assertEq(zOff.hypothetical, zOn.hypothetical, 'flaga hypothetical strukturalnie bez zmian');
 });

@@ -714,12 +714,14 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
 // ── Faza emerytalna: opcje ──────────────────────────────────────────────
 // Jeden znormalizowany obiekt opcji fazy emerytalnej (wypłat). Domyślne wartości
 // z zapisanych założeń; `overrides` to what-ify z Symulacji (nic nie zapisują).
-// Kolejne pola (mrożenie wydatków, ZUS…) dojdą tu w przyszłych funkcjach.
+// Kolejne pola (ZUS…) dojdą tu w przyszłych funkcjach.
 export function retirementOpts(state, overrides = {}) {
   const a = state.assumptions;
   return {
     postReturnReal: overrides.postReturnReal != null ? overrides.postReturnReal
       : (a.postRetirementReturnReal != null ? a.postRetirementReturnReal : 0.02),
+    freezeExpenses: overrides.freezeExpenses != null ? overrides.freezeExpenses
+      : (a.freezeExpensesAtRetirement != null ? a.freezeExpensesAtRetirement : true),
   };
 }
 
@@ -741,6 +743,7 @@ export function projectWithdrawal(state, opts = {}) {
   const years = opts.years || 35;
   const swr = a.withdrawalRate;
   const realRate = ro.postReturnReal;
+  const wG = 1 + (ro.freezeExpenses ? 0 : a.expenseGrowthReal);
   const inflation = a.inflationAnnual;
   const nominalRate = (1 + realRate) * (1 + inflation) - 1;
   const withdrawalRealYearly = opts.withdrawalRealYearly != null
@@ -756,19 +759,20 @@ export function projectWithdrawal(state, opts = {}) {
   for (let n = 1; n <= years; n++) {
     const ym = addMonths(startYm, (n - 1) * 12);
     const startReal = bal;
-    let endReal = (startReal - withdrawalRealYearly) * (1 + realRate);
+    const withdrawalReal = withdrawalRealYearly * Math.pow(wG, n - 1);
+    let endReal = (startReal - withdrawalReal) * (1 + realRate);
     if (endReal <= EPS) { endReal = 0; depletedYear = n; }
-    const growthReal = endReal - (startReal - withdrawalRealYearly);
+    const growthReal = endReal - (startReal - withdrawalReal);
     const pf1 = Math.pow(1 + inflation, n - 1);
     const pfN = Math.pow(1 + inflation, n);
     const startNominal = startReal * pf1;
-    const withdrawalNominal = withdrawalRealYearly * pf1;
+    const withdrawalNominal = withdrawalReal * pf1;
     const endNominal = endReal * pfN;
     const growthNominal = endNominal - (startNominal - withdrawalNominal);
     rows.push({
       year: n, ym, age: birth ? ageAt(birth, ym).years : null,
       startReal, startNominal,
-      withdrawalReal: withdrawalRealYearly, withdrawalNominal,
+      withdrawalReal, withdrawalNominal,
       growthReal, growthNominal, endReal, endNominal,
     });
     bal = endReal;
@@ -776,17 +780,21 @@ export function projectWithdrawal(state, opts = {}) {
   }
   return {
     startYm, startAge, hypothetical, swr, realRate, inflation, nominalRate,
-    withdrawalRealYearly, priceFactorAtStart, rows, depletedYear, ro,
+    withdrawalRealYearly, withdrawalGrowthReal: wG - 1, priceFactorAtStart,
+    rows, depletedYear, ro,
   };
 }
 
 // Cel „do zera": portfel = 0 dokładnie w wieku deathAge. Wypłata taka sama
-// jak w fireTargetAt (roczne wydatki = cel × SWR) i STAŁA realnie po FIRE —
-// ten sam model wydatków co cel klasyczny i projectWithdrawal (expenseGrowthReal
-// działa tylko do daty FIRE, przez W₁). Portfel rośnie realnie o r. Rozwiązanie
-// P_N = 0 daje PV renty (annuity-due): cel = W₁·(1−q^N)/(1−q), q = 1/(1+r);
-// dla q ≈ 1 (r = 0) → cel = N·W₁. Portfel rośnie realnie o zwrot po FIRE
-// (obligacje) z `ro.postReturnReal`, nie o zwrot z fazy oszczędzania.
+// jak w fireTargetAt (roczne wydatki = cel × SWR). Domyślnie STAŁA realnie po
+// FIRE — ten sam model wydatków co cel klasyczny i projectWithdrawal
+// (expenseGrowthReal działa tylko do daty FIRE, przez W₁). Gdy mrożenie jest
+// wyłączone (`ro.freezeExpenses === false`), wypłaty rosną o expenseGrowthReal
+// także po FIRE: W_n = W₁·G^(n−1), G = 1 + expenseGrowthReal. Portfel rośnie
+// realnie o r. Rozwiązanie P_N = 0 daje PV renty z podstawieniem q → G·q:
+// cel = W₁·(1−x^N)/(1−x), x = G/(1+r); dla x ≈ 1 → cel = N·W₁. Przy G = 1
+// odtwarza dawną formułę annuity-due 1:1. Portfel rośnie realnie o zwrot po
+// FIRE (obligacje) z `ro.postReturnReal`, nie o zwrot z fazy oszczędzania.
 export function dieWithZeroTargetAt(state, ym, deathAge, ro = retirementOpts(state)) {
   const a = state.assumptions;
   const birth = state.profile.birthDate;
@@ -795,10 +803,11 @@ export function dieWithZeroTargetAt(state, ym, deathAge, ro = retirementOpts(sta
   if (!(yearsN >= 1)) return null;
   const withdrawalYear1 = fireTargetAt(state, ym) * a.withdrawalRate;
   const r = ro.postReturnReal;
-  const q = 1 / (1 + r);
-  const target = Math.abs(q - 1) < 1e-12
+  const g = ro.freezeExpenses ? 0 : a.expenseGrowthReal;
+  const x = (1 + g) / (1 + r);
+  const target = Math.abs(x - 1) < 1e-12
     ? yearsN * withdrawalYear1
-    : withdrawalYear1 * (1 - Math.pow(q, yearsN)) / (1 - q);
+    : withdrawalYear1 * (1 - Math.pow(x, yearsN)) / (1 - x);
   return { target, yearsN, withdrawalYear1 };
 }
 
@@ -857,6 +866,7 @@ export function projectDieWithZero(state, opts = {}) {
   const startAge = ageAt(birth, startYm).years;
   const targetClassic = fireTargetAt(state, startYm);
   const r = ro.postReturnReal;
+  const wG = 1 + (ro.freezeExpenses ? 0 : a.expenseGrowthReal);
   const inflation = a.inflationAnnual;
   const nominalRate = (1 + r) * (1 + inflation) - 1;
 
@@ -867,7 +877,7 @@ export function projectDieWithZero(state, opts = {}) {
       deathAge, startYm, startAge, yearsN: deathAge - startAge,
       target: 0, targetClassic, fireYm, classicFireYm, hypothetical,
       realRate: r, inflation, nominalRate,
-      withdrawalYear1: 0, rows: [], ro,
+      withdrawalYear1: 0, withdrawalGrowthReal: wG - 1, rows: [], ro,
     };
   }
 
@@ -880,7 +890,7 @@ export function projectDieWithZero(state, opts = {}) {
   for (let n = 1; n <= yearsN; n++) {
     const ym = addMonths(startYm, (n - 1) * 12);
     const startReal = bal;
-    const withdrawalReal = W1; // stała realnie — jak w projectWithdrawal
+    const withdrawalReal = W1 * Math.pow(wG, n - 1); // rośnie o G gdy mrożenie off (0 gdy stałe)
     let endReal = (startReal - withdrawalReal) * (1 + r);
     if (Math.abs(endReal) <= EPS) endReal = 0;
     const growthReal = endReal - (startReal - withdrawalReal);
@@ -902,7 +912,7 @@ export function projectDieWithZero(state, opts = {}) {
   return {
     deathAge, startYm, startAge, yearsN, target, targetClassic,
     fireYm, classicFireYm, hypothetical, realRate: r, inflation,
-    nominalRate, withdrawalYear1: W1, rows, ro,
+    nominalRate, withdrawalYear1: W1, withdrawalGrowthReal: wG - 1, rows, ro,
   };
 }
 
@@ -1395,12 +1405,13 @@ export function defaultAssumptions() {
     incomeGrowthReal: 0.03,
     inflationAnnual: 0.03,
     postRetirementReturnReal: 0.02, // realny zwrot po FIRE (marża EDO, przed podatkiem)
+    freezeExpensesAtRetirement: true, // wydatki stałe realnie po FIRE (dzisiejsze zachowanie)
   };
 }
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 3,
+    version: 4,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },

@@ -214,11 +214,14 @@ export function withdrawalCard({ w, chartHTML }) {
     ${table(headers, rows)}
     ${metodologia([
       `Wypłata (rok 1) = cel × SWR = ${money(target)} × ${Fmt.formatPct(w.swr)} = ${money(w.withdrawalRealYearly)}/rok; rośnie z inflacją ${Fmt.formatPct(w.inflation)}.`,
+      w.withdrawalGrowthReal > 0
+        ? `Wydatki rosną o ${Fmt.formatPct(w.withdrawalGrowthReal)} realnie także po FIRE — tak wybrano w ustawieniach (Plan → Profil i FIRE).`
+        : null,
       `Po FIRE portfel rośnie o realny zwrot po FIRE (${Fmt.formatPct(w.realRate)}), nie o zwrot z fazy oszczędzania — po przejściu na emeryturę zwykle inwestuje się bezpieczniej.`,
       `R nominalne = (1+${Fmt.formatPct(w.realRate)})·(1+${Fmt.formatPct(w.inflation)}) − 1 = ${Fmt.formatPct(w.nominalRate)}`,
       'Saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r) — rekurencja w dzisiejszych zł; kolumny nominalne = realne × (1+inflacja)^n.',
       `Kwoty nominalne w złotówkach z cen roku przejścia na FIRE (indeks cen = 1 w ${esc(Fmt.formatMonthGenitive(w.startYm))}).`,
-    ])}
+    ].filter(Boolean))}
   </div>`;
 }
 
@@ -262,11 +265,14 @@ export function dieWithZeroResult({ z, deathAgeRaw }) {
     ${metodologia([
       `Cel = W₁·(1−qᴺ)/(1−q), q = 1/(1+r) = PV renty o stałej realnej wypłacie; portfel = 0 dokładnie w wieku ${z.deathAge} (N = ${z.yearsN} lat wypłat).`,
       `Wypłata = cel klasyczny × SWR = ${money(z.withdrawalYear1)}/rok, stała realnie (nominalnie rośnie z inflacją) — ten sam model wydatków co klasyczna faza wypłat.`,
+      z.withdrawalGrowthReal > 0
+        ? `Wypłaty rosną o ${Fmt.formatPct(z.withdrawalGrowthReal)} realnie każdego roku — dlatego cel „do zera” jest wyższy niż przy stałych wydatkach.`
+        : null,
       `Cel klasyczny do porównania liczony w tym samym miesiącu co cel „do zera” (${esc(Fmt.formatMonthGenitive(z.startYm))}) — oba cele rosną z wydatkami, więc porównanie z dwóch dat byłoby mylące.`,
       `Saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r); R realne = ${Fmt.formatPct(z.realRate)}. Kwoty nominalne w cenach roku startu wypłat (indeks cen = 1 w ${esc(Fmt.formatMonthGenitive(z.startYm))}).`,
       `Portfel rośnie o realny zwrot po FIRE (${Fmt.formatPct(z.realRate)}) — ustawisz go w Plan → Profil i FIRE.`,
       'Tabela startuje od dokładnie celu „do zera” (nie od prognozowanej nadwyżki portfela) — dlatego kończy się na 0 zł. Wiek N to pełne lata (podłoga z wieku).',
-    ])}`;
+    ].filter(Boolean))}`;
 }
 
 export function dieWithZeroCard({ resultHTML, deathAge }) {

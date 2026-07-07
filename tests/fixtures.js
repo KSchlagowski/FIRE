@@ -118,4 +118,7 @@ export const FIX = {
   // się szybciej przy niższej stopie. depleted = najmniejsze N z W₁·(1−q^N)/(1−q) > P₀,
   // q = 1/1.02. Numeracja jak w Planie A §6 (F27d/e, F28b/c rezerwowane dla mrożenia/ZUS).
   F27: { depleted: { start: 1800000, wYear: 72000, rPost: 0.02, year: 35 } },
+  // Mrożenie wzrostu wydatków po FIRE (freezeExpensesAtRetirement): wyłączone →
+  // wypłaty rosną o g realnie każdego roku, cel „do zera" i wypłaty wg x = G/(1+r).
+  F28: { growth: { g: 0.01 } },
 };
