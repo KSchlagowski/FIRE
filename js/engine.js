@@ -806,11 +806,25 @@ export function projectDieWithZero(state, opts = {}) {
   // zawyżało „do zera" o wzrost wydatków między dziś a datą FIRE.
   const classicFireYm = proj && proj.reached ? proj.fireYm : null;
 
+  // Bramka startowa zobowiązań: przed wydatkiem na dom / startem kredytu /
+  // startem długu rodzinnego salda są 0, bo zobowiązanie JESZCZE nie istnieje —
+  // to nie jest „spłacone". Ta sama logika co houseSettled/famSettled w
+  // projectFire (idx ≥ hsMonth, debtStarted, famStarted).
+  const hp = state.housing.housePlan;
+  const houseOn = !!(hp && hp.enabled);
+  const flOn = houseOn && hp.familyLoan && hp.familyLoan.enabled;
+  const gateIdx = Math.max(
+    houseOn ? ymToIdx((hp.houseSpend && hp.houseSpend.month) || hp.mortgage.startMonth) : -Infinity,
+    houseOn ? ymToIdx(hp.mortgage.startMonth) : -Infinity,
+    flOn ? ymToIdx(hp.familyLoan.startMonth) : -Infinity,
+  );
+
   // Skan miesiąca osiągnięcia celu „do zera".
   let fireYm = null, dz = null;
   if (proj && proj.series) {
     for (const r of proj.series) {
       if (ymToIdx(r.ym) < nowIdx) continue;
+      if (ymToIdx(r.ym) < gateIdx) continue;
       if (ageAt(birth, r.ym).years >= deathAge) break;
       const t = dieWithZeroTargetAt(state, r.ym, deathAge);
       if (!t) continue;
@@ -992,11 +1006,14 @@ export function oneOffImpact(state, amount, now = new Date()) {
   const birth = state.profile.birthDate;
   if (!birth || !(a.targetFireAge > 0)) return null;
   const age = ageAt(birth, todayYm(now));
-  const yearsToFire = Math.max(0, a.targetFireAge * 12 - age.totalMonths) / 12;
+  // Miesiące celu zaokrąglone jak w fiStats/requiredSavingsForGoal — ułamkowy
+  // wiek FIRE (np. 45,1) dawałby ułamkowy indeks i zdeformowany "YYYY-MM".
+  const targetMonths = Math.round(a.targetFireAge * 12);
+  const yearsToFire = Math.max(0, targetMonths - age.totalMonths) / 12;
   const factor = Math.pow(1 + a.realReturnAnnual, yearsToFire);
   const futureValueReal = (Number(amount) || 0) * factor;
   const [by, bm] = birth.split('-').map(Number);
-  const fireAtYm = idxToYm(by * 12 + (bm - 1) + a.targetFireAge * 12);
+  const fireAtYm = idxToYm(by * 12 + (bm - 1) + targetMonths);
   const monthlySpendAtFire = fireTargetAt(state, fireAtYm) * a.withdrawalRate / 12;
   const retirementDays = monthlySpendAtFire > 0
     ? futureValueReal / (monthlySpendAtFire * 12 / 365.25) : null;
@@ -1263,7 +1280,7 @@ export function fiStats(state, balances, debt, plan, nowYm = todayYm(), family =
   const netWorth = balances.cash + balances.portfolio - (debt ? debt.balanceReal : 0) - familyReal;
   const i = ymToIdx(nowYm) - ymToIdx(plan[0].ym);
   const row = plan[Math.min(Math.max(i, 0), plan.length - 1)];
-  const monthlyExpenses = row.livingReal + row.rentReal + row.mortgagePaymentReal;
+  const monthlyExpenses = row.livingReal + row.rentReal + row.mortgagePaymentReal + (row.familyPaymentReal || 0);
   const runwayMonths = monthlyExpenses > 0 ? (balances.cash + balances.portfolio) / monthlyExpenses : null;
   let coast = null;
   if (state.profile.birthDate && a.targetFireAge > 0) {

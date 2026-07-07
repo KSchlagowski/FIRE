@@ -1109,6 +1109,16 @@ test('F20i: yearlyPrincipalInterest — Σ kapitału = principal, Σ rat = kapit
   assertEq(years.length, Math.ceil(f.N / 12));
 });
 
+test('F20k: fiStats — rata rodzinna wliczona w miesięczne wydatki (runway)', () => {
+  const st = f20State();
+  E.recomputeDerived(st, NOW);
+  const d = st.derived;
+  const fi = E.fiStats(st, d.balances, d.debt, d.plan, '2026-06', d.family);
+  // życie 6000 + czynsz 0 + rata kredytu 1000 + rata rodzinna 2000 = 9000.
+  assertClose(fi.monthlyExpenses, 9000, 1e-9, 'wydatki mies. z ratą rodzinną');
+  assertClose(fi.runwayMonths, (d.balances.cash + d.balances.portfolio) / 9000, 1e-9, 'runway na pełnych wydatkach');
+});
+
 test('F20j: applyCheckIn — nadpłata rodzinna tylko przy aktywnym długu, zapisana na wpisie', () => {
   const st = f20State();
   const e = E.applyCheckIn(st, { month: '2026-02', earned: 8000, spent: 6000, familyOverpayment: 500 }, NOW);
@@ -1358,6 +1368,31 @@ test('F24g: cel klasyczny porównywany w tym samym miesiącu co cel „do zera"'
   assertTrue(zh.target < zh.targetClassic, 'hipotetycznie również < klasyczny');
 });
 
+test('F24h: dom w planie — FIRE „do zera" nie przed wydatkiem na dom i startem kredytu', () => {
+  const st = baseState({
+    assumptions: { portfolioStart: 1500000, cashStart: 0 },
+    housing: {
+      currentRentMonthly: 0,
+      housePlan: housePlan({
+        moveInMonth: '2027-01',
+        houseSpend: { month: '2027-01', amount: 800000 },
+        mortgage: { startMonth: '2027-01', principal: 600000, rateNominal: 0.07, termYears: 20 },
+      }),
+    },
+  });
+  E.recomputeDerived(st, NOW);
+  const proj = st.derived.projection;
+  const z = E.projectDieWithZero(st, { deathAge: 110, projection: proj, now: NOW });
+  // Portfel (1,5 mln) już dziś przekracza cel „do zera" (~1,49 mln), ale dom
+  // (800 tys.) i kredyt (600 tys.) dopiero przed nami — salda 0 znaczą
+  // „jeszcze nie zaczęte", nie „spłacone". Data „do zera" nie może wypaść
+  // przed wydatkiem na dom / startem kredytu ani przed jego spłatą.
+  assertEq(z.hypothetical, false, 'data „do zera" w horyzoncie');
+  assertTrue(E.ymToIdx(z.fireYm) >= E.ymToIdx('2027-01'), 'nie przed wydatkiem na dom/startem kredytu');
+  assertTrue(E.ymToIdx(z.fireYm) >= E.ymToIdx(proj.debtFreeYm), 'nie przed spłatą kredytu');
+  assertTrue(proj.reached && E.ymToIdx(z.fireYm) <= E.ymToIdx(proj.fireYm), 'nie później niż klasyczny (g=0)');
+});
+
 test('F24f: strażnicy (brak daty urodzenia, wiek ≤ obecny) + czystość', () => {
   const nb = baseState();
   nb.profile.birthDate = null;
@@ -1419,6 +1454,17 @@ test('F25f: kwota 0 → fv 0, brak NaN', () => {
   const imp = E.oneOffImpact(baseState(), 0, NOW);
   assertEq(imp.futureValueReal, 0);
   assertTrue(!Number.isNaN(imp.retirementDays), 'retirementDays nie NaN');
+});
+
+test('F25k: oneOffImpact — ułamkowy wiek FIRE zaokrąglany do pełnych miesięcy', () => {
+  // 45,1 roku = 541,2 mies. → zaokrąglone 541: 2000-01 + 541 mies. = 2045-02.
+  // Bez zaokrąglenia idxToYm dostawał ułamkowy indeks i zdeformowany "YYYY-M.M".
+  const st = baseState({ assumptions: { targetFireAge: 45.1, expenseGrowthReal: 0.01 } });
+  const imp = E.oneOffImpact(st, 100, NOW);
+  assertClose(imp.yearsToFire, (541 - 318) / 12, 1e-9, 'yearsToFire z zaokrąglonych miesięcy');
+  assertClose(imp.monthlySpendAtFire,
+    E.fireTargetAt(st, '2045-02') * st.assumptions.withdrawalRate / 12, 1e-9,
+    'wydatek w dniu FIRE liczony w poprawnym miesiącu');
 });
 
 test('F25g: oneOffImpact — czystość stanu (wzorzec F15a)', () => {
