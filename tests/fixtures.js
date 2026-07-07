@@ -121,4 +121,8 @@ export const FIX = {
   // Mrożenie wzrostu wydatków po FIRE (freezeExpensesAtRetirement): wyłączone →
   // wypłaty rosną o g realnie każdego roku, cel „do zera" i wypłaty wg x = G/(1+r).
   F28: { growth: { g: 0.01 } },
+  // Podatek Belki (19% od zysków nominalnych): basis nominalny, gross-up,
+  // niezmienniki włącz/wyłącz. Wartości oczekiwane z form zamkniętych w testach.
+  // (F29 zajęte przez charts.js — plan docs/plan-belka-tax-toggle.md → F30.)
+  F30: { singleContrib: 10000, months: 24, infl: 0.03, netTarget: 1800000, eps: 1e-6 },
 };

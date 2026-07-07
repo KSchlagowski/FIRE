@@ -9,7 +9,7 @@ import { chartSVG, stackedBarSVG } from './charts.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.16.0';
+export const APP_VERSION = '1.17.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1095,8 +1095,11 @@ function renderAnaliza() {
   const fa = houseOn && fam && fam.started ? E.familyLoanAnalytics(state, fam, proj) : null;
   const showKredyty = !!(ma || fa);
   if (anSection === 'kredyty' && !showKredyty) anSection = 'przeglad';
+  const showPodatki = E.taxesActive(state).any;
+  if (anSection === 'podatki' && !showPodatki) anSection = 'przeglad';
 
   const sections = [['przeglad', 'Przegląd'], ['prognoza', 'Prognoza'], ['dozera', 'Do zera']];
+  if (showPodatki) sections.push(['podatki', 'Podatki']);
   if (showKredyty) sections.push(['kredyty', 'Kredyty']);
   const seg = `<div class="seg" role="tablist">${sections.map(([k, l]) =>
     `<button type="button" data-ansection="${k}" class="${anSection === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
@@ -1169,6 +1172,16 @@ function renderAnaliza() {
     body = An.dieWithZeroCard({
       resultHTML: An.dieWithZeroResult({ z }) + zChart,
       deathAge: anDeathAge,
+    });
+  } else if (anSection === 'podatki') {
+    // Jeden dodatkowy pełny przebieg prognozy (bez podatku) — tańszy niż
+    // istniejąca karta wrażliwości (13 przebiegów).
+    const ts = E.taxStats(state, d.balances, nowYm);
+    const noBelka = E.projectionWith(state, { taxes: { belkaEnabled: false } });
+    body = An.belkaCard({
+      ts,
+      fireWith: proj.reached ? proj.fireYm : null,
+      fireWithout: noBelka.reached ? noBelka.fireYm : null,
     });
   } else {
     // ── Kredyty ──
@@ -1575,6 +1588,7 @@ function renderPlanHub() {
     ['🎯', 'Profil i FIRE', 'wiek, stopa wypłat, założenia', '#/plan/fire'],
     ['💰', 'Finanse i start planu', 'dochód, wydatki, salda startowe', '#/plan/finanse'],
     ['🏠', 'Mieszkanie i kredyt', 'czynsz, dom, kredyt, dług rodzinny', '#/plan/dom'],
+    ['🧾', 'Podatki', 'podatek Belki (19%)', '#/plan/podatki'],
     ['⚙️', 'Aplikacja', 'motyw', '#/plan/aplikacja'],
     ['🩹', 'Korekty sald', 'wyrównanie gotówki, portfela i długu', '#/plan/korekty'],
     ['💾', 'Kopia zapasowa', 'eksport, import, aktualizacja', '#/backup'],
@@ -1594,6 +1608,7 @@ function renderPlanSection(section) {
   if (section === 'fire') renderPlanFire();
   else if (section === 'finanse') renderPlanFinanse();
   else if (section === 'dom') renderPlanDom();
+  else if (section === 'podatki') renderPlanPodatki();
   else if (section === 'aplikacja') renderPlanAplikacja();
   else if (section === 'korekty') renderPlanKorekty();
   else location.hash = '#/plan';
@@ -1859,6 +1874,30 @@ function renderPlanDom() {
       }
     } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
     persist();
+    location.hash = '#/plan';
+  });
+}
+
+// ── Podatki ──
+function renderPlanPodatki() {
+  const t = state.taxes || { belkaEnabled: false };
+  view().innerHTML = `${planBack}
+  <div id="plan-error"></div>
+  <div class="card"><h2>Podatki 🧾</h2>
+    <label class="field"><span class="lbl">
+      <input type="checkbox" id="pl-belka" ${t.belkaEnabled ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
+      Uwzględniaj podatek Belki (19%)${tip('Podatek od zysków kapitałowych: przy sprzedaży inwestycji płacisz 19% od zysku — od tego, o ile cena sprzedaży przewyższa cenę zakupu. Liczony od kwot nominalnych, bez korekty o inflację — dlatego realnie oddajesz więcej niż 19% realnego zysku. Aplikacja śledzi koszt zakupu Twoich wpłat i sprawdza cel FIRE na portfelu «po podatku».')}</span></label>
+    <div class="banner info small">Od 2027 planowana jest reforma OKI (Osobiste Konto Inwestycyjne) — część oszczędności ma być zwolniona z podatku Belki. Aplikacja liczy według przepisów obowiązujących w 2026 r.</div>
+  </div>
+  <button id="pl-save" class="primary wide">Zapisz</button>
+  ${planBack}`;
+
+  $('#pl-save').addEventListener('click', () => {
+    $('#plan-error').innerHTML = '';
+    state.taxes = { ...state.taxes, belkaEnabled: $('#pl-belka').checked };
+    try { E.recomputeDerived(state); } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
+    persist();
+    toast('Zapisano ustawienia podatków.');
     location.hash = '#/plan';
   });
 }

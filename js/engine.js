@@ -321,6 +321,84 @@ export function replayFamilyLoan(state, uptoYm) {
   }, state, uptoYm);
 }
 
+// ── Podatki: Belka (19% od zysków nominalnych) ──────────────────────────
+// Basis (koszt nabycia) śledzony NOMINALNIE w epoce kotwicy — podatek Belki
+// liczy się od zysków nominalnych, więc zysk czysto inflacyjny też jest
+// opodatkowany (realnie oddajesz więcej niż 19% realnego zysku). Konwersje
+// wyłącznie przez toNominal/toReal (inwariant repo).
+
+export const BELKA_RATE = 0.19;
+
+// Aktywność podatków — jedno miejsce prawdy dla pętli i UI.
+// (Batch IKE/IKZE dołoży tu klucz ikeIkze.)
+export function taxesActive(state) {
+  const t = state.taxes || {};
+  return { belka: !!t.belkaEnabled, any: !!t.belkaEnabled };
+}
+
+// Udział zysku NOMINALNEGO: 1 − basisNominal / wartośćNominalna, clamp [0,1].
+// Wartość ≤ EPS → 0 (puste/ujemne saldo nie generuje podatku).
+export function gainShareOf(valueReal, basisNominal, anchor, ym, infl) {
+  if (!(valueReal > EPS)) return 0;
+  const nom = toNominal(valueReal, anchor, ym, infl);
+  return Math.min(1, Math.max(0, 1 - basisNominal / nom));
+}
+
+// Cel brutto (gross-up) — TYLKO do wyświetlenia różnicy celu w Analizie.
+export function belkaGrossTarget(targetNetReal, gainShare, rate = BELKA_RATE) {
+  return targetNetReal / (1 - rate * Math.min(1, Math.max(0, gainShare)));
+}
+
+// Tracker podatkowy portfela: wartość (realnie) + koszt nabycia (nominalnie,
+// epoka kotwicy). Tworzony WEWNĄTRZ każdego przebiegu replay/projekcji (zero
+// stanu modułu — funkcje pozostają czyste). Tracker tylko OBSERWUJE przepływy:
+// salda liczone obok są bit-w-bit identyczne z podatkami i bez nich.
+// snapshot wznawia tracker na szwie historia→prognoza.
+// (Batch IKE/IKZE rozszerzy go o kubełki/limity/zwrot PIT — nie przepisywać.)
+export function makeTaxTracker(state, snapshot = null) {
+  const anchor = state.anchorMonth;
+  const infl = state.assumptions.inflationAnnual;
+  // D8: portfel startowy w całości jako wpłaty (basis = wartość; kotwica ⇒
+  // indeks cen 1, więc nominał = real). Założenie lekko zaniżające podatek.
+  let value = snapshot ? snapshot.value : (state.assumptions.portfolioStart || 0);
+  let basisNominal = snapshot ? snapshot.basisNominal : Math.max(0, value);
+  return {
+    // Wpłata (realnie): basis rośnie o ówczesną wartość nominalną.
+    contribute(cReal, ym) {
+      value += cReal;
+      basisNominal += toNominal(cReal, anchor, ym, infl);
+    },
+    // Wypłata/deficyt: basis maleje PROPORCJONALNIE — czynnik (value−w)/value
+    // liczony na realach jest niezależny od epoki. Nadmierny drenaż zostawia
+    // wartość ujemną, basis z podłogą 0 (dług nie generuje podatku).
+    withdraw(wReal) {
+      if (value > EPS) basisNominal *= Math.max(0, value - wReal) / value;
+      value -= wReal;
+    },
+    // Wzrost miesięczny: wartość × (1+r); basis bez zmian (wzrost to zysk).
+    grow(rMonthly) { value *= 1 + rMonthly; },
+    // Korekta salda (D9): skaluj wartość i basis przez new/old — zachowuje
+    // udział zysku. Stare saldo ≤ EPS → wszystko jako wpłata (gainShare 0).
+    setTotal(newTotalReal, ym) {
+      if (value > EPS) {
+        basisNominal *= newTotalReal / value;
+      } else {
+        basisNominal = Math.max(0, toNominal(newTotalReal, anchor, ym, infl));
+      }
+      value = newTotalReal;
+    },
+    // Wartość netto "jakby zlikwidować dziś": value × (1 − 19% × udział zysku).
+    // Wartość ≤ EPS → surowa wartość (rezydualny minus nie niesie podatku).
+    netValueReal(ym) {
+      if (!(value > EPS)) return value;
+      return value * (1 - BELKA_RATE * gainShareOf(value, basisNominal, anchor, ym, infl));
+    },
+    gainShare(ym) { return gainShareOf(value, basisNominal, anchor, ym, infl); },
+    row() { return { basisNominal }; },
+    snapshot() { return { value, basisNominal }; },
+  };
+}
+
 // ── Replay sald: gotówka (fundusz na dom) + portfel inwestycyjny ────────
 // Routing wg fazy: przed startem kredytu → gotówka; w długu → gotówka;
 // po spłacie (lub bez planu domu) → portfel. Deficyty drenują najpierw
@@ -340,6 +418,9 @@ export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) 
   const hsMonth = houseOn ? ymToIdx((hp.houseSpend && hp.houseSpend.month) || hp.mortgage.startMonth) : Infinity;
   const hsAmount = houseOn && hp.houseSpend ? hp.houseSpend.amount : null;
   const entriesByMonth = new Map(state.entries.map(e => [ymToIdx(e.month), e]));
+  // Tracker podatkowy tylko OBSERWUJE — cash/portfolio i pola wierszy są
+  // bit-w-bit identyczne z podatkami i bez nich (test F30g).
+  const tracker = taxesActive(state).any ? makeTaxTracker(state) : null;
 
   let cash = a.cashStart || 0;
   let portfolio = a.portfolioStart || 0;
@@ -348,6 +429,7 @@ export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) 
   const rows = [];
 
   for (let idx = a0; idx <= upto; idx++) {
+    const ym = idxToYm(idx);
     const e = entriesByMonth.get(idx);
     const net = e ? roundGrosze(e.earned - e.spent) : 0;
     const contribution = e ? roundGrosze(net - (e.overpayment || 0) - (e.familyOverpayment || 0)) : 0;
@@ -362,7 +444,10 @@ export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) 
 
     if (contribution >= 0) {
       if (phase === 'saving' || phase === 'debt') { cash += contribution; flowCash += contribution; }
-      else { portfolio += contribution; flowPortfolio += contribution; }
+      else {
+        portfolio += contribution; flowPortfolio += contribution;
+        if (tracker) tracker.contribute(contribution, ym);
+      }
     } else {
       let deficit = -contribution;
       const fromCash = Math.min(cash, deficit);
@@ -371,10 +456,11 @@ export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) 
       portfolio -= deficit;
       flowCash -= fromCash;
       flowPortfolio -= deficit;
+      if (tracker) tracker.withdraw(deficit); // tylko część portfelowa (po gotówce)
     }
 
-    if (d && d.spill > 0) { portfolio += d.spill; flowPortfolio += d.spill; } // nadpłata ponad spłatę wraca do inwestycji
-    if (fd && fd.spill > 0) { portfolio += fd.spill; flowPortfolio += fd.spill; } // nadpłata długu rodzinnego ponad saldo → portfel
+    if (d && d.spill > 0) { portfolio += d.spill; flowPortfolio += d.spill; if (tracker) tracker.contribute(d.spill, ym); } // nadpłata ponad spłatę wraca do inwestycji
+    if (fd && fd.spill > 0) { portfolio += fd.spill; flowPortfolio += fd.spill; if (tracker) tracker.contribute(fd.spill, ym); } // nadpłata długu rodzinnego ponad saldo → portfel
 
     if (idx === hsMonth) {
       const amount = hsAmount == null ? cash : hsAmount; // null = "cała gotówka"
@@ -388,19 +474,27 @@ export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) 
       houseSpent = amount - rest;
       flowCash -= fromCash;
       flowPortfolio -= fromPort;
+      if (tracker) tracker.withdraw(fromPort);
     }
 
     cash *= 1 + rCash;
     portfolio *= 1 + rPort;
+    if (tracker) tracker.grow(rPort);
 
     // Korekty sald to NIE przepływ — ich efekt ląduje w rezydualnym "wzroście".
     const override = !!(e && (e.cashOverride != null || e.balanceOverride != null));
     if (e && e.cashOverride != null) cash = e.cashOverride;
-    if (e && e.balanceOverride != null) portfolio = e.balanceOverride;
+    if (e && e.balanceOverride != null) {
+      portfolio = e.balanceOverride;
+      if (tracker) tracker.setTotal(e.balanceOverride, ym); // cashOverride nie dotyka trackera
+    }
 
-    rows.push({ ym: idxToYm(idx), cash, portfolio, net, contribution, phase, hasEntry: !!e, flowCash, flowPortfolio, override });
+    rows.push({
+      ym, cash, portfolio, net, contribution, phase, hasEntry: !!e, flowCash, flowPortfolio, override,
+      ...(tracker ? { basisNominal: tracker.row().basisNominal, netPortfolio: tracker.netValueReal(ym) } : {}),
+    });
   }
-  return { cash, portfolio, rows, houseUnderfunded, houseSpent };
+  return { cash, portfolio, rows, houseUnderfunded, houseSpent, taxSnapshot: tracker ? tracker.snapshot() : null };
 }
 
 // ── Werdykt i seria ─────────────────────────────────────────────────────
@@ -583,9 +677,19 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
   let houseDone = houseOn ? upto >= hsMonth : true;
   let houseShortfall = false;
 
+  // Tracker podatkowy wznawiany ze snapshotu historii (szew replay→prognoza).
+  // Brak snapshotu (obcy wywołujący) → konserwatywnie: cały portfel jako
+  // wpłaty w uptoYm (gainShare 0, podatek zaniżony — udokumentowane).
+  const active = taxesActive(state);
+  const tracker = active.any
+    ? makeTaxTracker(state, balances.taxSnapshot
+      || { value: balances.portfolio, basisNominal: Math.max(0, toNominal(balances.portfolio, anchor, uptoYm, a.inflationAnnual)) })
+    : null;
+
   const series = balances.rows.map(r => ({
     ym: r.ym, cash: r.cash, portfolio: r.portfolio,
     flowCash: r.flowCash, flowPortfolio: r.flowPortfolio, override: r.override,
+    ...(r.basisNominal != null ? { basisNominal: r.basisNominal, netPortfolio: r.netPortfolio } : {}),
     debtReal: (debtRes.byMonth.get(ymToIdx(r.ym)) || { bal: 0 }).bal
       / Math.pow(1 + a.inflationAnnual, monthsBetween(anchor, r.ym) / 12),
     familyReal: (familyRes.byMonth.get(ymToIdx(r.ym)) || { bal: 0 }).bal
@@ -623,6 +727,7 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
         const spillReal = toReal(stepF.spill, anchor, ym, a.inflationAnnual);
         portfolio += spillReal;
         flowPortfolio += spillReal;
+        if (tracker) tracker.contribute(spillReal, ym);
       }
       if (famBal <= EPS && !familyFreeYm) { famBal = 0; familyFreeYm = ym; }
     }
@@ -636,6 +741,7 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
         const spillReal = toReal(step.spill, anchor, ym, a.inflationAnnual);
         portfolio += spillReal;
         flowPortfolio += spillReal;
+        if (tracker) tracker.contribute(spillReal, ym);
       }
       if (s < 0) {
         let deficit = -s;
@@ -644,6 +750,7 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
         portfolio -= deficit - fromCash;
         flowCash -= fromCash;
         flowPortfolio -= deficit - fromCash;
+        if (tracker) tracker.withdraw(deficit - fromCash);
       }
       if (debtBal <= EPS && !debtFreeYm) { debtBal = 0; debtFreeYm = ym; }
     } else if (houseOn && idx < mStart) {
@@ -655,16 +762,20 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
         portfolio -= deficit - fromCash;
         flowCash -= fromCash;
         flowPortfolio -= deficit - fromCash;
+        if (tracker) tracker.withdraw(deficit - fromCash);
       }
     } else {
-      if (s >= 0) { portfolio += s; flowPortfolio += s; }
-      else {
+      if (s >= 0) {
+        portfolio += s; flowPortfolio += s;
+        if (tracker) tracker.contribute(s, ym);
+      } else {
         let deficit = -s;
         const fromCash = Math.min(cash, deficit);
         cash -= fromCash;
         portfolio -= deficit - fromCash;
         flowCash -= fromCash;
         flowPortfolio -= deficit - fromCash;
+        if (tracker) tracker.withdraw(deficit - fromCash);
       }
     }
 
@@ -680,10 +791,12 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
       houseDone = true;
       flowCash -= fromCash;
       flowPortfolio -= fromPort;
+      if (tracker) tracker.withdraw(fromPort);
     }
 
     cash *= 1 + rCash;
     portfolio *= 1 + rPort;
+    if (tracker) tracker.grow(rPort);
 
     series.push({
       ym, cash, portfolio, flowCash, flowPortfolio, override: false,
@@ -691,11 +804,14 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
       familyReal: toReal(famBal, anchor, ym, a.inflationAnnual),
       target: pm.targetReal,
       projected: true,
+      ...(tracker ? { basisNominal: tracker.row().basisNominal, netPortfolio: tracker.netValueReal(ym) } : {}),
     });
 
     const houseSettled = !houseOn || (debtStarted && debtBal <= EPS && idx >= hsMonth);
     const famSettled = !flOn || (famStarted && famBal <= EPS);
-    if (!fireYm && houseSettled && famSettled && portfolio >= pm.targetReal - EPS) {
+    // Warunek FIRE z podatkami: portfel "po podatku" ≥ cel netto (D3).
+    const effective = tracker ? tracker.netValueReal(ym) : portfolio;
+    if (!fireYm && houseSettled && famSettled && effective >= pm.targetReal - EPS) {
       fireYm = ym;
       break;
     }
@@ -704,7 +820,7 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
   const reached = fireYm != null;
   const fireAge = reached ? ageAt(state.profile.birthDate, fireYm) : null;
   const onTrack = reached && fireAge.totalMonths <= state.assumptions.targetFireAge * 12;
-  return { reached, fireYm, fireAge, debtFreeYm, familyFreeYm, onTrack, series, delta, byPlanOnly, houseShortfall };
+  return { reached, fireYm, fireAge, debtFreeYm, familyFreeYm, onTrack, series, delta, byPlanOnly, houseShortfall, taxes: active };
 }
 
 // ── Analiza (tabele i statystyki) ───────────────────────────────────────
@@ -753,27 +869,70 @@ export function projectWithdrawal(state, opts = {}) {
   const birth = state.profile.birthDate;
   const startAge = birth ? ageAt(birth, startYm).years : null;
 
+  // Podatek Belki: basis nominalny (epoka kotwicy) zasiewany z wiersza serii
+  // prognozy w startYm (albo najbliższego wcześniejszego), przeskalowany przez
+  // startPortfolioReal/portfel wiersza — zachowuje udział zysku. Bez serii /
+  // bez basisu na wierszach → cały portfel jako wpłaty (gainShare 0,
+  // konserwatywnie zaniża podatek — udokumentowane w metodologii).
+  const active = taxesActive(state);
+  const anchor = state.anchorMonth;
+  let basisNominal = null;
+  if (active.any) {
+    let seedRow = null;
+    if (proj && proj.series) {
+      const sIdx = ymToIdx(startYm);
+      for (const r of proj.series) {
+        if (ymToIdx(r.ym) > sIdx) break;
+        if (r.basisNominal != null) seedRow = r;
+      }
+    }
+    basisNominal = seedRow && seedRow.portfolio > EPS
+      ? seedRow.basisNominal * (startPortfolioReal / seedRow.portfolio)
+      : Math.max(0, toNominal(startPortfolioReal, anchor, startYm, inflation));
+  }
+
   const rows = [];
   let depletedYear = null;
+  let taxTotalReal = 0;
   let bal = startPortfolioReal;
   for (let n = 1; n <= years; n++) {
     const ym = addMonths(startYm, (n - 1) * 12);
     const startReal = bal;
     const withdrawalReal = withdrawalRealYearly * Math.pow(wG, n - 1);
-    let endReal = (startReal - withdrawalReal) * (1 + realRate);
-    if (endReal <= EPS) { endReal = 0; depletedYear = n; }
-    const growthReal = endReal - (startReal - withdrawalReal);
+    let endReal, taxReal = 0, grossReal = withdrawalReal;
+    if (active.any) {
+      // Wypłata brutto powiększona tak, by NETTO pokryło wydatki: efektywna
+      // stawka = 19% × udział zysku (ułamki niezmiennicze względem epoki).
+      const g = gainShareOf(startReal, basisNominal, anchor, ym, inflation);
+      const rT = BELKA_RATE * g;
+      const gross = Math.min(Math.max(startReal, 0), withdrawalReal / (1 - rT));
+      if (startReal > EPS) basisNominal *= (startReal - gross) / startReal;
+      taxReal = gross * rT;
+      grossReal = gross;
+      endReal = (startReal - gross) * (1 + realRate);
+      // Wyczerpanie: netto dostarczone poniżej potrzeby albo saldo na zerze.
+      if (gross * (1 - rT) < withdrawalReal - EPS || endReal <= EPS) {
+        if (endReal <= EPS) endReal = 0;
+        depletedYear = n;
+      }
+      taxTotalReal += taxReal;
+    } else {
+      endReal = (startReal - withdrawalReal) * (1 + realRate);
+      if (endReal <= EPS) { endReal = 0; depletedYear = n; }
+    }
+    const growthReal = endReal - (startReal - grossReal);
     const pf1 = Math.pow(1 + inflation, n - 1);
     const pfN = Math.pow(1 + inflation, n);
     const startNominal = startReal * pf1;
     const withdrawalNominal = withdrawalReal * pf1;
     const endNominal = endReal * pfN;
-    const growthNominal = endNominal - (startNominal - withdrawalNominal);
+    const growthNominal = endNominal - (startNominal - withdrawalNominal - (active.any ? taxReal * pf1 : 0));
     rows.push({
       year: n, ym, age: birth ? ageAt(birth, ym).years : null,
       startReal, startNominal,
       withdrawalReal, withdrawalNominal,
       growthReal, growthNominal, endReal, endNominal,
+      ...(active.any ? { taxReal, taxNominal: taxReal * pf1, grossReal } : {}),
     });
     bal = endReal;
     if (depletedYear != null) break;
@@ -781,7 +940,27 @@ export function projectWithdrawal(state, opts = {}) {
   return {
     startYm, startAge, hypothetical, swr, realRate, inflation, nominalRate,
     withdrawalRealYearly, withdrawalGrowthReal: wG - 1, priceFactorAtStart,
-    rows, depletedYear, ro,
+    rows, depletedYear, ro, taxesApplied: active,
+    ...(active.any ? { taxTotalReal } : {}),
+  };
+}
+
+// Statystyki podatkowe „na dziś" dla karty w Analizie — czysta, liczona przy
+// renderze (nie w recomputeDerived). null, gdy podatki wyłączone.
+export function taxStats(state, balances, nowYm = todayYm()) {
+  const active = taxesActive(state);
+  if (!active.any || !balances.taxSnapshot) return null;
+  const tracker = makeTaxTracker(state, balances.taxSnapshot); // O(1)
+  const gainShare = tracker.gainShare(nowYm);
+  const targetNet = fireTargetAt(state, nowYm);
+  return {
+    active,
+    gainShare,
+    netValueReal: tracker.netValueReal(nowYm),
+    targetNet,
+    targetGross: belkaGrossTarget(targetNet, gainShare),
+    basisNominal: balances.taxSnapshot.basisNominal,
+    portfolio: balances.portfolio,
   };
 }
 
@@ -987,8 +1166,9 @@ export function excelProjection(state, opts = {}) {
 
 // Wrażliwość: pełny potok na płytkiej kopii stanu (wszystkie funkcje potoku
 // są czystymi czytelnikami — stan wejściowy pozostaje nietknięty, test F15a).
-export function projectionWith(state, { assumptions = {}, extraMonthlySavings = 0, extraSavings = null } = {}, now = new Date()) {
+export function projectionWith(state, { assumptions = {}, taxes = null, extraMonthlySavings = 0, extraSavings = null } = {}, now = new Date()) {
   const st = { ...state, assumptions: { ...state.assumptions, ...assumptions } };
+  if (taxes) st.taxes = { ...state.taxes, ...taxes }; // płytka kopia — stan wejściowy nietknięty
   const upto = lastCompleteMonth(now);
   let plan = buildPlan(st);
   if (extraMonthlySavings) {
@@ -1411,7 +1591,7 @@ export function defaultAssumptions() {
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 4,
+    version: 5,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },
@@ -1429,6 +1609,7 @@ export function createState(partial = {}, now = new Date()) {
       },
     },
     debt: { overrides: [], familyOverrides: [] },
+    taxes: { belkaEnabled: false },
     entries: [],
     ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null },
   };

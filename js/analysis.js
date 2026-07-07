@@ -203,15 +203,19 @@ export function projectionCard({ mode, blocks, series, excelRows, houseOn, selec
 
 export function withdrawalCard({ w, chartHTML }) {
   const target = w.swr > 0 ? w.withdrawalRealYearly / w.swr : 0;
+  const taxed = !!(w.taxesApplied && w.taxesApplied.any);
   const banner = w.hypothetical
     ? `<div class="banner info small">FIRE poza horyzontem prognozy — scenariusz modelowy od dzisiejszego celu (${money(target)}).</div>`
     : `<p class="muted small">Start: ${esc(Fmt.formatMonthName(w.startYm))}${w.startAge != null ? ` (wiek ${w.startAge})` : ''}, portfel ${money(w.rows.length ? w.rows[0].startReal : 0)}.</p>`;
-  const headers = ['Rok', 'Wiek', 'Saldo pocz. (nom.)', 'Wypłata (nom.)', 'Wzrost (nom.)', 'Saldo końc. (nom.)', 'Saldo końc. (realnie)'];
+  const headers = ['Rok', 'Wiek', 'Saldo pocz. (nom.)', 'Wypłata (nom.)',
+    ...(taxed ? ['Podatek (nom.)'] : []),
+    'Wzrost (nom.)', 'Saldo końc. (nom.)', 'Saldo końc. (realnie)'];
   const rows = w.rows.map(r => `<tr${w.depletedYear === r.year ? ' class="depleted"' : ''}>
     <td>${r.year} <span class="muted small">${r.ym.slice(0, 4)}</span></td>
     <td>${r.age != null ? r.age : '—'}</td>
     <td>${money(r.startNominal)}</td>
     <td>${money(r.withdrawalNominal)}</td>
+    ${taxed ? `<td>${money(r.taxNominal)}</td>` : ''}
     <td>${money(r.growthNominal)}</td>
     <td>${money(r.endNominal)}</td>
     <td>${money(r.endReal)}</td>
@@ -223,9 +227,12 @@ export function withdrawalCard({ w, chartHTML }) {
   return `<div class="card"><h2>Faza wypłat 🏖️</h2>
     ${banner}${postRateBanner}${depletionWarn}
     ${chartHTML ? `${chartHTML}${withdrawalLegend()}` : ''}
+    ${taxed ? kv('Podatki w fazie wypłat łącznie (realnie)', money(w.taxTotalReal)) : ''}
     ${table(headers, rows)}
     ${metodologia([
       `Wypłata (rok 1) = cel × SWR = ${money(target)} × ${Fmt.formatPct(w.swr)} = ${money(w.withdrawalRealYearly)}/rok; rośnie z inflacją ${Fmt.formatPct(w.inflation)}.`,
+      taxed ? 'Wypłata brutto jest powiększona tak, aby po podatku zostało dokładnie tyle, ile potrzebujesz na wydatki; kolumna «Podatek» pokazuje różnicę.' : null,
+      taxed ? 'Podatek = 19% × udział zysku nominalnego w portfelu — rośnie z czasem, bo coraz większa część portfela to zysk.' : null,
       w.withdrawalGrowthReal > 0
         ? `Wydatki rosną o ${Fmt.formatPct(w.withdrawalGrowthReal)} realnie także po FIRE — tak wybrano w ustawieniach (Plan → Profil i FIRE).`
         : null,
@@ -295,6 +302,26 @@ export function dieWithZeroCard({ resultHTML, deathAge }) {
       <input id="an-death-age" type="number" inputmode="numeric" min="1" value="${deathAge}">
     </div>
     <div id="dwz-result">${resultHTML}</div>
+  </div>`;
+}
+
+// ── 4c. Podatek Belki ───────────────────────────────────────────────────
+
+export function belkaCard({ ts, fireWith, fireWithout }) {
+  return `<div class="card"><h2>Podatek Belki 🧾</h2>
+    ${kv('Cel FIRE (netto, bez podatku)', money(ts.targetNet))}
+    ${kv('Cel FIRE (brutto, z podatkiem)', money(ts.targetGross))}
+    ${kv('Różnica przez podatek', money(ts.targetGross - ts.targetNet), 'warn-text')}
+    ${kv('Udział zysku w portfelu (dziś)', Fmt.formatPct(ts.gainShare, 1))}
+    ${kv('Portfel po podatku (dziś)', money(ts.netValueReal))}
+    ${kv('Data FIRE z podatkiem', fireCell(fireWith, fireWithout))}
+    ${metodologia([
+      'Aplikacja śledzi koszt zakupu (basis) Twoich wpłat nominalnie: wpłata powiększa basis o swoją ówczesną wartość w złotówkach, wypłata zabiera basis proporcjonalnie, wzrost portfela go nie zmienia.',
+      'Podatek przy wypłacie = 19% × udział zysku = 19% × (1 − basis ÷ wartość nominalna). Od samych wpłat (kapitału) podatku nie ma.',
+      'Basis liczymy nominalnie, bo tak działa podatek Belki — zysk czysto inflacyjny też jest opodatkowany, więc realnie oddajesz więcej niż 19% realnego zysku.',
+      'Cel brutto = cel netto ÷ (1 − 19% × udział zysku) — tyle musi mieć portfel, żeby po podatku zostało dokładnie tyle, ile potrzebujesz.',
+      'Portfel startowy traktujemy jako w całości wpłaty (basis = wartość na starcie) — bez tej informacji to najprostsze bezpieczne założenie.',
+    ])}
   </div>`;
 }
 

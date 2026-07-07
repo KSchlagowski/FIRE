@@ -1,7 +1,7 @@
 // storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
 // migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const KEY = 'fireApp';
 export const BAK = 'fireApp.bak';
 export const APP_TAG = 'fire-companion';
@@ -68,6 +68,13 @@ export function migrate(s) {
     }
     // fall-through
     case 4:
+      // v4 → v5: sekcja podatków (Belka), domyślnie wyłączona.
+      if (!cur.taxes || typeof cur.taxes.belkaEnabled !== 'boolean') {
+        cur.taxes = { belkaEnabled: false };
+      }
+      cur.version = 5;
+      // fall-through
+    case 5:
       break;
     default:
       throw new Error(`Nieznana wersja schematu: ${cur.version}`);

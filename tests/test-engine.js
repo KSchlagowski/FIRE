@@ -432,13 +432,14 @@ function mockBacking() {
 }
 
 test('F11: eksport/import round-trip', () => {
-  const st = baseState();
+  const st = baseState({ taxes: { belkaEnabled: true } });
   st.entries.push(entry('2026-07', 8000, 5000));
   const json = S.exportJSON(st);
   const preview = S.importPreview(json);
   assertEq(preview.entriesCount, 1);
   assertEq(preview.range.from, '2026-07');
   assertEq(JSON.stringify(preview.state.entries), JSON.stringify(st.entries));
+  assertEq(JSON.stringify(S.importJSON(json).taxes), JSON.stringify(st.taxes), 'taxes przeżywa round-trip dosłownie');
 });
 
 test('F11: odzysk z .bak po korupcji', () => {
@@ -455,17 +456,30 @@ test('F11: odzysk z .bak po korupcji', () => {
   assertEq(res.state.assumptions.monthlyIncome, 10000, '.bak trzyma poprzedni pełny zapis');
 });
 
-test('F11: v4 round-trip; migracja v1→…→4, v2→…→4, v3→4; nowsza wersja odrzucona', () => {
+test('F11: v5 round-trip; migracja v1→…→5, v2→…→5, v3→…→5, v4→5; nowsza wersja odrzucona', () => {
   const st = baseState();
-  assertEq(st.version, 4, 'nowy stan = v4');
+  assertEq(st.version, 5, 'nowy stan = v5');
   assertEq(st.version, S.SCHEMA_VERSION, 'engine i storage zsynchronizowane');
-  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 4);
+  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 5);
+  // v4 → v5: dokładana sekcja podatków (Belka), domyślnie wyłączona.
+  const v4 = JSON.parse(JSON.stringify(st));
+  v4.version = 4;
+  delete v4.taxes;
+  const m4 = S.migrate(S.validateState(v4));
+  assertEq(m4.version, 5);
+  assertEq(m4.taxes.belkaEnabled, false, 'Belka domyślnie wyłączona');
+  // Jawnie włączona Belka przeżywa migrację bez zmian.
+  const v4b = JSON.parse(JSON.stringify(st));
+  v4b.version = 4;
+  v4b.taxes = { belkaEnabled: true };
+  assertEq(S.migrate(S.validateState(v4b)).taxes.belkaEnabled, true, 'jawne true nietknięte');
   // v3 → v4: dokładane mrożenie wydatków po FIRE — domyślnie true (stałe realnie).
   const v3 = JSON.parse(JSON.stringify(st));
   v3.version = 3;
   delete v3.assumptions.freezeExpensesAtRetirement;
+  delete v3.taxes;
   const m3 = S.migrate(S.validateState(v3));
-  assertEq(m3.version, 4);
+  assertEq(m3.version, 5);
   assertEq(m3.assumptions.freezeExpensesAtRetirement, true, 'domyślnie stałe realnie');
   // Jawne false przeżywa migrację bez zmian.
   const v3b = JSON.parse(JSON.stringify(st));
@@ -477,8 +491,10 @@ test('F11: v4 round-trip; migracja v1→…→4, v2→…→4, v3→4; nowsza we
   v2.version = 2;
   delete v2.assumptions.postRetirementReturnReal;
   delete v2.assumptions.freezeExpensesAtRetirement;
+  delete v2.taxes;
   const m2 = S.migrate(S.validateState(v2));
-  assertEq(m2.version, 4, 'łańcuch 2→3→4');
+  assertEq(m2.version, 5, 'łańcuch 2→3→4→5');
+  assertEq(m2.taxes.belkaEnabled, false, 'podatki dołożone w łańcuchu');
   assertEq(m2.assumptions.postRetirementReturnReal, 0.02, 'domyślna marża EDO 2%');
   assertEq(m2.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dołożone');
   // Istniejąca jawna wartość zwrotu po FIRE przeżywa migrację bez zmian.
@@ -493,13 +509,15 @@ test('F11: v4 round-trip; migracja v1→…→4, v2→…→4, v3→4; nowsza we
   delete v1.debt.familyOverrides;
   delete v1.assumptions.postRetirementReturnReal;
   delete v1.assumptions.freezeExpensesAtRetirement;
+  delete v1.taxes;
   const migrated = S.migrate(S.validateState(v1));
-  assertEq(migrated.version, 4);
+  assertEq(migrated.version, 5);
   assertTrue(migrated.housing.housePlan.familyLoan && migrated.housing.housePlan.familyLoan.enabled === false, 'familyLoan dodany, wyłączony');
   assertTrue(Array.isArray(migrated.debt.familyOverrides) && migrated.debt.familyOverrides.length === 0, 'familyOverrides = []');
   assertEq(migrated.assumptions.postRetirementReturnReal, 0.02, 'zwrot po FIRE dodany w łańcuchu');
   assertEq(migrated.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dodane w łańcuchu');
-  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99/v5 odrzucona');
+  assertEq(migrated.taxes.belkaEnabled, false, 'podatki dodane w łańcuchu 1→…→5');
+  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99/v6 odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: 'inna-apka', version: 1, state: {} })), 'obcy plik odrzucony');
 });
 
@@ -1905,4 +1923,209 @@ test('F29e: stackedBarSVG detail — gęstsze etykiety lat na szerokim płótnie
   assertTrue(detLabels > plainLabels, `detail gęstsze: ${detLabels} > ${plainLabels}`);
   assertTrue(plain.includes('viewBox="0 0 440 170"'), 'domyślny viewBox słupków bez zmian');
   assertEq((plain.match(/class="axis"/g) || []).length, 3, 'domyślnie 3 osie');
+});
+
+// ── F30: podatek Belki (19% od zysków nominalnych) ───────────────────────
+// Basis nominalny (epoka kotwicy), gross-up, warunek FIRE „po podatku",
+// niezmienniki włącz/wyłącz. Plan: docs/plan-belka-tax-toggle.md (F29→F30,
+// bo F29 zajęły wykresy).
+
+// Stan F1-podobny: dochód 10 000 / życie 6 000, portfel startowy 100 000.
+function f30State(belka, over = {}) {
+  return baseState(deep({
+    assumptions: { portfolioStart: 100000 },
+    taxes: { belkaEnabled: belka },
+  }, over));
+}
+
+test('F30a: podatki wyłączone — stan v4 po migracji liczy identycznie jak belkaEnabled:false', () => {
+  const stOff = f30State(false);
+  const v4 = JSON.parse(JSON.stringify(stOff));
+  v4.version = 4;
+  delete v4.taxes;
+  const stMig = S.migrate(S.validateState(v4));
+  const pOff = E.projectionWith(stOff, {}, NOW);
+  const pMig = E.projectionWith(stMig, {}, NOW);
+  assertEq(pMig.fireYm, pOff.fireYm, 'fireYm identyczne');
+  assertEq(pMig.taxes.any, false, 'podatki nieaktywne po migracji');
+  assertEq(
+    JSON.stringify(pMig.series.map(r => [r.ym, r.cash, r.portfolio])),
+    JSON.stringify(pOff.series.map(r => [r.ym, r.cash, r.portfolio])),
+    'serie identyczne',
+  );
+  const w = E.projectWithdrawal(stOff, { projection: pOff });
+  assertEq(w.taxesApplied.any, false, 'wypłaty bez podatków');
+  assertTrue(w.rows.every(r => r.taxReal === undefined && r.grossReal === undefined), 'wiersze bez pól podatkowych');
+  assertTrue(w.taxTotalReal === undefined, 'brak taxTotalReal przy wyłączonych podatkach');
+});
+
+test('F30b: sam kapitał (r=0, inflacja=0) — gainShare 0, cel brutto = netto, podatek 0', () => {
+  const f = FIX.F30;
+  const st = f30State(true, {
+    assumptions: { realReturnAnnual: 0, inflationAnnual: 0, cashReturnReal: 0, postRetirementReturnReal: 0 },
+  });
+  for (let i = 0; i < 6; i++) st.entries.push(entry(E.addMonths('2026-07', i), 10000, 6000));
+  const bal = E.replayBalances(st, '2026-12');
+  const tr = E.makeTaxTracker(st, bal.taxSnapshot);
+  for (const r of bal.rows) {
+    assertClose(E.gainShareOf(r.portfolio, r.basisNominal, st.anchorMonth, r.ym, 0), 0, f.eps, `gainShare 0 w ${r.ym}`);
+    assertClose(r.netPortfolio, r.portfolio, 1e-9, `netto = brutto w ${r.ym}`);
+  }
+  assertClose(tr.gainShare('2026-12'), 0, f.eps);
+  assertEq(E.belkaGrossTarget(f.netTarget, 0), f.netTarget, 'gross-up przy gainShare 0 = identyczność');
+  const w = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: 720000, years: 5 });
+  assertTrue(w.rows.every(r => Math.abs(r.taxReal) < f.eps), 'taxReal = 0 każdego roku');
+});
+
+test('F30c: basis NOMINALNY — zysk czysto inflacyjny też opodatkowany (r=0, inflacja 3%)', () => {
+  const f = FIX.F30;
+  const st = f30State(true, {
+    assumptions: { portfolioStart: 0, realReturnAnnual: 0, inflationAnnual: f.infl },
+  });
+  const tr = E.makeTaxTracker(st);
+  tr.contribute(f.singleContrib, '2026-07'); // wpłata na kotwicy, bez dalszych przepływów
+  const ym = E.addMonths('2026-07', f.months);
+  const expected = 1 - Math.pow(1 + f.infl, -f.months / 12);
+  assertClose(tr.gainShare(ym), expected, f.eps, 'gainShare = 1 − 1,03^(−2)');
+  assertTrue(tr.netValueReal(ym) < f.singleContrib - 1, 'realny zysk 0, a podatek > 0 — basis musi być nominalny');
+  // End-to-end: replayBalances z samym portfelem startowym daje ten sam udział.
+  const st2 = f30State(true, {
+    assumptions: { portfolioStart: f.singleContrib, realReturnAnnual: 0, inflationAnnual: f.infl },
+  });
+  const bal2 = E.replayBalances(st2, ym);
+  const tr2 = E.makeTaxTracker(st2, bal2.taxSnapshot);
+  assertClose(tr2.gainShare(ym), expected, f.eps, 'ten sam udział przez replayBalances');
+});
+
+test('F30d: algebra gross-up — odwracalność i monotonia w gainShare', () => {
+  const f = FIX.F30;
+  let prev = 0;
+  for (const g of [0, 0.1, 0.25, 0.5, 0.75, 1]) {
+    const gross = E.belkaGrossTarget(f.netTarget, g);
+    assertClose(gross * (1 - E.BELKA_RATE * g), f.netTarget, 0.01, `odwracalność przy g=${g}`);
+    assertTrue(gross >= prev, `rosnący w g (g=${g})`);
+    prev = gross;
+  }
+  assertEq(E.belkaGrossTarget(f.netTarget, -1), f.netTarget, 'clamp g<0');
+  assertClose(E.belkaGrossTarget(f.netTarget, 2), f.netTarget / (1 - E.BELKA_RATE), 0.01, 'clamp g>1');
+});
+
+test('F30e: niezmienniki trackera — withdraw/setTotal zachowują gainShare, krawędzie', () => {
+  const f = FIX.F30;
+  const st = f30State(true, { assumptions: { portfolioStart: 0, inflationAnnual: f.infl } });
+  const mkTr = () => {
+    const tr = E.makeTaxTracker(st);
+    tr.contribute(10000, '2026-07');
+    for (let i = 0; i < 24; i++) tr.grow(0.01); // zysk rynkowy → gainShare > 0
+    return tr;
+  };
+  const ym = E.addMonths('2026-07', 24);
+  const g0 = mkTr().gainShare(ym);
+  assertTrue(g0 > 0.1, 'jest zysk do opodatkowania');
+  for (const x of [100, 5000, 12000]) {
+    const tr = mkTr();
+    tr.withdraw(x);
+    assertClose(tr.gainShare(ym), g0, f.eps, `withdraw(${x}) zachowuje gainShare`);
+  }
+  const tr2 = mkTr();
+  tr2.setTotal(31337, ym);
+  assertClose(tr2.gainShare(ym), g0, f.eps, 'setTotal (D9) zachowuje gainShare');
+  assertClose(tr2.snapshot().value, 31337, 1e-9);
+  // Zero → dodatnia korekta: wszystko jako wpłata, gainShare 0.
+  const tr3 = E.makeTaxTracker(st);
+  tr3.setTotal(50000, ym);
+  assertClose(tr3.gainShare(ym), 0, f.eps, 'korekta z zera → gainShare 0');
+  // Nadmierny drenaż: wartość ujemna, basis 0, netto = surowa wartość.
+  const tr4 = mkTr();
+  tr4.withdraw(99999);
+  const snap4 = tr4.snapshot();
+  assertTrue(snap4.value < 0, 'wartość ujemna po nadmiernym drenażu');
+  assertEq(snap4.basisNominal, 0, 'basis z podłogą 0');
+  assertClose(tr4.netValueReal(ym), snap4.value, 1e-9, 'ujemna wartość bez podatku');
+});
+
+test('F30f: Belka opóźnia FIRE — miesiąc przypięty jako kotwica regresji', () => {
+  const st = f30State(false);
+  const pOff = E.projectionWith(st, {}, NOW);
+  const pOn = E.projectionWith(st, { taxes: { belkaEnabled: true } }, NOW);
+  assertTrue(pOff.reached && pOn.reached, 'obie prognozy osiągają FIRE');
+  assertTrue(E.ymToIdx(pOn.fireYm) >= E.ymToIdx(pOff.fireYm), 'z podatkiem nie wcześniej');
+  assertTrue(E.ymToIdx(pOn.fireYm) > E.ymToIdx(pOff.fireYm), 'z podatkiem później (jest zysk do opodatkowania)');
+  assertEq(pOff.fireYm, '2045-10', 'kotwica regresji bez podatku');
+  assertEq(pOn.fireYm, '2047-06', 'kotwica regresji z podatkiem (+20 mies.)');
+});
+
+test('F30g: tracker tylko obserwuje — salda i przepływy bit-w-bit identyczne on/off', () => {
+  const mk = belka => {
+    const st = f30State(belka, { assumptions: { portfolioStart: 50000 } });
+    st.entries.push(entry('2026-07', 9000, 4000));
+    st.entries.push(entry('2026-08', 3000, 9500)); // deficyt → drenaż portfela
+    st.entries.push(entry('2026-09', 8000, 5000, { balanceOverride: 70000 }));
+    st.entries.push(entry('2026-10', 8000, 5000));
+    return st;
+  };
+  const on = E.replayBalances(mk(true), '2026-12');
+  const off = E.replayBalances(mk(false), '2026-12');
+  const strip = rows => rows.map(r => [r.ym, r.cash, r.portfolio, r.flowCash, r.flowPortfolio, r.phase, r.override]);
+  assertEq(JSON.stringify(strip(on.rows)), JSON.stringify(strip(off.rows)), 'wiersze replayBalances identyczne');
+  assertTrue(on.taxSnapshot != null && off.taxSnapshot == null, 'snapshot tylko przy aktywnych podatkach');
+  assertClose(on.taxSnapshot.value, on.portfolio, 1e-9, 'tracker lustrzany do portfela');
+  assertTrue(on.rows.every(r => r.basisNominal != null && r.netPortfolio <= r.portfolio + 1e-9), 'pola podatkowe na wierszach');
+  const NOW2 = new Date(2027, 0, 15);
+  const pOn = E.projectionWith(mk(true), {}, NOW2);
+  const pOff = E.projectionWith(mk(false), {}, NOW2);
+  const n = Math.min(pOn.series.length, pOff.series.length);
+  for (let i = 0; i < n; i++) {
+    if (Math.abs(pOn.series[i].portfolio - pOff.series[i].portfolio) > 1e-6) {
+      fail(`portfel rozjechany w ${pOn.series[i].ym}`);
+    }
+  }
+  assertTrue(E.ymToIdx(pOn.fireYm) >= E.ymToIdx(pOff.fireYm), 'on-run kończy nie wcześniej');
+});
+
+test('F30h: faza wypłat — erozja basisu, podatek rośnie, tożsamość wiersza', () => {
+  const st = f30State(true, { assumptions: { postRetirementReturnReal: 0.05 } }); // infl 3% z baseState
+  const w = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: 1800000, years: 20 });
+  assertEq(w.taxesApplied.belka, true);
+  assertClose(w.rows[0].taxReal, 0, 1e-9, 'rok 1: basis = wartość na starcie (seed bez projekcji) → podatek 0');
+  for (let i = 1; i < w.rows.length; i++) {
+    assertTrue(w.rows[i].taxReal > w.rows[i - 1].taxReal - 1e-12, `podatek niemalejący (rok ${i + 1})`);
+  }
+  assertTrue(w.rows[w.rows.length - 1].taxReal > 0, 'podatek dodatni na końcu');
+  let taxSum = 0;
+  for (const r of w.rows) {
+    assertClose(r.endReal, (r.startReal - r.withdrawalReal - r.taxReal) * 1.05, 0.01, `tożsamość endReal (rok ${r.year})`);
+    assertClose(r.taxNominal, r.taxReal * Math.pow(1.03, r.year - 1), 0.01, `taxNominal = taxReal × pf1 (rok ${r.year})`);
+    assertClose(r.grossReal, r.withdrawalReal + r.taxReal, 0.01, `brutto = netto + podatek (rok ${r.year})`);
+    taxSum += r.taxReal;
+  }
+  assertClose(w.taxTotalReal, taxSum, 0.01, 'suma podatków spójna');
+  assertEq(w.depletedYear, null, 'portfel 25× wydatków przy 5% realnie się nie wyczerpuje');
+});
+
+test('F30i: projectionWith({taxes}) — czystość stanu i zgodność z mutacją kopii', () => {
+  const st = f30State(false);
+  const before = JSON.stringify(st);
+  const p = E.projectionWith(st, { taxes: { belkaEnabled: true } }, NOW);
+  assertEq(JSON.stringify(st), before, 'stan wejściowy nietknięty');
+  const stCopy = JSON.parse(before);
+  stCopy.taxes = { belkaEnabled: true };
+  const pDirect = E.projectionWith(stCopy, {}, NOW);
+  assertEq(p.fireYm, pDirect.fireYm, 'override ≡ bezpośrednia mutacja kopii');
+  assertEq(p.taxes.belka, true, 'projekcja wie, że Belka aktywna');
+});
+
+test('F30j: taxStats — cel brutto > netto, netto portfela ≤ brutto, null gdy wyłączone', () => {
+  const st = f30State(true);
+  for (let i = 0; i < 6; i++) st.entries.push(entry(E.addMonths('2026-07', i), 10000, 6000));
+  const bal = E.replayBalances(st, '2026-12');
+  const ts = E.taxStats(st, bal, '2026-12');
+  assertTrue(ts != null, 'taxStats obecny przy aktywnej Belce');
+  assertTrue(ts.gainShare >= 0 && ts.gainShare <= 1, 'gainShare w [0,1]');
+  assertTrue(ts.targetGross >= ts.targetNet, 'cel brutto ≥ netto');
+  assertClose(ts.targetGross, E.belkaGrossTarget(ts.targetNet, ts.gainShare), 0.01, 'gross-up spójny');
+  assertTrue(ts.netValueReal <= ts.portfolio + 1e-9, 'portfel po podatku ≤ brutto');
+  const stOff = f30State(false);
+  const balOff = E.replayBalances(stOff, '2026-12');
+  assertEq(E.taxStats(stOff, balOff, '2026-12'), null, 'null przy wyłączonych podatkach');
 });

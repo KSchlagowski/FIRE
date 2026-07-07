@@ -124,6 +124,7 @@ and, if it's a top-level tab, the `#tabbar` list in `index.html`.
                  expenseGrowthReal, incomeGrowthReal, inflationAnnual },
   housing:     { currentRentMonthly, housePlan: { mortgage{…Nominal}, familyLoan{…Nominal}, … } },
   debt:        { overrides, familyOverrides },   // real & family-loan corrections
+  taxes:       { belkaEnabled },                 // Belka 19% toggle (default false)
   entries:     [ … monthly check-ins … ],
   ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt } }
 ```
@@ -283,7 +284,15 @@ output parity/purity (`viewBox`, 3 axis lines, Y/X labels), the `width`/`height`
 size options (no `NaN`), `maxPoints` decimation (last row kept at the right edge),
 and the `detail` flag (5 Y labels, intermediate no-duplicate year labels on lines,
 denser year labels on bars). The fullscreen overlay itself is DOM (`ui.js`) —
-covered by manual QA, not Node.
+covered by manual QA, not Node. F30 covers the Belka tax toggle
+(`taxes.belkaEnabled`): off-path invariance (a v4 state migrates and computes
+identically), never-taxed-on-principal, the nominal-basis assertion (inflation-only
+gains still taxed — `gainShare = 1 − (1+i)^(−t)`), `belkaGrossTarget` algebra,
+`makeTaxTracker` invariants (withdraw/`setTotal` preserve gainShare, over-drain
+floors basis at 0), the observer invariant (`replayBalances`/`projectFire` balances
+bit-identical on vs off), the pinned Belka-delays-FIRE regression months,
+withdrawal-phase basis erosion (per-row `endReal` identity, growing `taxReal`),
+`projectionWith({ taxes })` purity, `taxStats`, and the v4→v5 migration chain.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.
