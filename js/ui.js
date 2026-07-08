@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.19.0';
+export const APP_VERSION = '1.19.1';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -115,9 +115,18 @@ function parsePct(id, { required = true, min = -0.5, max = 1 } = {}) {
   return { value: p };
 }
 
+// FI% odporne na zdegenerowany cel (D4): przy celu ≤ 0 (np. onboarding z zerowymi
+// wydatkami) zwraca null zamiast dzielić — ring nie pokaże NaN/∞, a „FIRE osiągnięte"
+// nie zapali się fałszywie z Infinity.
+function fiPercent(portfolio, target) {
+  return target > 0 ? portfolio / target : null;
+}
+
 function ringSVG(pct, sublabel = 'celu FIRE') {
   const r = 80, c = 2 * Math.PI * r;
-  const dash = Math.max(0, Math.min(pct, 1)) * c;
+  // D5: NaN/Infinity/null/ujemne → 0; >100% → 1. Jeden zacisk dla geometrii i etykiety.
+  const p = Number.isFinite(pct) ? Math.max(0, Math.min(pct, 1)) : 0;
+  const dash = p * c;
   return `<div class="ring-wrap">
     <svg viewBox="0 0 190 190" width="190" height="190">
       <circle cx="95" cy="95" r="${r}" fill="none" stroke="var(--line)" stroke-width="14"/>
@@ -126,7 +135,7 @@ function ringSVG(pct, sublabel = 'celu FIRE') {
         transform="rotate(-90 95 95)"/>
     </svg>
     <div class="ring-center">
-      <span class="pct">${(Math.min(pct, 1) * 100).toFixed(1).replace('.', ',')}%</span>
+      <span class="pct">${(p * 100).toFixed(1).replace('.', ',')}%</span>
       <span class="muted small">${esc(sublabel)}</span>
     </div>
   </div>`;
@@ -572,9 +581,10 @@ function dashboardMode() {
 function fireReachedNow(state, d, nowYm) {
   const hp = state.housing.housePlan;
   const targets = E.fireTargetsToday(state, nowYm);
-  const pct = d.balances.portfolio / targets.primary;
+  const pct = fiPercent(d.balances.portfolio, targets.primary);
   const famSettled = !(d.family && d.family.started) || d.family.balanceNominal <= 0;
-  return pct >= 1 && (!hp.enabled || (d.debt.started && d.debt.balanceNominal <= 0 && famSettled));
+  // Cel ≤ 0 (pct === null) nigdy nie jest trywialnie „osiągnięty" (4.2).
+  return pct != null && pct >= 1 && (!hp.enabled || (d.debt.started && d.debt.balanceNominal <= 0 && famSettled));
 }
 
 // Wspólny render „ile odkładać, by zdążyć na wiek FIRE" — jeden komunikat dla
@@ -701,7 +711,7 @@ function renderDashboard() {
     }
   } else {
     const targets = E.fireTargetsToday(state, nowYm);
-    const pct = d.balances.portfolio / targets.primary;
+    const pct = fiPercent(d.balances.portfolio, targets.primary);
     const reachedNow = fireReachedNow(state, d, nowYm);
     html += `<div class="card hero">
       ${reachedNow ? '<div class="banner success"><b>🎉 FIRE osiągnięte!</b> Portfel pokrywa Twoje wydatki przy bezpiecznej stopie wypłat.</div>' : ''}
@@ -805,7 +815,7 @@ function fireJourneyHero(proj) {
   // Wtedy wracamy do klasycznego FI% (portfel ÷ cel).
   if (!proj.reached) {
     return `<div class="card hero">
-      ${ringSVG(d.balances.portfolio / targets.primary)}
+      ${ringSVG(fiPercent(d.balances.portfolio, targets.primary))}
       <p class="warn-text small" style="margin:.5rem 0 0">Przy obecnym planie cel FIRE jest poza 60-letnim horyzontem — zajrzyj do założeń.</p>
       <p class="muted small">Kwota FIRE dziś: ${Fmt.formatPLN(targets.primary)}.</p>
     </div>`;

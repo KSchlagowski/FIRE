@@ -42,11 +42,15 @@ export function chartSVG(rows, defs, { height = 170, width = 440, maxPoints = 12
   const step = Math.ceil(rows.length / maxPoints);
   const pts = rows.filter((_, i) => i % step === 0 || i === rows.length - 1);
   const W = width, H = height, padL = 48, padR = 8, padT = 10, padB = 20;
+  // Skala z PEŁNEJ serii (przed decymacją), by szczyt poza krokiem próbkowania
+  // nadal wyznaczał max (D7). Dla serii monotonicznych/≤maxPoints identyczna z pts.
   let max = 0;
-  for (const r of pts) for (const d of defs) max = Math.max(max, d.get(r) || 0);
+  for (const r of rows) for (const d of defs) max = Math.max(max, d.get(r) || 0);
   if (max <= 0) max = 1;
   const x = i => padL + i * (W - padL - padR) / Math.max(1, pts.length - 1);
-  const y = v => padT + (1 - Math.min(v, max) / max) * (H - padT - padB);
+  // Zacisk do [0, max]: ujemne lądują w dolnym paśmie, nie poza viewBox (D7).
+  // Dla v ≥ 0 (domyślna ścieżka) wynik bajt-w-bajt jak dotąd.
+  const y = v => padT + (1 - Math.max(0, Math.min(v, max)) / max) * (H - padT - padB);
   const lines = [];
   for (const d of defs) {
     if (d.split) {

@@ -1,6 +1,13 @@
 // fixtures.mjs — liczby oczekiwane wyprowadzone z Kalkulator_FIRE.xlsx
 // (arkusze: Kalkulator, Projekcja, Faza wypłat, Plan z domem).
 
+// Limity IKE/IKZE bierzemy z engine.js (źródło prawdy), zamiast duplikować liczby
+// w fixture — dzięki temu nie mogą po cichu się rozjechać. Wartości 2026 są
+// przypinane osobnym testem (F31: stałe limitów).
+import {
+  IKE_LIMIT_YEARLY, IKZE_LIMIT_EMPLOYEE, IKZE_LIMIT_SELFEMPLOYED,
+} from '../js/engine.js';
+
 export const FIX = {
   // Projekcja: konwencja roczna end = (start + wpłaty) × (1+r).
   F1: {
@@ -51,7 +58,7 @@ export const FIX = {
     diff35pct: 257142.86,
   },
   // Coast FIRE: 1.8M/1.05^(222/12); Σodsetek kontraktu F3: A·180 − 1.1M.
-  F17: { coast: 729911.95, contractInterest: 655962.35, eps: 1 },
+  F17: { coast: 729911.95, contractInterest: 655962.35, eps: 0.01 },
   // Symulacja „co jeśli” (projectionWith.extraSavings): przy r=0 kwota
   // jednorazowa ląduje 1:1 w miesiącu symulacji, recurring = kwota × liczba
   // miesięcy od miesiąca startu symulacji.
@@ -129,7 +136,7 @@ export const FIX = {
   // PIT w kwietniu. (Plan docs/plan-ike-ikze-buckets.md mówił F30 — zajęte
   // przez Belkę → F31.)
   F31: {
-    limits: { ike: 28260, ikzeEmployee: 11304, ikzeSelfEmployed: 16956 },
+    limits: { ike: IKE_LIMIT_YEARLY, ikzeEmployee: IKZE_LIMIT_EMPLOYEE, ikzeSelfEmployed: IKZE_LIMIT_SELFEMPLOYED },
     yearlyContrib: 48000,        // 4000/mies. → IKZE 11304, IKE 28260, taxable 8436
     taxableRemainder: 8436,
     refundEmployee12: 1356.48,   // 0.12 × 11304

@@ -415,8 +415,49 @@ test('F10: formatMonthName + parsePLN round-trip', () => {
   assertEq(F.formatMonthName('2026-06'), 'czerwiec 2026');
   assertEq(F.parsePLN(F.formatPLN(1234567)), 1234567);
   assertEq(F.parsePLN('1 234,56 zł'), 1234.56);
-  assertEq(F.parsePLN('12345.67'), 12345.67);
+  assertEq(F.parsePLN('12345,67'), 12345.67);      // przecinek = separator dziesiętny
   assertEq(F.parsePLN('abc'), null);
+});
+
+// ── F32: parsowanie/formatowanie pl-PL — poprawki z audytu (D1–D3) ────────
+
+test('F32a: parsePLN — tabela locale pl-PL (D1)', () => {
+  const cases = [
+    ['1.000', 1000],           // kropka = separator tysięcy, nie dziesiętny
+    ['1.234,56', 1234.56],     // grupowanie + przecinek dziesiętny
+    ['1 234,56', 1234.56],     // spacja grupująca
+    ['1234,56', 1234.56],      // bez grupowania
+    ['1,5', 1.5],
+    ['2 500,50', 2500.5],      // NBSP-podobna spacja grupująca
+    ['1,2,3', null],           // dwa przecinki → niejednoznaczne
+    ['1.0.0', null],           // kropki nie dzielą na grupy po 3 → null
+    ['-0,004', 0],             // zaokrągla do grosza (0), bez -0
+    ['', null],
+    ['-', null],
+  ];
+  for (const [input, expected] of cases) {
+    assertEq(F.parsePLN(input), expected, `parsePLN(${JSON.stringify(input)})`);
+  }
+  // liczba wejściowa: zaokrąglenie do grosza; niebyt-skończone → null
+  assertEq(F.parsePLN(1234.567), 1234.57);
+  assertEq(F.parsePLN(Infinity), null);
+});
+
+test('F32b: formatPLN — znak liczony po zaokrągleniu (D2)', () => {
+  const NB = String.fromCharCode(0xa0);                              // formatPLN grupuje NBSP-em
+  assertEq(F.formatPLN(-0.004), `0${NB}zł`);        // zaokrągla do 0 → bez minusa
+  assertEq(F.formatPLN(-0.004, 2), `0,00${NB}zł`);
+  assertEq(F.formatPLN(-12.5, 2), `-12,50${NB}zł`); // prawdziwy minus zachowany
+  assertEq(F.formatPLN(-0.6), `-1${NB}zł`);         // zaokrągla do 1 → minus zostaje
+  assertEq(F.formatPLN(0), `0${NB}zł`);
+});
+
+test('F32c: formatPct — część całkowita zachowana przy 0 miejscach (D3)', () => {
+  assertEq(F.formatPct(0.10, 0), '10%');            // nie „1%"
+  assertEq(F.formatPct(1.0, 0), '100%');            // nie „1%"
+  assertEq(F.formatPct(0.10, 2), '10%');            // ułamkowe zera nadal ucinane
+  assertEq(F.formatPct(0.035), '3,5%');             // domyślna precyzja bez zmian
+  assertEq(F.formatPct(0.04), '4%');
 });
 
 // ── F11: storage ────────────────────────────────────────────────────────
@@ -440,6 +481,31 @@ test('F11: eksport/import round-trip', () => {
   assertEq(preview.range.from, '2026-07');
   assertEq(JSON.stringify(preview.state.entries), JSON.stringify(st.entries));
   assertEq(JSON.stringify(S.importJSON(json).taxes), JSON.stringify(st.taxes), 'taxes przeżywa round-trip dosłownie');
+});
+
+test('F33: import odrzuca stany, które UI już zabrania (D6)', () => {
+  // Nad-zaseedowane konta: IKE + IKZE > portfel startowy → odrzucone.
+  const over = baseState();
+  over.assumptions.portfolioStart = 10000;
+  over.taxes.ikeIkze = { enabled: true, employmentForm: 'employee', pitRate: 0.12, ikeStart: 8000, ikzeStart: 7000 };
+  assertThrows(() => S.validateState(over), 'IKE+IKZE > portfel odrzucone');
+  // Stopa realna ≤ −100% → odrzucona (inaczej NaN/Infinity w projekcji).
+  const badRate = baseState();
+  badRate.assumptions.realReturnAnnual = -1.5;
+  assertThrows(() => S.validateState(badRate), 'stopa ≤ −100% odrzucona');
+  // Stopa wypłat ≤ 0 → odrzucona (fireTargetAt wymaga > 0).
+  const badSwr = baseState();
+  badSwr.assumptions.withdrawalRate = 0;
+  assertThrows(() => S.validateState(badSwr), 'withdrawalRate ≤ 0 odrzucone');
+  // Oprocentowanie kredytu poza [0, 30%] → odrzucone.
+  const badLoan = baseState();
+  badLoan.housing.housePlan.mortgage.rateNominal = 0.5;
+  assertThrows(() => S.validateState(badLoan), 'oprocentowanie > 30% odrzucone');
+  // Poprawna kompozycja (IKE+IKZE ≤ portfel, stopy w zakresie) nadal przechodzi.
+  const ok = baseState();
+  ok.assumptions.portfolioStart = 20000;
+  ok.taxes.ikeIkze = { enabled: true, employmentForm: 'employee', pitRate: 0.12, ikeStart: 8000, ikzeStart: 7000 };
+  assertEq(S.validateState(ok).version, 6, 'poprawna kompozycja przechodzi');
 });
 
 test('F11: odzysk z .bak po korupcji', () => {
@@ -473,6 +539,7 @@ test('F11: v6 round-trip; migracja v1→…→6, v2→…→6, v3→…→6, v4�
   // Istniejąca konfiguracja ikeIkze przeżywa migrację bez zmian.
   const v5b = JSON.parse(JSON.stringify(st));
   v5b.version = 5;
+  v5b.assumptions.portfolioStart = 2000; // IKE+IKZE ⊆ portfel (D6: kompozycja)
   v5b.taxes = { belkaEnabled: false, ikeIkze: { enabled: true, employmentForm: 'selfEmployed', pitRate: 0.32, ikeStart: 1000, ikzeStart: 500 } };
   const m5b = S.migrate(S.validateState(v5b));
   assertEq(m5b.taxes.ikeIkze.employmentForm, 'selfEmployed', 'jawna konfiguracja nietknięta');
@@ -1944,6 +2011,98 @@ test('F29e: stackedBarSVG detail — gęstsze etykiety lat na szerokim płótnie
   assertEq((plain.match(/class="axis"/g) || []).length, 3, 'domyślnie 3 osie');
 });
 
+// ── F34: charts.js — zaciski negatywów i skala z pełnej serii (D7) ────────
+
+test('F34a: chartSVG — ujemne wartości zaciśnięte do viewBox (D7)', () => {
+  const base = E.ymToIdx('2026-01');
+  const vals = [1000, -5000, 3000, -200, 8000];
+  const rows = vals.map((v, i) => ({ ym: E.idxToYm(base + i), a: v }));
+  const svg = chartSVG(rows, [{ get: r => r.a, cls: 'line-port' }]);
+  assertTrue(!/NaN/.test(svg), 'brak NaN mimo wartości ujemnych');
+  const pts = svg.match(/points="([^"]+)"/)[1].split(' ');
+  const padT = 10, H = 170, padB = 20;
+  for (const p of pts) {
+    const yv = Number(p.split(',')[1]);
+    assertTrue(yv >= padT - 0.01 && yv <= H - padB + 0.01, `y=${yv} poza [${padT}, ${H - padB}]`);
+  }
+});
+
+test('F34b: chartSVG — szczyt poza krokiem decymacji wyznacza skalę (D7)', () => {
+  const base = E.ymToIdx('2026-01');
+  const rows = [];
+  for (let i = 0; i < 500; i++) rows.push({ ym: E.idxToYm(base + i), a: i });
+  rows[497].a = 950000; // indeks 497: krok decymacji = 5, ≠ ostatni → odrzucony z próbki
+  const svg = chartSVG(rows, [{ get: r => r.a, cls: 'line-port' }]);
+  assertTrue(svg.includes(`>${fmtShort(950000)}</text>`), 'oś Y = szczyt z pełnej serii, nie z próbki');
+});
+
+test('F34c: chartSVG — domyślna ścieżka (v ≥ 0) bez zmian współrzędnych (D7 parytet)', () => {
+  const base = E.ymToIdx('2026-01');
+  const rows = [0, 5000, 10000].map((v, i) => ({ ym: E.idxToYm(base + i), a: v }));
+  const svg = chartSVG(rows, [{ get: r => r.a, cls: 'line-port' }]);
+  const pts = svg.match(/points="([^"]+)"/)[1];
+  assertEq(pts, '48.0,150.0 240.0,80.0 432.0,10.0', 'współrzędne jak w oryginalnym mapowaniu');
+});
+
+// ── F35: deleteEntry — odwrotność applyCheckIn (dotąd bez pokrycia) ───────
+
+test('F35: deleteEntry to odwrotność applyCheckIn (pierwszy/środek/ostatni/jedyny)', () => {
+  const mk = () => baseState({ anchorMonth: '2026-01' });
+  const snap = s => JSON.stringify(s.derived);
+
+  // „Jedyny": z pustej historii apply → delete wraca do stanu bez wpisów.
+  const s0 = mk();
+  E.recomputeDerived(s0, NOW);
+  const base0 = snap(s0);
+  E.applyCheckIn(s0, { month: '2026-03', earned: 8000, spent: 5000 }, NOW);
+  E.deleteEntry(s0, '2026-03', NOW);
+  assertEq(s0.entries.length, 0, 'brak wpisów po delete');
+  assertEq(snap(s0), base0, 'jedyny wpis: apply→delete przywraca derived');
+
+  // Historia 2026-02 + 2026-04 — wstaw i usuń na pierwszej/środkowej/ostatniej pozycji.
+  for (const [pos, month] of [['ostatni', '2026-06'], ['pierwszy', '2026-01'], ['środek', '2026-03']]) {
+    const s = mk();
+    E.applyCheckIn(s, { month: '2026-02', earned: 9000, spent: 6000 }, NOW);
+    E.applyCheckIn(s, { month: '2026-04', earned: 7000, spent: 8000 }, NOW); // deficyt
+    const before = snap(s);
+    E.applyCheckIn(s, { month, earned: 8000, spent: 4000 }, NOW);
+    E.deleteEntry(s, month, NOW);
+    assertEq(s.entries.length, 2, `${pos}: liczba wpisów wraca do 2`);
+    assertEq(snap(s), before, `${pos}: apply→delete przywraca derived`);
+  }
+
+  // Usunięcie nieistniejącego wpisu = no-op.
+  const s2 = mk();
+  E.applyCheckIn(s2, { month: '2026-02', earned: 9000, spent: 6000 }, NOW);
+  const beforeNoop = snap(s2);
+  E.deleteEntry(s2, '2099-12', NOW);
+  assertEq(s2.entries.length, 1, 'liczba wpisów bez zmian');
+  assertEq(snap(s2), beforeNoop, 'delete nieistniejącego = no-op');
+});
+
+// ── F36: contributionsVsGrowth — zachowanie wartości (dotąd bez pokrycia) ──
+
+test('F36: contributionsVsGrowth zachowuje wartość; zerowy zwrot → growth 0', () => {
+  // Nadwyżka + deficyt + niezerowy zwrot: start + wpłaty + wzrost = suma sald.
+  const s = baseState({ anchorMonth: '2026-01',
+    assumptions: { portfolioStart: 50000, realReturnAnnual: 0.05, cashReturnReal: 0.02 } });
+  E.applyCheckIn(s, { month: '2026-01', earned: 10000, spent: 6000 }, NOW);
+  E.applyCheckIn(s, { month: '2026-02', earned: 5000, spent: 8000 }, NOW); // deficyt
+  E.applyCheckIn(s, { month: '2026-03', earned: 12000, spent: 4000 }, NOW);
+  const bal = s.derived.balances;
+  const cg = E.contributionsVsGrowth(s, bal);
+  assertClose(cg.start + cg.totalFlow + cg.growth, bal.cash + bal.portfolio, 0.01, 'start + wpłaty + wzrost = portfel');
+  assertClose(cg.now, bal.cash + bal.portfolio, 0.01, 'now = suma sald');
+
+  // Zerowy zwrot → brak wzrostu.
+  const z = baseState({ anchorMonth: '2026-01',
+    assumptions: { portfolioStart: 50000, realReturnAnnual: 0, cashReturnReal: 0 } });
+  E.applyCheckIn(z, { month: '2026-01', earned: 10000, spent: 6000 }, NOW);
+  E.applyCheckIn(z, { month: '2026-02', earned: 12000, spent: 4000 }, NOW);
+  const cgz = E.contributionsVsGrowth(z, z.derived.balances);
+  assertClose(cgz.growth, 0, 0.01, 'zerowy zwrot → growth ≈ 0');
+});
+
 // ── F30: podatek Belki (19% od zysków nominalnych) ───────────────────────
 // Basis nominalny (epoka kotwicy), gross-up, warunek FIRE „po podatku",
 // niezmienniki włącz/wyłącz. Plan: docs/plan-belka-tax-toggle.md (F29→F30,
@@ -2164,6 +2323,18 @@ function f31State(over = {}) {
   }, over));
 }
 const NOW31 = new Date(2026, 0, 15); // upto = 2025-12 → wszystko prognozą od kotwicy
+
+test('F31: stałe limitów IKE/IKZE przypięte do wartości 2026 (nie duplikat fixture)', () => {
+  // Przypinamy stałe silnika do udokumentowanych wartości 2026 — edycja stałej
+  // wywali ten test, zamiast po cichu rozjechać się z fixture (fixture je importuje).
+  assertEq(E.IKE_LIMIT_YEARLY, 28260, 'limit IKE 2026');
+  assertEq(E.IKZE_LIMIT_EMPLOYEE, 11304, 'limit IKZE (etat) 2026');
+  assertEq(E.IKZE_LIMIT_SELFEMPLOYED, 16956, 'limit IKZE (działalność) 2026');
+  // Fixture faktycznie odwołuje się do tych samych stałych.
+  assertEq(FIX.F31.limits.ike, E.IKE_LIMIT_YEARLY, 'fixture.ike = stała silnika');
+  assertEq(FIX.F31.limits.ikzeEmployee, E.IKZE_LIMIT_EMPLOYEE, 'fixture.ikzeEmployee = stała');
+  assertEq(FIX.F31.limits.ikzeSelfEmployed, E.IKZE_LIMIT_SELFEMPLOYED, 'fixture.ikzeSelfEmployed = stała');
+});
 
 test('F31a: kolejność wypełniania i limity — IKZE 11304, IKE 28260, reszta taxable; liczniki zerowane w styczniu', () => {
   const f = FIX.F31;

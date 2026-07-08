@@ -34,6 +34,34 @@ export function validateState(s) {
     }
   }
   if (!s.housing) throw new Error('Brak sekcji mieszkaniowej');
+
+  // Zakresy stóp (D6): ścieżka importu musi egzekwować to, co UI już wymusza.
+  // Stopa ≤ −100% pcha monthlyRate/toReal w NaN/Infinity i po cichu zatruwa
+  // każdą wartość pochodną — odrzucamy zamiast po cichu przyjąć.
+  const a = s.assumptions;
+  const inRange = (v, lo, hi) => typeof v !== 'number' || (v >= lo && v <= hi);
+  const realRateFields = ['cashReturnReal', 'realReturnAnnual', 'expenseGrowthReal',
+    'incomeGrowthReal', 'inflationAnnual', 'postRetirementReturnReal'];
+  for (const f of realRateFields) {
+    if (!inRange(a[f], -0.5, 1)) throw new Error(`Stopa ${f} poza zakresem [-50%, 100%]`);
+  }
+  if (!(a.withdrawalRate > 0)) throw new Error('Stopa wypłat musi być > 0');
+  const hp = s.housing.housePlan;
+  if (hp) {
+    for (const loan of ['mortgage', 'familyLoan']) {
+      const r = hp[loan] && hp[loan].rateNominal;
+      if (!inRange(r, 0, 0.3)) throw new Error(`Oprocentowanie ${loan} poza zakresem [0%, 30%]`);
+    }
+  }
+  // Kompozycja kont (D6): IKE + IKZE nie może przekroczyć portfela startowego —
+  // inaczej kubełek „zwykły" (taxable) wyszedłby ujemny i zaniżył wartość netto.
+  const ii = s.taxes && s.taxes.ikeIkze;
+  if (ii) {
+    const ike = ii.ikeStart || 0, ikze = ii.ikzeStart || 0, port = (a && a.portfolioStart) || 0;
+    if (ike + ikze > port + 0.005) {
+      throw new Error('Salda startowe IKE + IKZE przekraczają portfel startowy');
+    }
+  }
   return s;
 }
 
