@@ -102,11 +102,19 @@
 
 ## 6. Per-phase verification (repeat for every release)
 
-- [ ] 6.1 `node tests/run-tests.js` → exit 0 (extend fixtures when engine/storage behavior
-  changes; copy-only phases need none)
-- [ ] 6.2 Serve locally, click through every affected screen in dark and light theme
-- [ ] 6.3 `/FIRE/` subpath rehearsal (catches absolute-path and CSP regressions)
-- [ ] 6.4 Confirm SW update path: version bump caught by „Dostępna nowa wersja", new files in
-  PRECACHE, `tests/tests.html` still loads (SW must not hijack non-shell navigations)
-- [ ] 6.5 Phase-specific checks: XSS literal-render when notes ship; malformed-JSON import
-  rejected after Phase 3; offline force-update aborts after Phase 3
+Done for the four Phase 5 releases (v1.20.0–v1.23.0); repeat when Phases 2–4 ship.
+
+- [x] 6.1 `node tests/run-tests.js` → exit 0 (extend fixtures when engine/storage behavior
+  changes; copy-only phases need none) — 195/195 after F37–F40
+- [x] 6.2 Serve locally, click through every affected screen in dark and light theme —
+  headless Chromium pass per release (Pulpit tap/scrub/band, Symulacja „Krach",
+  Kopia zapasowa CSV) in both color schemes; verify by hand on the phone at will
+- [x] 6.3 `/FIRE/` subpath rehearsal (catches absolute-path and CSP regressions) — parent-dir
+  serve + `http://localhost:8000/FIRE/`, zero console errors each release
+- [x] 6.4 Confirm SW update path: version bump caught by „Dostępna nowa wersja", new files in
+  PRECACHE, `tests/tests.html` still loads (SW must not hijack non-shell navigations) —
+  no new app files in Phase 5 (PRECACHE unchanged, CACHE bumped 4×); browser runner
+  195/195 with the SW registered
+- [x] 6.5 Phase-specific checks: XSS literal-render when notes ship; malformed-JSON import
+  rejected after Phase 3; offline force-update aborts after Phase 3 — n/a for Phase 5
+  (notes and Phase 3 hardening not yet shipped); CSV quoting covered by F40b
