@@ -143,4 +143,9 @@ export const FIX = {
     refundPit32: 3617.28,        // 0.32 × 11304
     eps: 0.01,
   },
+  // Pasmo prognozy (D9): zwrot ±1,5 pkt proc. — stała przypięta przeciw
+  // przypadkowej edycji (legenda/objaśnienie w ui.js niosą tę samą liczbę
+  // w kopii i muszą iść razem z nią). Plan: docs/plan-projection-band.md
+  // (tam „F32" — zajęte przez audyt parsowania → F38).
+  F38: { spread: 0.015 },
 };

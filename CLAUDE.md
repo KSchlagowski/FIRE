@@ -315,7 +315,13 @@ F29), the payload's geometry/labels/values mirror exactly what is drawn
 (decimation-synced, grosze-rounded, negatives clamped like the bars), and
 `tipHit` snaps to the nearest line point / containing bar slot with edge clamps
 (`null` on an empty payload). The pointer glue and readout are DOM (`ui.js`) —
-manual QA, not Node.
+manual QA, not Node. F38 covers the projection band (`projectionBand`/
+`BAND_SPREAD`, `chartSVG` `{ band: true }` defs): the pinned ±1.5 p.p. constant,
+`stopAtFire: false` running the series to plan end with an identical prefix and
+FIRE date, band rows aligned with the series and collapsed to the actual balance
+on history months (the shared-base-replay guard — a naive `projectionWith` rerun
+fails it), the lo ≤ base ≤ hi envelope on projected rows, spread-0/purity edges,
+and the band polygon's geometry/scale/tooltip-exclusion.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

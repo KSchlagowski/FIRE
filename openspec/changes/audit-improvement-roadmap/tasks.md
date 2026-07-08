@@ -87,8 +87,10 @@
 - [x] 5.1 Implement chart tap-to-inspect tooltips
   (`docs/plan-chart-tooltips-tap-to-inspect.md`) in `charts.js` + render sites; release
   (v1.20.0; fixture group F37 — doc said F30, taken by Belka)
-- [ ] 5.2 Implement projection band (`docs/plan-projection-band.md`): ±1.5 p.p. shaded band
-  on „Portfel vs cel"; add engine/fixtures per doc; release
+- [x] 5.2 Implement projection band (`docs/plan-projection-band.md`): ±1.5 p.p. shaded band
+  on „Portfel vs cel"; add engine/fixtures per doc; release (v1.21.0; fixture group
+  F38 — doc said F32, taken by the parsing audit; band def carries no `label` so
+  the 5.1 tooltips skip it, per the doc's forward-compat note)
 - [ ] 5.3 Implement crash stress test (`docs/plan-crash-stress-test.md`): sequence-of-returns
   in Analiza/Symulacja; engine math + fixtures; release
 - [ ] 5.4 Implement CSV export of entries (`docs/plan-csv-export-entries.md`): include a

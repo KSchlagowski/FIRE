@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.20.0';
+export const APP_VERSION = '1.21.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -821,13 +821,25 @@ function renderDashboard() {
     </div>`;
     const rows = proj.series;
     if (rows.length > 1) {
-      const portLegend = '<div class="legend"><span><i style="background:var(--accent)"></i>portfel (— historia, ⋯ prognoza)</span><span><i style="background:var(--muted)"></i>cel ruchomy</span></div>';
+      // Pasmo prognozy (D9): zwrot ±1,5 pkt proc., liczone przy renderze —
+      // nigdy nie zapisywane. band.rows kryją pełny horyzont (stopAtFire:false),
+      // więc każdy wiersz wykresu dostaje lo/hi; historia ma lo == hi == fakt,
+      // więc wielokąt otwiera się dokładnie na szwie prognozy.
+      const band = E.projectionBand(state);
+      const bandBy = new Map(band.rows.map(b => [b.ym, b]));
+      const chartRows = rows.map(r => {
+        const b = bandBy.get(r.ym);
+        return b ? { ...r, bandLo: b.lo, bandHi: b.hi } : r;
+      });
+      const portLegend = '<div class="legend"><span><i style="background:var(--accent)"></i>portfel (— historia, ⋯ prognoza)</span><span><i style="background:var(--muted)"></i>cel ruchomy</span><span><i style="background:var(--accent);opacity:.25"></i>pasmo: zwrot ±1,5 pkt proc.</span></div>';
       html += `<div class="card"><h2>Portfel vs cel</h2>
-        ${zoomable('dash-portfel', 'Portfel vs cel', o => chartSVG(rows, [
+        ${zoomable('dash-portfel', 'Portfel vs cel', o => chartSVG(chartRows, [
+        { band: true, lo: r => r.bandLo, hi: r => r.bandHi, cls: 'band-return' },
         { get: r => r.target, cls: 'line-target', label: 'cel' },
         { get: r => r.portfolio, cls: 'line-port', clsProj: 'line-proj', split: true, label: 'portfel' },
       ], o), { legendHTML: portLegend })}
         ${portLegend}
+        <p class="muted small">Pasmo pokazuje, jak prognoza się rozjeżdża, gdy rynek da o 1,5 punktu procentowego więcej albo mniej, niż zakładasz — im dalej w przyszłość, tym mniej pewna jest każda prognoza.</p>
       </div>`;
     }
   }

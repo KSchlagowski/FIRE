@@ -748,7 +748,7 @@ export function assumedDelta(entries) {
   return sum / last.length;
 }
 
-export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
+export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm, opts = {}) {
   const a = state.assumptions;
   const anchor = state.anchorMonth;
   const a0 = ymToIdx(anchor);
@@ -935,7 +935,9 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
     const effective = tracker ? tracker.netValueReal(ym) : portfolio;
     if (!fireYm && houseSettled && famSettled && effective >= pm.targetReal - EPS) {
       fireYm = ym;
-      break;
+      // stopAtFire:false (pasmo prognozy) biegnie dalej do końca planu —
+      // po FIRE miesiące dalej idą istniejącą ścieżką invest (dług spłacony).
+      if (opts.stopAtFire !== false) break;
     }
   }
 
@@ -1330,7 +1332,7 @@ export function excelProjection(state, opts = {}) {
 
 // Wrażliwość: pełny potok na płytkiej kopii stanu (wszystkie funkcje potoku
 // są czystymi czytelnikami — stan wejściowy pozostaje nietknięty, test F15a).
-export function projectionWith(state, { assumptions = {}, taxes = null, extraMonthlySavings = 0, extraSavings = null } = {}, now = new Date()) {
+export function projectionWith(state, { assumptions = {}, taxes = null, extraMonthlySavings = 0, extraSavings = null, stopAtFire = true } = {}, now = new Date()) {
   const st = { ...state, assumptions: { ...state.assumptions, ...assumptions } };
   if (taxes) {
     // Płytkie kopie + zagnieżdżony merge podsekcji ikeIkze — stan wejściowy
@@ -1359,7 +1361,39 @@ export function projectionWith(state, { assumptions = {}, taxes = null, extraMon
   const debt = replayDebt(st, upto);
   const family = replayFamilyLoan(st, upto);
   const balances = replayBalances(st, upto, debt, family);
-  return projectFire(st, plan, balances, debt, family, upto);
+  return projectFire(st, plan, balances, debt, family, upto, { stopAtFire });
+}
+
+export const BAND_SPREAD = 0.015; // ±1,5 pkt proc. na realReturnAnnual (D9)
+
+// Pasmo prognozy: deterministyczna koperta optymistyczna/pesymistyczna — dwa
+// przebiegi projectFire przy realReturnAnnual ± spread, bez losowania (D9,
+// „pasmo", nigdy „percentyl"). Jedna wspólna baza: plan + repliki liczone raz
+// na PRAWDZIWYCH założeniach — replayBalances rośnie w miesiącach historii wg
+// realReturnAnnual, więc naiwny rerun projectionWith fałszywie rozjechałby
+// pasmo na przeszłości użytkownika. stopAtFire:false, bo optymistyczna ścieżka
+// osiąga FIRE wcześniej i bez tego urywałaby się w połowie wykresu. Historia:
+// lo == hi == fakt (z konstrukcji). Czysta — nic nie zapisujemy.
+export function projectionBand(state, { spread = BAND_SPREAD } = {}, now = new Date()) {
+  const upto = lastCompleteMonth(now);
+  const plan = buildPlan(state);
+  const debt = replayDebt(state, upto);
+  const family = replayFamilyLoan(state, upto);
+  const balances = replayBalances(state, upto, debt, family);
+  const run = r => projectFire(
+    { ...state, assumptions: { ...state.assumptions, realReturnAnnual: r } },
+    plan, balances, debt, family, upto, { stopAtFire: false }).series;
+  const r0 = state.assumptions.realReturnAnnual;
+  const up = run(r0 + spread), down = run(r0 - spread);
+  // min/max per wiersz — defensywnie na skrzyżowania (ujemny portfel w fazie
+  // długu rośnie „na minus" szybciej przy wyższej stopie).
+  const rows = [];
+  for (let i = 0; i < Math.min(up.length, down.length); i++) rows.push({
+    ym: up[i].ym,
+    lo: Math.min(down[i].portfolio, up[i].portfolio),
+    hi: Math.max(down[i].portfolio, up[i].portfolio),
+  });
+  return { spread, rows };
 }
 
 // Wartość przyszła równych miesięcznych wpłat (annuity-due — kolejność jak w

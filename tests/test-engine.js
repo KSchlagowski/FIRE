@@ -2712,3 +2712,107 @@ test('F37g: czystość i higiena — determinizm, zero NaN, esc płaszczyzny atr
   const withQuote = chartSVG(rows, [{ get: r => r.a, cls: 'line-port', label: 'z "cudzysłowem" & <znakami>' }]);
   assertEq(tipOf(withQuote).series[0].label, 'z "cudzysłowem" & <znakami>', 'round-trip esc → JSON.parse');
 });
+
+// ── F38: pasmo prognozy — projectionBand + stopAtFire (D9) ────────────────
+// Deterministyczna koperta ±spread na realReturnAnnual. Wspólna baza replayów
+// (historia sald zależy od realReturnAnnual — naiwny rerun projectionWith
+// fałszywie rozjechałby pasmo na przeszłości; F38b to egzekwuje). Wielokąt
+// w charts.js (def {band:true}) — geometria pod F38e.
+
+test('F38: BAND_SPREAD przypięty do fixture (kopia w legendzie ui.js idzie razem z nim)', () => {
+  assertEq(E.BAND_SPREAD, FIX.F38.spread, 'stała silnika = fixture');
+});
+
+test('F38a: stopAtFire:false — ta sama data FIRE, seria biegnie do końca planu, prefiks identyczny', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  E.recomputeDerived(st, NOW);
+  const base = E.projectionWith(st, {}, NOW);
+  const full = E.projectionWith(st, { stopAtFire: false }, NOW);
+  assertEq(full.reached, true, 'reached');
+  assertEq(full.fireYm, base.fireYm, 'fireYm identyczny');
+  assertEq(full.fireAge.totalMonths, base.fireAge.totalMonths, 'fireAge identyczny');
+  assertTrue(full.series.length > base.series.length, 'seria pełna dłuższa niż ucięta na FIRE');
+  assertEq(full.series[full.series.length - 1].ym, E.addMonths(st.anchorMonth, E.HORIZON_MONTHS - 1),
+    'ostatni wiersz = koniec 720-miesięcznego planu');
+  for (const i of [0, Math.floor(base.series.length / 2), base.series.length - 1]) {
+    assertEq(JSON.stringify(full.series[i]), JSON.stringify(base.series[i]), `prefiks identyczny (i=${i})`);
+  }
+  const explicit = E.projectionWith(st, { stopAtFire: true }, NOW);
+  assertEq(JSON.stringify(explicit), JSON.stringify(base), 'jawne stopAtFire:true ≡ domyślne');
+});
+
+test('F38b: pasmo wyrównane z serią; historia lo === hi === fakt (wspólna baza replayów)', () => {
+  // Wpis tylko w 2026-01 → miesiące 02–06 to historia rosnąca wg realReturnAnnual;
+  // naiwny rerun wariantami rozjechałby tu lo/hi — strikte równości to łapią.
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  st.entries.push(entry('2026-01', 10000, 6000, { plannedSavingsSnapshot: 4000 }));
+  E.recomputeDerived(st, NOW);
+  const full = E.projectionWith(st, { stopAtFire: false }, NOW);
+  const band = E.projectionBand(st, {}, NOW);
+  assertEq(band.spread, E.BAND_SPREAD, 'domyślny spread');
+  assertEq(band.rows.length, full.series.length, 'pasmo pokrywa pełną serię');
+  for (const i of [0, 5, Math.floor(full.series.length / 2), full.series.length - 1]) {
+    assertEq(band.rows[i].ym, full.series[i].ym, `ym wyrównany (i=${i})`);
+  }
+  let histSeen = 0;
+  band.rows.forEach((b, i) => {
+    assertTrue(b.hi >= b.lo, `hi ≥ lo (${b.ym})`);
+    if (full.series[i].projected === false) {
+      histSeen++;
+      assertEq(b.lo, full.series[i].portfolio, `historia lo === fakt (${b.ym})`);
+      assertEq(b.hi, full.series[i].portfolio, `historia hi === fakt (${b.ym})`);
+    }
+  });
+  assertTrue(histSeen >= 6, `test ma realną historię (${histSeen} wierszy)`);
+});
+
+test('F38c: koperta — na prognozie lo ≤ portfel(stopa użytkownika) ≤ hi', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  E.recomputeDerived(st, NOW);
+  const full = E.projectionWith(st, { stopAtFire: false }, NOW);
+  const band = E.projectionBand(st, {}, NOW);
+  band.rows.forEach((b, i) => {
+    if (!full.series[i].projected) return;
+    assertTrue(b.lo <= full.series[i].portfolio + 1e-9, `lo ≤ portfel (${b.ym})`);
+    assertTrue(b.hi >= full.series[i].portfolio - 1e-9, `hi ≥ portfel (${b.ym})`);
+  });
+});
+
+test('F38d: krawędzie i czystość — spread 0 zwija pasmo; stan nietknięty; determinizm', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  st.entries.push(entry('2026-01', 10000, 6000, { plannedSavingsSnapshot: 4000 }));
+  E.recomputeDerived(st, NOW);
+  const zero = E.projectionBand(st, { spread: 0 }, NOW);
+  zero.rows.forEach(b => assertEq(b.hi, b.lo, `spread 0 → hi === lo (${b.ym})`));
+  const before = JSON.stringify(st);
+  const b1 = E.projectionBand(st, {}, NOW);
+  assertEq(JSON.stringify(st), before, 'czystość (wzorzec F15a)');
+  assertEq(JSON.stringify(E.projectionBand(st, {}, NOW)), JSON.stringify(b1), 'dwa wywołania identyczne');
+});
+
+test('F38e: chartSVG def {band:true} — wielokąt za liniami, skala z hi, bez label brak w data-tip', () => {
+  const base = E.ymToIdx('2026-01');
+  const rows = [];
+  for (let i = 0; i < 12; i++) rows.push({
+    ym: E.idxToYm(base + i), a: 1000 + i * 100,
+    lo: 900 + i * 80, hi: 1100 + i * 130,
+  });
+  const defs = [
+    { band: true, lo: r => r.lo, hi: r => r.hi, cls: 'band-return' },
+    { get: r => r.a, cls: 'line-port', label: 'portfel' },
+  ];
+  const svg = chartSVG(rows, defs);
+  const polyIdx = svg.indexOf('<polygon class="band-return"');
+  assertTrue(polyIdx >= 0, 'wielokąt pasma obecny');
+  assertTrue(polyIdx < svg.indexOf('<polyline'), 'pasmo rysowane przed linią (tło)');
+  const ptsAttr = svg.match(/<polygon[^>]*points="([^"]+)"/)[1].split(' ');
+  assertEq(ptsAttr.length, 24, '12 punktów hi (w przód) + 12 lo (wstecz)');
+  const maxHi = 1100 + 11 * 130; // 2530 > max a — skala musi objąć hi
+  assertTrue(svg.includes(`>${fmtShort(maxHi)}</text>`), 'etykieta Y = max z hi');
+  const tip = tipOf(svg);
+  assertEq(tip.series.length, 1, 'pasmo (bez label) nieobecne w odczycie');
+  assertEq(tip.series[0].label, 'portfel', 'seria liniowa w odczycie');
+  // Wiersze bez skończonych lo/hi wypadają z wielokąta, a < 2 punktów → brak.
+  const sparse = rows.map((r, i) => i < 11 ? { ...r, lo: undefined, hi: undefined } : r);
+  assertTrue(!chartSVG(sparse, defs).includes('<polygon'), '≤1 użyteczny punkt → bez wielokąta');
+});

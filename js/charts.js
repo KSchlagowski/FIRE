@@ -76,7 +76,7 @@ export function chartSVG(rows, defs, { height = 170, width = 440, maxPoints = 12
   // Skala z PEŁNEJ serii (przed decymacją), by szczyt poza krokiem próbkowania
   // nadal wyznaczał max (D7). Dla serii monotonicznych/≤maxPoints identyczna z pts.
   let max = 0;
-  for (const r of rows) for (const d of defs) max = Math.max(max, d.get(r) || 0);
+  for (const r of rows) for (const d of defs) max = Math.max(max, (d.band ? d.hi(r) : d.get(r)) || 0);
   if (max <= 0) max = 1;
   const x = i => padL + i * (W - padL - padR) / Math.max(1, pts.length - 1);
   // Zacisk do [0, max]: ujemne lądują w dolnym paśmie, nie poza viewBox (D7).
@@ -84,7 +84,22 @@ export function chartSVG(rows, defs, { height = 170, width = 440, maxPoints = 12
   const y = v => padT + (1 - Math.max(0, Math.min(v, max)) / max) * (H - padT - padB);
   const lines = [];
   for (const d of defs) {
-    if (d.split) {
+    if (d.band) {
+      // Pasmo { band:true, lo, hi, cls }: wielokąt hi (w przód) + lo (wstecz),
+      // te same pts/x/y co polilinie — zostaje w rejestrze. Rysowanie idzie
+      // w kolejności defs, więc pasmo podaje się PIERWSZE (tło pod liniami).
+      // Bez `label` — odczyt tap-to-inspect je pomija. Wiersze bez skończonych
+      // lo/hi wypadają; < 2 użytecznych punktów → bez wielokąta.
+      const fwd = [], bwd = [];
+      pts.forEach((r, i) => {
+        const lo = d.lo(r), hi = d.hi(r);
+        if (Number.isFinite(lo) && Number.isFinite(hi)) {
+          fwd.push(`${x(i).toFixed(1)},${y(hi).toFixed(1)}`);
+          bwd.unshift(`${x(i).toFixed(1)},${y(lo).toFixed(1)}`);
+        }
+      });
+      if (fwd.length > 1) lines.push(`<polygon class="${d.cls}" points="${fwd.join(' ')} ${bwd.join(' ')}"/>`);
+    } else if (d.split) {
       const hist = [], proj = [];
       pts.forEach((r, i) => {
         const p = `${x(i).toFixed(1)},${y(d.get(r) || 0).toFixed(1)}`;
