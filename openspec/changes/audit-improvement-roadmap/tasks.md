@@ -95,8 +95,10 @@
   in Analiza/Symulacja; engine math + fixtures; release (v1.22.0; fixture group F39 —
   doc said F31, taken by IKE/IKZE; crash also scales the Belka/IKE/IKZE buckets,
   which post-date the doc)
-- [ ] 5.4 Implement CSV export of entries (`docs/plan-csv-export-entries.md`): include a
-  properly quoted `Notatka` column (ships after notes); release
+- [x] 5.4 Implement CSV export of entries (`docs/plan-csv-export-entries.md`): include a
+  properly quoted `Notatka` column (ships after notes); release (v1.23.0; fixture group
+  F40 — doc said F30, taken by Belka; shipped BEFORE notes since Phase 4 hasn't run,
+  so the 19-column layout has no `Notatka` yet — add it, quoted, when notes ship)
 
 ## 6. Per-phase verification (repeat for every release)
 

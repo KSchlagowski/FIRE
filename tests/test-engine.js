@@ -2918,3 +2918,116 @@ test('F39d: horyzont i strażnicy — filtr lat szoku, brak profilu, clamp, hypo
   assertEq(withProj.hypothetical, false, 'osiągnięta prognoza → nie-hipotetyczny');
   assertEq(withProj.startYm, f.startYm, 'startYm = fireYm prognozy');
 });
+
+// ── F40: eksport CSV historii check-inów (Excel pl-PL) ────────────────────
+// Dialekt sam w sobie jest specyfikacją: średniki, przecinek dziesiętny bez
+// grupowania (dwa miejsca), BOM UTF-8, CRLF bez końcowego, cytowanie RFC 4180.
+// Kolumny pochodne z state.derived po ym (bez derived → puste); verdictLabel
+// wstrzykiwany. Plan: docs/plan-csv-export-entries.md (tam „F30" — zajęte
+// przez Belkę → F40; kolumna „Notatka" dojdzie razem z notatkami z fazy 4).
+
+const CSV_HEADER = 'Miesiąc;Zarobione;Wydane;Oszczędności;Plan oszczędności;'
+  + 'Różnica vs plan;Werdykt;Werdykt (opis);Nadpłata kredytu;Nadpłata długu rodzinnego;'
+  + 'Korekta gotówki;Korekta portfela;Gotówka po miesiącu;Portfel po miesiącu;Faza;'
+  + 'Kredyt — saldo (nominalnie);Dług rodzinny — saldo (nominalnie);Utworzono;Zaktualizowano';
+const csvNumT = x => Number(x).toFixed(2).replace('.', ',');
+
+test('F40a: dokładna serializacja — BOM, nagłówek, CRLF bez końcowego, przecinek dziesiętny, derived po ym', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 10000, 6000, { snapshot: 4000 }));
+  st.entries.push(entry('2026-02', 9000.5, 7500.25, {
+    snapshot: 4000, verdict: 'behind', overpayment: 300, familyOverpayment: 150,
+    cashOverride: 1000, balanceOverride: 50000, updatedAt: '2026-03-02T10:00:00.000Z',
+  }));
+  E.recomputeDerived(st, NOW);
+  const labels = { on_plan: 'W planie', behind: 'Lekko pod planem' };
+  const csv = S.entriesCSV(st, { verdictLabel: v => labels[v] || v });
+  assertEq(csv[0], '\uFEFF', 'BOM na początku');
+  assertTrue(!csv.endsWith('\r\n'), 'bez końcowego CRLF');
+  const lines = csv.slice(1).split('\r\n');
+  assertEq(lines.length, 3, 'nagłówek + 2 wpisy');
+  assertEq(lines[0], CSV_HEADER, 'nagłówek co do bajta');
+  const bal = m => st.derived.balances.rows.find(r => r.ym === m);
+  const b1 = bal('2026-01'), b2 = bal('2026-02');
+  assertEq(lines[1], ['2026-01', '10000,00', '6000,00', '4000,00', '4000,00', '0,00',
+    'on_plan', 'W planie', '0,00', '0,00', '', '',
+    csvNumT(b1.cash), csvNumT(b1.portfolio), b1.phase, '', '',
+    '2026-01-01T00:00:00.000Z', ''].join(';'), 'wiersz 1 co do bajta');
+  assertEq(lines[2], ['2026-02', '9000,50', '7500,25', '1500,25', '4000,00', '-2499,75',
+    'behind', 'Lekko pod planem', '300,00', '150,00', '1000,00', '50000,00',
+    csvNumT(b2.cash), csvNumT(b2.portfolio), b2.phase, '', '',
+    '2026-01-01T00:00:00.000Z', '2026-03-02T10:00:00.000Z'].join(';'), 'wiersz 2 co do bajta');
+});
+
+test('F40b: cytowanie RFC 4180 — średnik/cudzysłów/nowa linia w komórce', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 10000, 6000));
+  E.recomputeDerived(st, NOW);
+  const csv = S.entriesCSV(st, { verdictLabel: () => 'W "planie"; test' });
+  assertTrue(csv.includes(';"W ""planie""; test";'), 'komórka opakowana, cudzysłowy podwojone');
+  const row = csv.slice(1).split('\r\n')[1];
+  const quoted = row.match(/"([^"]|"")*"/g);
+  assertEq(quoted.length, 1, 'jedna komórka cytowana');
+  assertEq(row.replace(/"([^"]|"")*"/g, 'X').split(';').length, 19, '19 pól mimo średnika w treści');
+  const nl = S.entriesCSV(st, { verdictLabel: () => 'a\nb' });
+  assertTrue(nl.includes(';"a\nb";'), 'nowa linia w komórce → cytowanie');
+});
+
+test('F40c: puste komórki — brak derived, miesiąc sprzed kotwicy, brak kredytu; kredyt wypełnia saldo', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 10000, 6000));
+  E.recomputeDerived(st, NOW);
+  const stripped = { ...st };
+  delete stripped.derived;
+  const row = S.entriesCSV(stripped).slice(1).split('\r\n')[1].split(';');
+  assertEq(row.slice(12, 17).join('|'), '||||', 'bez derived kolumny 13–17 puste');
+  assertEq(row[1], '10000,00', 'kolumny wpisu nietknięte');
+  // Wpis sprzed kotwicy (historia po reanchor w przód): saldo/faza puste.
+  const st2 = baseState({ anchorMonth: '2026-03' });
+  st2.entries.push(entry('2026-01', 10000, 6000));
+  st2.entries.push(entry('2026-03', 10000, 6000));
+  E.recomputeDerived(st2, NOW);
+  const rows2 = S.entriesCSV(st2).slice(1).split('\r\n');
+  assertEq(rows2[1].split(';').slice(12, 15).join('|'), '||', 'miesiąc sprzed kotwicy: 13–15 puste');
+  assertTrue(rows2[2].split(';')[12] !== '', 'miesiąc od kotwicy: gotówka wypełniona');
+  // Aktywny kredyt: kolumna 16 niesie saldo nominalne z repliki długu.
+  const st3 = baseState({
+    anchorMonth: '2026-01',
+    housing: { housePlan: housePlan({ moveInMonth: '2026-01', mortgage: { startMonth: '2026-01' } }) },
+  });
+  st3.entries.push(entry('2026-02', 10000, 6000));
+  E.recomputeDerived(st3, NOW);
+  const row3 = S.entriesCSV(st3).slice(1).split('\r\n')[1].split(';');
+  const debtRow = st3.derived.debt.rows.find(r => r.ym === '2026-02');
+  assertEq(row3[15], csvNumT(debtRow.balNominal), 'saldo kredytu z repliki (nominalnie)');
+});
+
+test('F40d: sortowanie rosnąco po miesiącu + czystość stanu', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-03', 1000, 500));
+  st.entries.push(entry('2026-01', 1000, 500));
+  st.entries.push(entry('2026-02', 1000, 500));
+  E.recomputeDerived(st, NOW);
+  const before = JSON.stringify(st);
+  const months = S.entriesCSV(st).slice(1).split('\r\n').slice(1).map(r => r.split(';')[0]);
+  assertEq(months.join(','), '2026-01,2026-02,2026-03', 'wyjście rosnąco');
+  assertEq(st.entries[0].month, '2026-03', 'tablica wejściowa nieposortowana (kopia)');
+  assertEq(JSON.stringify(st), before, 'czystość — stan (z derived) nietknięty');
+});
+
+test('F40e: pusta historia → dokładnie BOM + nagłówek', () => {
+  const st = baseState();
+  E.recomputeDerived(st, NOW);
+  assertEq(S.entriesCSV(st), '\uFEFF' + CSV_HEADER, 'tylko nagłówek');
+});
+
+test('F40f: domyślne opcje — opis = surowy klucz; zero i ujemne kwoty w dialekcie', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 5000, 6500.75, { verdict: 'hard' }));
+  E.recomputeDerived(st, NOW);
+  const row = S.entriesCSV(st).slice(1).split('\r\n')[1].split(';');
+  assertEq(row[6], 'hard', 'surowy klucz');
+  assertEq(row[7], 'hard', 'bez opcji opis = klucz');
+  assertEq(row[3], '-1500,75', 'ujemne oszczędności z minusem');
+  assertEq(row[8], '0,00', 'zero jako 0,00');
+});

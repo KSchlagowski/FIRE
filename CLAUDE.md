@@ -65,7 +65,10 @@ bundler — the browser loads the modules directly.
   in their code path). Money→future math comes from `engine.oneOffImpact`.
 - **`storage.js`** — `localStorage` wrapper, schema version, migration chain,
   `.bak` backup, export/import. Backend is injectable (`makeStorage(backing)`) so
-  tests run in Node without a real `localStorage`.
+  tests run in Node without a real `localStorage`. `entriesCSV` builds the one-way
+  Excel-pl-PL CSV export of the check-in history (semicolons, comma decimals, BOM,
+  CRLF); derived columns are read from `state.derived` by `ym` and the Polish
+  verdict label is injected — storage stays an L0 leaf.
 - **`ui.js`** — the **only** module that touches the DOM or holds mutable state
   (~1900 lines): all screen renderers, hash router, onboarding, event handling,
   the fullscreen-landscape chart overlay (`zoomable` registry + `#chart-full`), and
@@ -328,7 +331,12 @@ prefix before the shock year, no-crash flags all false (existing F13/F27 numbers
 pin the values), shock-0 ≡ base, the independent-recurrence depletion years
 (year-1 crash depletes strictly earlier than year-10 — sequence risk), horizon
 clamps, out-of-horizon shock filtering, no-birthDate → `null`, and the
-`hypothetical` flag; nothing is persisted.
+`hypothetical` flag; nothing is persisted. F40 covers `entriesCSV` (the CSV
+dialect is the spec): byte-exact serialization (BOM + header + `;`-joined rows,
+CRLF, no trailing newline, `1234,56` numbers), RFC 4180 quoting of the injected
+verdict label, blank derived cells (no `state.derived`, pre-anchor months, no
+loan) vs a filled mortgage balance, ascending sort of an unsorted copy + state
+purity, the header-only empty export, and default-options fallbacks.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

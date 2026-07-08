@@ -8,9 +8,9 @@ import * as Mot from './motivation.js';
 import { chartSVG, stackedBarSVG, tipHit } from './charts.js';
 import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
-import { storage, exportJSON, importPreview } from './storage.js';
+import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.22.0';
+export const APP_VERSION = '1.23.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -2219,6 +2219,9 @@ function renderBackup() {
     ${nudge ? '<div class="banner warn small">Dawno nie było kopii — wyeksportuj teraz.</div>' : ''}
     <p class="muted small">Ostatnia kopia: <b>${last ? esc(new Date(last).toLocaleDateString('pl-PL')) : 'nigdy'}</b></p>
     <button id="bk-export" class="primary wide">⬇️ Eksportuj kopię (JSON)</button>
+    <button id="bk-export-csv" class="wide">📊 Eksportuj historię (CSV)</button>
+    <p class="muted small">CSV służy do analizy (np. w Excelu) — <b>nie jest kopią
+    zapasową</b> i nie da się go wczytać z powrotem.</p>
   </div>
   <div class="card"><h2>Import</h2>
     <p class="muted small">Wczytaj wcześniej wyeksportowany plik. Obecne dane zostaną <b>zastąpione</b> po potwierdzeniu.</p>
@@ -2282,6 +2285,22 @@ function renderBackup() {
     persist();
     toast('Kopia pobrana. Przechowuj ją np. na dysku w chmurze.');
     renderBackup();
+  });
+
+  // CSV: jednokierunkowy eksport do analizy. Celowo BEZ lastExportAt, BEZ
+  // persist() i BEZ re-renderu — nic się nie zmieniło; kopią zapasową
+  // pozostaje wyłącznie JSON (nudge 61 dni patrzy tylko na niego).
+  $('#bk-export-csv').addEventListener('click', () => {
+    if (!state.entries.length) { toast('Brak wpisów — najpierw zrób pierwszy check-in.'); return; }
+    const csv = entriesCSV(state, { verdictLabel });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const d = new Date();
+    a.download = `fire-historia-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('Historia pobrana (CSV). Kopią zapasową pozostaje eksport JSON.');
   });
 
   $('#bk-file').addEventListener('change', ev => {
