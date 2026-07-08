@@ -47,7 +47,11 @@ bundler — the browser loads the modules directly.
 - **`charts.js`** — pure SVG chart builders (`chartSVG`/`stackedBarSVG` + private
   `formatShort`), **zero imports** (L0 leaf), local `esc()`. `width`/`maxPoints`/
   `detail` options drive the fullscreen-landscape overlay; at defaults the output
-  is byte-identical to before the split (guarded by F29).
+  is byte-identical to before the split (guarded by F29). Defs/segments accept an
+  optional `label` (Polish series name): any labeled chart embeds a `data-tip`
+  JSON payload (raw grosze-rounded values + plot-area geometry) on the `<svg>`
+  root, hit-tested by the pure `tipHit(tip, vx)` export; label-less output is
+  unchanged (guarded by F37).
 - **`analysis.js`** — pure HTML builders for the **Analiza** screen (`#/analiza`).
   Zero DOM, zero module state: engine results + pre-rendered SVG charts come in as
   params, an HTML string comes out. Has a local `esc()` for user-derived text.
@@ -63,8 +67,10 @@ bundler — the browser loads the modules directly.
   `.bak` backup, export/import. Backend is injectable (`makeStorage(backing)`) so
   tests run in Node without a real `localStorage`.
 - **`ui.js`** — the **only** module that touches the DOM or holds mutable state
-  (~1900 lines): all screen renderers, hash router, onboarding, event handling, and
-  the fullscreen-landscape chart overlay (`zoomable` registry + `#chart-full`). It
+  (~1900 lines): all screen renderers, hash router, onboarding, event handling,
+  the fullscreen-landscape chart overlay (`zoomable` registry + `#chart-full`), and
+  the chart tap-to-inspect glue (delegated `pointerdown` + `showChartTip` readout
+  injected into the live SVG in viewBox units — press shows, drag scrubs). It
   imports the SVG builders from `charts.js` and the progress ring `ringSVG` stays
   local. Template strings + event delegation, no framework. It calls the engine,
   then hands results to `analysis.js`/`simulation.js` to build the markup.
@@ -303,7 +309,13 @@ IKE/IKZE-shave-FIRE regression months, the bucket-sum invariant
 (`taxable + ike + ikze ≈ portfolio` through overrides/spills/deficits/house
 spend), `setTotal` composition preservation, `ikeStart`/`ikzeStart` seeding,
 withdrawal order with the 60/65 tax cliffs, loan spills bypassing the limits,
-and the v5→v6 migration.
+and the v5→v6 migration. F37 covers chart tap-to-inspect: `data-tip` is emitted
+only when a def/segment carries a `label` (label-less output byte-identical to
+F29), the payload's geometry/labels/values mirror exactly what is drawn
+(decimation-synced, grosze-rounded, negatives clamped like the bars), and
+`tipHit` snaps to the nearest line point / containing bar slot with edge clamps
+(`null` on an empty payload). The pointer glue and readout are DOM (`ui.js`) —
+manual QA, not Node.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

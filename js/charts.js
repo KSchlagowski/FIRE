@@ -2,6 +2,10 @@
 // (liść L0 w diagramie warstw). Przeniesione z ui.js, by dało się je testować
 // w Node. Opcje `width`/`maxPoints`/`detail` obsługują widok pełnoekranowy;
 // przy wartościach domyślnych wynik jest bajt-w-bajt identyczny jak wcześniej.
+// Tap-to-inspect: def/segment z polem `label` włącza payload `data-tip` na
+// korzeniu <svg> (surowe liczby + geometria pola rysunku) — ui.js czyta go
+// dotykiem i formatuje przez format.js; `tipHit` to czysty hit-test do testów.
+// Wyjście bez żadnego `label` pozostaje bajt-w-bajt jak dotąd.
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -33,6 +37,33 @@ function yAxisSvg(y, max, padL, padR, W, detail) {
     `<text x="${padL - 4}" y="${yM + 3}" text-anchor="end">${formatShort(max)}</text>`,
   ];
   return { axisSvg: lines.join('\n    '), yLabelSvg: labels.join('\n    ') };
+}
+
+// Payload tap-to-inspect: emitowany tylko, gdy ktoś nadał `label` (opt-in) —
+// bez etykiet atrybutu nie ma i wyjście jest bajt-w-bajt jak przed funkcją.
+// Wartości surowe (zaokrąglone do grosza), formatowanie robi ui.js/format.js.
+function tipAttr(kind, x0, x1, y0, y1, labels, series) {
+  if (!series.length) return '';
+  const tip = { kind, x0, x1, y0, y1, labels, series };
+  return ` data-tip="${esc(JSON.stringify(tip))}"`;
+}
+
+// Czysty hit-test odczytu: vx (jednostki viewBox) → indeks punktu/słupka + jego
+// środek cx. Linia: najbliższy punkt siatki (ten sam wzór co x(i) w chartSVG);
+// słupki: slot, w którym leży vx (środek slotu jak w stackedBarSVG). Zaciski na
+// krańcach; pusty/zepsuty payload → null.
+export function tipHit(tip, vx) {
+  if (!tip || !tip.labels || !tip.labels.length) return null;
+  const n = tip.labels.length;
+  const { x0, x1 } = tip;
+  if (tip.kind === 'bars') {
+    const slot = (x1 - x0) / n;
+    const i = Math.max(0, Math.min(n - 1, Math.floor((vx - x0) / slot)));
+    return { i, cx: x0 + slot * (i + 0.5) };
+  }
+  const step = (x1 - x0) / Math.max(1, n - 1);
+  const i = Math.max(0, Math.min(n - 1, Math.round((vx - x0) / step)));
+  return { i, cx: x0 + i * step };
 }
 
 // ── Wykres liniowy (decymacja do `maxPoints` punktów) ────────────────────
@@ -92,7 +123,9 @@ export function chartSVG(rows, defs, { height = 170, width = 440, maxPoints = 12
     xLabelSvg = `<text x="${padL}" y="${H - 4}">${first}</text>
     <text x="${W - padR}" y="${H - 4}" text-anchor="end">${last}</text>`;
   }
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">
+  const tip = tipAttr('line', padL, W - padR, padT, H - padB, pts.map(r => r.ym),
+    defs.filter(d => d.label).map(d => ({ label: d.label, v: pts.map(r => Math.round((d.get(r) || 0) * 100) / 100) })));
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img"${tip}>
     ${axisSvg}
     ${yLabelSvg}
     ${xLabelSvg}
@@ -142,7 +175,9 @@ export function stackedBarSVG(rows, segments, { height = 170, width = 440, detai
   const labelStep = detail ? Math.ceil(n / Math.max(8, Math.round(W / 55))) : Math.ceil(n / 8);
   const xLabels = rows.map((r, i) => (i % labelStep === 0 || i === n - 1)
     ? `<text x="${(padL + slot * (i + 0.5)).toFixed(1)}" y="${H - 4}" text-anchor="middle">${esc(String(r.year))}</text>` : '').join('');
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">
+  const tip = tipAttr('bars', padL, W - padR, padT, H - padB, rows.map(r => r.year),
+    segments.filter(s => s.label).map(s => ({ label: s.label, v: rows.map(r => Math.round(Math.max(0, s.get(r) || 0) * 100) / 100) })));
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img"${tip}>
     ${axisSvg}
     ${yLabelSvg}
     ${bars.join('')}${xLabels}

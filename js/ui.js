@@ -5,12 +5,12 @@ import * as Fmt from './format.js';
 import * as An from './analysis.js';
 import * as Sim from './simulation.js';
 import * as Mot from './motivation.js';
-import { chartSVG, stackedBarSVG } from './charts.js';
+import { chartSVG, stackedBarSVG, tipHit } from './charts.js';
 import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.19.1';
+export const APP_VERSION = '1.20.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -211,6 +211,83 @@ function closeChartFull({ keepHistory = false } = {}) {
   if (!keepHistory) history.back();             // skonsumuj wpis wepchnięty przy otwarciu
 }
 
+// ── Odczyt wykresu (tap-to-inspect) ─────────────────────────────────────
+// Wykres z atrybutem data-tip (defs z `label` w charts.js) reaguje na dotyk:
+// press pokazuje krzyżyk + odczyt dokładnych wartości, drag przewija po
+// punktach/slotach, puszczenie zostawia odczyt, tap poza wykresem czyści.
+// Warstwa odczytu żyje WEWNĄTRZ SVG w jednostkach viewBox — skalowanie CSS
+// i obrót .cf-rot nakładki pełnoekranowej działają za darmo (mapowanie
+// klient→viewBox przez getScreenCTM). Budowa przez createElementNS +
+// textContent — zero powierzchni na wstrzyknięcie stringów.
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+let chartTipSvg = null;                 // svg z aktualnie widocznym odczytem
+
+function clearChartTip() {
+  if (!chartTipSvg) return;
+  const g = chartTipSvg.querySelector('[data-tip-layer]');
+  if (g) g.remove();
+  chartTipSvg = null;
+}
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+function showChartTip(svg, tip, clientX, clientY) {
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return;
+  const p = svg.createSVGPoint();
+  p.x = clientX; p.y = clientY;
+  const v = p.matrixTransform(ctm.inverse());
+  const hit = tipHit(tip, v.x);
+  if (!hit) return;
+  const old = svg.querySelector('[data-tip-layer]');
+  if (old) old.remove();
+  const g = svgEl('g', { 'data-tip-layer': '' });
+  if (tip.kind === 'bars') {
+    const slot = (tip.x1 - tip.x0) / tip.labels.length;
+    g.appendChild(svgEl('rect', {
+      class: 'tip-slot', x: (tip.x0 + slot * hit.i).toFixed(1), y: tip.y0,
+      width: slot.toFixed(1), height: tip.y1 - tip.y0,
+    }));
+  } else {
+    g.appendChild(svgEl('line', {
+      class: 'tip-x', x1: hit.cx.toFixed(1), x2: hit.cx.toFixed(1), y1: tip.y0, y2: tip.y1,
+    }));
+  }
+  // Odczyt po przeciwnej połowie niż krzyżyk (D7) — nigdy się nie nakładają.
+  const right = hit.cx <= (tip.x0 + tip.x1) / 2;
+  const rowsTxt = [
+    tip.kind === 'line' ? Fmt.formatMonthName(tip.labels[hit.i]) : String(tip.labels[hit.i]),
+    ...tip.series.map(s => `${s.label}: ${Fmt.formatPLN(s.v[hit.i])}`),
+  ];
+  const texts = rowsTxt.map((t, k) => {
+    const el = svgEl('text', {
+      class: 'tip-txt', x: right ? tip.x1 : tip.x0 + 4,
+      y: tip.y0 + 10 + k * 12, 'text-anchor': right ? 'end' : 'start',
+    });
+    el.textContent = t;
+    return el;
+  });
+  texts.forEach(t => g.appendChild(t));
+  svg.appendChild(g);
+  // Tło pod tekstem: pomiar getBBox możliwy dopiero po wstawieniu do DOM.
+  let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity;
+  for (const t of texts) {
+    const b = t.getBBox();
+    bx1 = Math.min(bx1, b.x); by1 = Math.min(by1, b.y);
+    bx2 = Math.max(bx2, b.x + b.width); by2 = Math.max(by2, b.y + b.height);
+  }
+  g.insertBefore(svgEl('rect', {
+    class: 'tip-bg', x: (bx1 - 3).toFixed(1), y: (by1 - 3).toFixed(1),
+    width: (bx2 - bx1 + 6).toFixed(1), height: (by2 - by1 + 6).toFixed(1),
+  }), texts[0]);
+  chartTipSvg = svg;
+}
+
 // ── Router ──────────────────────────────────────────────────────────────
 
 export function startApp(loaded) {
@@ -226,6 +303,23 @@ export function startApp(loaded) {
     const zoomBtn = e.target.closest('[data-chart-zoom]');
     if (zoomBtn) return openChartFull(zoomBtn.dataset.chartZoom);
     if (e.target.closest('[data-chart-close]')) closeChartFull();
+  });
+  // Odczyt wykresu: ten sam wzorzec delegacji co wyżej — przeżywa podmiany
+  // innerHTML (suwaki, pola). Press na wykresie z data-tip pokazuje odczyt,
+  // drag przewija (pointer capture), press gdziekolwiek indziej czyści.
+  document.addEventListener('pointerdown', e => {
+    const svg = e.target.closest('svg.chart[data-tip]');
+    if (!svg) return clearChartTip();
+    e.preventDefault();                 // bez zaznaczania tekstu przy przewijaniu
+    if (svg !== chartTipSvg) clearChartTip();
+    const tip = svg._tip || (svg._tip = JSON.parse(svg.dataset.tip));
+    const move = ev => showChartTip(svg, tip, ev.clientX, ev.clientY);
+    move(e);
+    if (svg.setPointerCapture) { try { svg.setPointerCapture(e.pointerId); } catch (_) { /* np. pointer już zwolniony */ } }
+    svg.addEventListener('pointermove', move);
+    const stop = () => svg.removeEventListener('pointermove', move);
+    svg.addEventListener('pointerup', stop, { once: true });
+    svg.addEventListener('pointercancel', stop, { once: true });
   });
   window.addEventListener('popstate', () => {
     if (chartFullKey) closeChartFull({ keepHistory: true });
@@ -245,6 +339,7 @@ function applyTheme() {
 function route() {
   closeModal(); // nawigacja wstecz nie może zostawić martwej nakładki
   closeChartFull({ keepHistory: true }); // ta sama zasada dla nakładki wykresu
+  clearChartTip();                       // warstwa ginie z markupem — zeruj też ref
   chartZoom.clear();                     // rejestr odbudowuje się przy renderze ekranu
   const hash = location.hash || '#/';
   const tabbar = document.getElementById('tabbar');
@@ -704,7 +799,7 @@ function renderDashboard() {
       const debtLegend = famOn ? '<div class="legend"><span><i style="background:var(--danger)"></i>kredyt + dług rodzinny (realnie)</span></div>' : '';
       html += `<div class="card"><h2>Krzywa topnienia długu</h2>
         ${zoomable('dash-dlug', 'Krzywa topnienia długu', o => chartSVG(debtRows, [
-        { get: r => r.debtReal + (r.familyReal || 0), cls: 'line-debt' },
+        { get: r => r.debtReal + (r.familyReal || 0), cls: 'line-debt', label: 'dług (realnie)' },
       ], o), { legendHTML: debtLegend })}
         ${debtLegend}
       </div>`;
@@ -729,8 +824,8 @@ function renderDashboard() {
       const portLegend = '<div class="legend"><span><i style="background:var(--accent)"></i>portfel (— historia, ⋯ prognoza)</span><span><i style="background:var(--muted)"></i>cel ruchomy</span></div>';
       html += `<div class="card"><h2>Portfel vs cel</h2>
         ${zoomable('dash-portfel', 'Portfel vs cel', o => chartSVG(rows, [
-        { get: r => r.target, cls: 'line-target' },
-        { get: r => r.portfolio, cls: 'line-port', clsProj: 'line-proj', split: true },
+        { get: r => r.target, cls: 'line-target', label: 'cel' },
+        { get: r => r.portfolio, cls: 'line-port', clsProj: 'line-proj', split: true, label: 'portfel' },
       ], o), { legendHTML: portLegend })}
         ${portLegend}
       </div>`;
@@ -1129,8 +1224,8 @@ function renderAnaliza() {
     // chartSVG skaluje od 0 — skumulowany wykres tylko przy seriach ≥ 0.
     const cumChart = pva.cumRows.length > 1 && pva.cumRows.every(r => r.cumNet >= 0 && r.cumPlanned >= 0)
       ? zoomable('an-plan-cum', 'Skumulowane: odłożone vs plan', o => chartSVG(pva.cumRows, [
-        { get: r => r.cumPlanned, cls: 'line-target' },
-        { get: r => r.cumNet, cls: 'line-port' },
+        { get: r => r.cumPlanned, cls: 'line-target', label: 'plan' },
+        { get: r => r.cumNet, cls: 'line-port', label: 'odłożone' },
       ], o), { legendHTML: An.cumLegend() })
       : '';
     body = An.statsCard({ fi, cvg, balances: d.balances, a, nowYm })
@@ -1161,8 +1256,8 @@ function renderAnaliza() {
     }));
     const wChart = w.rows.length > 1
       ? zoomable('an-wyplaty', 'Faza wypłat: saldo portfela', o => chartSVG(w.rows, [
-        { get: r => r.endNominal, cls: 'line-proj' },
-        { get: r => r.endReal, cls: 'line-port' },
+        { get: r => r.endNominal, cls: 'line-proj', label: 'nominalnie' },
+        { get: r => r.endReal, cls: 'line-port', label: 'realnie' },
       ], o), { legendHTML: An.withdrawalLegend() })
       : '';
 
@@ -1180,8 +1275,8 @@ function renderAnaliza() {
     const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj });
     const zChart = z && z.rows.length > 1
       ? zoomable('an-dozera', 'Do zera: saldo portfela', o => chartSVG(z.rows, [
-        { get: r => r.endNominal, cls: 'line-proj' },
-        { get: r => r.endReal, cls: 'line-port' },
+        { get: r => r.endNominal, cls: 'line-proj', label: 'nominalnie' },
+        { get: r => r.endReal, cls: 'line-port', label: 'realnie' },
       ], o), { legendHTML: An.withdrawalLegend() })
       : '';
     body = An.dieWithZeroCard({
@@ -1233,16 +1328,16 @@ function renderAnaliza() {
       }
       return rows.length > 1
         ? zoomable(zoom.key, zoom.title, o => chartSVG(rows, [
-          { get: r => r.sched, cls: 'line-debt-dash' },
-          { get: r => r.over, cls: 'line-debt' },
+          { get: r => r.sched, cls: 'line-debt-dash', label: 'sama rata' },
+          { get: r => r.over, cls: 'line-debt', label: 'z nadpłatami' },
         ], o), { legendHTML: An.meltLegend() })
         : '';
     };
     // Słupki kapitał/odsetki wg kontraktu (deterministyczne, bez nadpłat).
     const piBars = (rows, zoom) => rows.length
       ? zoomable(zoom.key, zoom.title, o => stackedBarSVG(rows, [
-        { get: r => r.principal, cls: 'bar-principal' },
-        { get: r => r.interest, cls: 'bar-interest' },
+        { get: r => r.principal, cls: 'bar-principal', label: 'kapitał' },
+        { get: r => r.interest, cls: 'bar-interest', label: 'odsetki' },
       ], o), { legendHTML: An.barLegend() })
       : '';
 
@@ -1254,10 +1349,10 @@ function renderAnaliza() {
       const rows = E.remainingToPayComparison(principal, contractRows, actual);
       return rows.length
         ? zoomable(zoom.key, zoom.title, o => stackedBarSVG(rows, [
-          { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
-          { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
-          { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
-          { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
+          { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0, label: 'odsetki (kontrakt)' },
+          { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0, label: 'kapitał (kontrakt)' },
+          { get: r => r.aInterest, cls: 'bar-interest', group: 1, label: 'odsetki (z nadpłatami)' },
+          { get: r => r.aPrincipal, cls: 'bar-principal', group: 1, label: 'kapitał (z nadpłatami)' },
         ], o), { legendHTML: An.remainingLegend(zoom.overLabel) })
         : '';
     };
@@ -1300,8 +1395,8 @@ function renderAnaliza() {
     const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj });
     const zChart = z && z.rows.length > 1
       ? zoomable('an-dozera', 'Do zera: saldo portfela', o => chartSVG(z.rows, [
-        { get: r => r.endNominal, cls: 'line-proj' },
-        { get: r => r.endReal, cls: 'line-port' },
+        { get: r => r.endNominal, cls: 'line-proj', label: 'nominalnie' },
+        { get: r => r.endReal, cls: 'line-port', label: 'realnie' },
       ], o), { legendHTML: An.withdrawalLegend() })
       : '';
     const dz = $('#dwz-result');
@@ -1407,10 +1502,10 @@ function renderSymulacja() {
     const chartRows = E.remainingToPayComparison(an.balanceNominal, base.rows, sim.rows);
     const chartHTML = chartRows.length
       ? zoomable('sym-nadplata', 'Nadpłata: ile zostało do spłaty', o => stackedBarSVG(chartRows, [
-        { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
-        { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
-        { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
-        { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
+        { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0, label: 'odsetki (kontrakt)' },
+        { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0, label: 'kapitał (kontrakt)' },
+        { get: r => r.aInterest, cls: 'bar-interest', group: 1, label: 'odsetki (z nadpłatami)' },
+        { get: r => r.aPrincipal, cls: 'bar-principal', group: 1, label: 'kapitał (z nadpłatami)' },
       ], o), { legendHTML: Sim.remainingCmpLegend() })
       : '';
     return Sim.overpaymentResult({
@@ -1455,10 +1550,10 @@ function renderSymulacja() {
     const chartRows = E.remainingToPayComparison(P, base.rows, sim.rows);
     const chartHTML = chartRows.length
       ? zoomable('sym-kredyt', 'Kalkulator kredytu: ile zostało do spłaty', o => stackedBarSVG(chartRows, [
-        { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0 },
-        { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0 },
-        { get: r => r.aInterest, cls: 'bar-interest', group: 1 },
-        { get: r => r.aPrincipal, cls: 'bar-principal', group: 1 },
+        { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0, label: 'odsetki (kontrakt)' },
+        { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0, label: 'kapitał (kontrakt)' },
+        { get: r => r.aInterest, cls: 'bar-interest', group: 1, label: 'odsetki (z nadpłatami)' },
+        { get: r => r.aPrincipal, cls: 'bar-principal', group: 1, label: 'kapitał (z nadpłatami)' },
       ], o), { legendHTML: Sim.remainingCmpLegend() })
       : '';
     return Sim.loanCalcResult({

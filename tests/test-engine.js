@@ -5,7 +5,7 @@ import * as E from '../js/engine.js';
 import * as F from '../js/format.js';
 import * as S from '../js/storage.js';
 import { coachMessage, checkinCelebration, decisionMessage } from '../js/coach.js';
-import { chartSVG, stackedBarSVG } from '../js/charts.js';
+import { chartSVG, stackedBarSVG, tipHit } from '../js/charts.js';
 import { FIX } from './fixtures.js';
 
 // ── Mini-harness ────────────────────────────────────────────────────────
@@ -2603,4 +2603,112 @@ test('F31k: spill z kredytów omija limity (D6) — ląduje na koncie zwykłym m
     if (!fOn.has(r.ym) || r.ym.endsWith('-04')) continue;
     assertClose(fOn.get(r.ym) - r.flowPortfolio, 0, f.eps, `przepływy identyczne (${r.ym})`);
   }
+});
+
+// ── F37: tap-to-inspect — payload data-tip + hit-test tipHit ──────────────
+// Plan: docs/plan-chart-tooltips-tap-to-inspect.md (tam „F30" — zajęte przez
+// Belkę → F37). Etykiety serii (label) są opt-in: bez nich wyjście builderów
+// pozostaje bajt-w-bajt jak w F29; payload niesie surowe liczby (grosze),
+// formatowanie robi ui.js. Wskaźnik/odczyt to DOM (ui.js) — QA ręczne.
+
+const LINE_DEFS_L = [
+  { get: r => r.a, cls: 'line-port', label: 'portfel' },
+  { get: r => r.b, cls: 'line-target', label: 'cel' },
+];
+const BAR_SEGS_L = [
+  { get: r => r.principal, cls: 'bar-principal', label: 'kapitał' },
+  { get: r => r.interest, cls: 'bar-interest', label: 'odsetki' },
+];
+
+// Wyciąga i odkodowuje payload data-tip (odwrotność esc; &amp; na końcu).
+function tipOf(svg) {
+  const m = svg.match(/ data-tip="([^"]*)"/);
+  if (!m) return null;
+  return JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'));
+}
+
+test('F37a: bez etykiet zero zmian — data-tip tylko przy label, po zdjęciu atrybutu wyjścia identyczne', () => {
+  const rows = lineRows(36);
+  const plain = chartSVG(rows, LINE_DEFS);
+  assertTrue(!plain.includes('data-tip'), 'bez label brak atrybutu (linie)');
+  const labeled = chartSVG(rows, LINE_DEFS_L);
+  assertTrue(labeled.includes('data-tip'), 'z label atrybut jest');
+  assertEq(labeled.replace(/ data-tip="[^"]*"/, ''), plain, 'poza atrybutem wyjście bajt-w-bajt');
+  const bplain = stackedBarSVG(barRows(20), BAR_SEGS);
+  assertTrue(!bplain.includes('data-tip'), 'bez label brak atrybutu (słupki)');
+  assertEq(stackedBarSVG(barRows(20), BAR_SEGS_L).replace(/ data-tip="[^"]*"/, ''), bplain, 'słupki: poza atrybutem identyczne');
+});
+
+test('F37b: payload liniowy — geometria pola rysunku, etykiety YYYY-MM, wartości do grosza w kolejności defs', () => {
+  const tip = tipOf(chartSVG(lineRows(36), LINE_DEFS_L));
+  assertEq(tip.kind, 'line', 'kind');
+  assertEq(tip.x0, 48, 'x0 = padL');
+  assertEq(tip.x1, 432, 'x1 = W − padR');
+  assertEq(tip.y0, 10, 'y0 = padT');
+  assertEq(tip.y1, 150, 'y1 = H − padB');
+  assertEq(tip.labels.length, 36, '36 punktów bez decymacji');
+  assertEq(tip.labels[0], '2026-01', 'pierwsza etykieta = ym pierwszego rzędu');
+  assertEq(tip.series.map(s => s.label).join(','), 'portfel,cel', 'kolejność serii = kolejność defs');
+  assertEq(tip.series[0].v[7], 70000, 'v[i] = get(r) (a = i·10 000)');
+  assertEq(tip.series[1].v[7], 35000, 'v[i] = get(r) (b = i·5 000)');
+  const frac = tipOf(chartSVG([{ ym: '2026-01', a: 1234.5678, b: 0 }], LINE_DEFS_L));
+  assertEq(frac.series[0].v[0], 1234.57, 'zaokrąglenie do grosza');
+});
+
+test('F37c: decymacja — payload ma dokładnie te punkty, które narysowano', () => {
+  const svg = chartSVG(lineRows(500), [{ get: r => r.a, cls: 'line-port', label: 'a' }], { maxPoints: 240 });
+  const pts = svg.match(/points="([^"]+)"/)[1].split(' ');
+  const tip = tipOf(svg);
+  assertEq(tip.labels.length, pts.length, 'labels i polyline z tych samych pts');
+  assertEq(tip.series[0].v.length, pts.length, 'v wyrównane z labels');
+  assertEq(tip.labels[tip.labels.length - 1], lineRows(500)[499].ym, 'ostatni rząd zachowany');
+});
+
+test('F37d: payload słupkowy — lata jako etykiety, ujemne segmenty zaciśnięte do 0 jak na rysunku', () => {
+  const rows = barRows(20);
+  rows[3].interest = -700; // rysunek pomija ujemne — payload musi też
+  const tip = tipOf(stackedBarSVG(rows, BAR_SEGS_L));
+  assertEq(tip.kind, 'bars', 'kind');
+  assertEq(tip.labels.length, 20, '20 słupków');
+  assertEq(tip.labels[0], 2026, 'etykiety = lata (liczby)');
+  assertEq(tip.series[1].v[3], 0, 'ujemny segment → 0 (jak narysowano)');
+  assertEq(tip.series[0].v[3], 1300, 'sąsiedni segment bez zmian');
+});
+
+test('F37e: tipHit linie — najbliższy punkt siatki, zaciski na krańcach, n=1', () => {
+  const tip = { kind: 'line', x0: 48, x1: 432, y0: 10, y1: 150, labels: ['a', 'b', 'c', 'd', 'e'], series: [] };
+  const step = (432 - 48) / 4;
+  assertEq(tipHit(tip, 48).i, 0, 'vx = x0 → i 0');
+  assertEq(tipHit(tip, 0).i, 0, 'vx < x0 → zacisk 0');
+  assertEq(tipHit(tip, 9999).i, 4, 'vx > x1 → zacisk n−1');
+  assertEq(tipHit(tip, 48 + step * 1.4).i, 1, '1,4 kroku → punkt 1');
+  assertEq(tipHit(tip, 48 + step * 1.6).i, 2, '1,6 kroku → punkt 2');
+  assertClose(tipHit(tip, 48 + step * 1.6).cx, 48 + 2 * step, 1e-9, 'cx = x(i) buildera');
+  const one = tipHit({ ...tip, labels: ['x'] }, 240);
+  assertEq(one.i, 0, 'n=1 → i 0');
+  assertEq(one.cx, 48, 'n=1 → cx = x0 (jak pojedynczy punkt chartSVG)');
+});
+
+test('F37f: tipHit słupki — slot z floor, środek slotu, zaciski; pusty/zepsuty payload → null', () => {
+  const tip = { kind: 'bars', x0: 48, x1: 432, y0: 10, y1: 150, labels: [2026, 2027, 2028, 2029], series: [] };
+  const slot = (432 - 48) / 4;
+  assertEq(tipHit(tip, 48 + slot * 0.99).i, 0, 'tuż przed granicą slotu → 0');
+  assertEq(tipHit(tip, 48 + slot * 1.01).i, 1, 'tuż za granicą → 1');
+  assertEq(tipHit(tip, -50).i, 0, 'zacisk lewy');
+  assertEq(tipHit(tip, 5000).i, 3, 'zacisk prawy');
+  assertClose(tipHit(tip, 48 + slot * 2.5).cx, 48 + slot * 2.5, 1e-9, 'cx = środek slotu');
+  assertEq(tipHit({ ...tip, labels: [] }, 100), null, 'puste labels → null');
+  assertEq(tipHit(null, 100), null, 'null → null');
+  assertEq(tipHit({}, 100), null, 'obiekt bez labels → null');
+});
+
+test('F37g: czystość i higiena — determinizm, zero NaN, esc płaszczyzny atrybutu odwracalne', () => {
+  const rows = lineRows(36);
+  assertEq(chartSVG(rows, LINE_DEFS_L), chartSVG(rows, LINE_DEFS_L), 'dwa wywołania identyczne');
+  const svg = chartSVG(rows, LINE_DEFS_L);
+  assertTrue(!/NaN/.test(svg), 'zero NaN');
+  assertTrue(svg.includes('&quot;'), 'cudzysłowy JSON-a zescape\'owane w atrybucie');
+  const withQuote = chartSVG(rows, [{ get: r => r.a, cls: 'line-port', label: 'z "cudzysłowem" & <znakami>' }]);
+  assertEq(tipOf(withQuote).series[0].label, 'z "cudzysłowem" & <znakami>', 'round-trip esc → JSON.parse');
 });

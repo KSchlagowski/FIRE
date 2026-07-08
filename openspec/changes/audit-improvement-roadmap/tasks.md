@@ -84,8 +84,9 @@
 
 ## 5. Phase 5 — Deeper analysis features (one release each)
 
-- [ ] 5.1 Implement chart tap-to-inspect tooltips
+- [x] 5.1 Implement chart tap-to-inspect tooltips
   (`docs/plan-chart-tooltips-tap-to-inspect.md`) in `charts.js` + render sites; release
+  (v1.20.0; fixture group F37 — doc said F30, taken by Belka)
 - [ ] 5.2 Implement projection band (`docs/plan-projection-band.md`): ±1.5 p.p. shaded band
   on „Portfel vs cel"; add engine/fixtures per doc; release
 - [ ] 5.3 Implement crash stress test (`docs/plan-crash-stress-test.md`): sequence-of-returns
