@@ -124,7 +124,8 @@ and, if it's a top-level tab, the `#tabbar` list in `index.html`.
                  expenseGrowthReal, incomeGrowthReal, inflationAnnual },
   housing:     { currentRentMonthly, housePlan: { mortgage{…Nominal}, familyLoan{…Nominal}, … } },
   debt:        { overrides, familyOverrides },   // real & family-loan corrections
-  taxes:       { belkaEnabled },                 // Belka 19% toggle (default false)
+  taxes:       { belkaEnabled,                   // Belka 19% toggle (default false)
+                 ikeIkze: { enabled, employmentForm, pitRate, ikeStart, ikzeStart } },
   entries:     [ … monthly check-ins … ],
   ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt } }
 ```
@@ -293,6 +294,16 @@ floors basis at 0), the observer invariant (`replayBalances`/`projectFire` balan
 bit-identical on vs off), the pinned Belka-delays-FIRE regression months,
 withdrawal-phase basis erosion (per-row `endReal` identity, growing `taxReal`),
 `projectionWith({ taxes })` purity, `taxStats`, and the v4→v5 migration chain.
+F31 covers the IKE/IKZE buckets (`taxes.ikeIkze`): the 2026 limits and the
+IKZE → IKE → taxable fill order (employee and self-employed, January counter
+reset), the April PIT refund (amount at 12%/32%, projection-only, the
+history→projection seam via `taxSnapshot.prevYearIkze`), net valuation at the
+60/65 age gates (incl. Belka-off independence, D11), the pinned
+IKE/IKZE-shave-FIRE regression months, the bucket-sum invariant
+(`taxable + ike + ikze ≈ portfolio` through overrides/spills/deficits/house
+spend), `setTotal` composition preservation, `ikeStart`/`ikzeStart` seeding,
+withdrawal order with the 60/65 tax cliffs, loan spills bypassing the limits,
+and the v5→v6 migration.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

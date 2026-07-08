@@ -456,18 +456,35 @@ test('F11: odzysk z .bak po korupcji', () => {
   assertEq(res.state.assumptions.monthlyIncome, 10000, '.bak trzyma poprzedni pełny zapis');
 });
 
-test('F11: v5 round-trip; migracja v1→…→5, v2→…→5, v3→…→5, v4→5; nowsza wersja odrzucona', () => {
+test('F11: v6 round-trip; migracja v1→…→6, v2→…→6, v3→…→6, v4→…→6, v5→6; nowsza wersja odrzucona', () => {
   const st = baseState();
-  assertEq(st.version, 5, 'nowy stan = v5');
+  assertEq(st.version, 6, 'nowy stan = v6');
   assertEq(st.version, S.SCHEMA_VERSION, 'engine i storage zsynchronizowane');
-  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 5);
+  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 6);
+  const defaultIkeIkze = JSON.stringify({ enabled: false, employmentForm: 'employee', pitRate: 0.12, ikeStart: 0, ikzeStart: 0 });
+  // v5 → v6: dokładana podsekcja IKE/IKZE, domyślnie wyłączona.
+  const v5 = JSON.parse(JSON.stringify(st));
+  v5.version = 5;
+  v5.taxes = { belkaEnabled: true }; // kształt v5: bez ikeIkze
+  const m5 = S.migrate(S.validateState(v5));
+  assertEq(m5.version, 6);
+  assertEq(m5.taxes.belkaEnabled, true, 'Belka nietknięta przy 5→6');
+  assertEq(JSON.stringify(m5.taxes.ikeIkze), defaultIkeIkze, 'dokładny domyślny kształt ikeIkze');
+  // Istniejąca konfiguracja ikeIkze przeżywa migrację bez zmian.
+  const v5b = JSON.parse(JSON.stringify(st));
+  v5b.version = 5;
+  v5b.taxes = { belkaEnabled: false, ikeIkze: { enabled: true, employmentForm: 'selfEmployed', pitRate: 0.32, ikeStart: 1000, ikzeStart: 500 } };
+  const m5b = S.migrate(S.validateState(v5b));
+  assertEq(m5b.taxes.ikeIkze.employmentForm, 'selfEmployed', 'jawna konfiguracja nietknięta');
+  assertEq(m5b.taxes.ikeIkze.pitRate, 0.32, 'jawny pitRate nietknięty');
   // v4 → v5: dokładana sekcja podatków (Belka), domyślnie wyłączona.
   const v4 = JSON.parse(JSON.stringify(st));
   v4.version = 4;
   delete v4.taxes;
   const m4 = S.migrate(S.validateState(v4));
-  assertEq(m4.version, 5);
+  assertEq(m4.version, 6);
   assertEq(m4.taxes.belkaEnabled, false, 'Belka domyślnie wyłączona');
+  assertEq(JSON.stringify(m4.taxes.ikeIkze), defaultIkeIkze, 'ikeIkze dołożone w łańcuchu 4→…→6');
   // Jawnie włączona Belka przeżywa migrację bez zmian.
   const v4b = JSON.parse(JSON.stringify(st));
   v4b.version = 4;
@@ -479,7 +496,7 @@ test('F11: v5 round-trip; migracja v1→…→5, v2→…→5, v3→…→5, v4�
   delete v3.assumptions.freezeExpensesAtRetirement;
   delete v3.taxes;
   const m3 = S.migrate(S.validateState(v3));
-  assertEq(m3.version, 5);
+  assertEq(m3.version, 6);
   assertEq(m3.assumptions.freezeExpensesAtRetirement, true, 'domyślnie stałe realnie');
   // Jawne false przeżywa migrację bez zmian.
   const v3b = JSON.parse(JSON.stringify(st));
@@ -493,7 +510,7 @@ test('F11: v5 round-trip; migracja v1→…→5, v2→…→5, v3→…→5, v4�
   delete v2.assumptions.freezeExpensesAtRetirement;
   delete v2.taxes;
   const m2 = S.migrate(S.validateState(v2));
-  assertEq(m2.version, 5, 'łańcuch 2→3→4→5');
+  assertEq(m2.version, 6, 'łańcuch 2→3→4→5→6');
   assertEq(m2.taxes.belkaEnabled, false, 'podatki dołożone w łańcuchu');
   assertEq(m2.assumptions.postRetirementReturnReal, 0.02, 'domyślna marża EDO 2%');
   assertEq(m2.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dołożone');
@@ -511,13 +528,15 @@ test('F11: v5 round-trip; migracja v1→…→5, v2→…→5, v3→…→5, v4�
   delete v1.assumptions.freezeExpensesAtRetirement;
   delete v1.taxes;
   const migrated = S.migrate(S.validateState(v1));
-  assertEq(migrated.version, 5);
+  assertEq(migrated.version, 6);
   assertTrue(migrated.housing.housePlan.familyLoan && migrated.housing.housePlan.familyLoan.enabled === false, 'familyLoan dodany, wyłączony');
   assertTrue(Array.isArray(migrated.debt.familyOverrides) && migrated.debt.familyOverrides.length === 0, 'familyOverrides = []');
   assertEq(migrated.assumptions.postRetirementReturnReal, 0.02, 'zwrot po FIRE dodany w łańcuchu');
   assertEq(migrated.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dodane w łańcuchu');
-  assertEq(migrated.taxes.belkaEnabled, false, 'podatki dodane w łańcuchu 1→…→5');
-  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99/v6 odrzucona');
+  assertEq(migrated.taxes.belkaEnabled, false, 'podatki dodane w łańcuchu 1→…→6');
+  assertTrue(migrated.taxes.ikeIkze && migrated.taxes.ikeIkze.enabled === false, 'ikeIkze dodane w łańcuchu 1→…→6');
+  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 7, state: {} })), 'v7 odrzucona');
+  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99 odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: 'inna-apka', version: 1, state: {} })), 'obcy plik odrzucony');
 });
 
@@ -2128,4 +2147,289 @@ test('F30j: taxStats — cel brutto > netto, netto portfela ≤ brutto, null gdy
   const stOff = f30State(false);
   const balOff = E.replayBalances(stOff, '2026-12');
   assertEq(E.taxStats(stOff, balOff, '2026-12'), null, 'null przy wyłączonych podatkach');
+});
+
+// ── F31: IKE/IKZE — trzy kubełki, limity, zwrot PIT, podatek przy wypłacie ──
+// Kolejność wypełniania IKZE → IKE → taxable (D6), zwrot PIT w kwietniu (D7),
+// wycena netto wg progów wieku 60/65 (D4), wypłaty taxable → IKE → IKZE (D10).
+// Plan: docs/plan-ike-ikze-buckets.md (tam F30 → tu F31, bo F30 zajęła Belka).
+
+// Stan z kotwicą 2026-01 i zerowymi stopami: kubełki rosną wyłącznie o wpłaty,
+// więc wartości na koniec roku = sumy wpłat (czyste odczyty limitów).
+function f31State(over = {}) {
+  return baseState(deep({
+    anchorMonth: '2026-01',
+    assumptions: { realReturnAnnual: 0, inflationAnnual: 0, cashReturnReal: 0, postRetirementReturnReal: 0 },
+    taxes: { belkaEnabled: true, ikeIkze: { enabled: true } },
+  }, over));
+}
+const NOW31 = new Date(2026, 0, 15); // upto = 2025-12 → wszystko prognozą od kotwicy
+
+test('F31a: kolejność wypełniania i limity — IKZE 11304, IKE 28260, reszta taxable; liczniki zerowane w styczniu', () => {
+  const f = FIX.F31;
+  const p = E.projectionWith(f31State(), {}, NOW31);
+  const row = ym => p.series.find(r => r.ym === ym);
+  const feb = row('2026-02');
+  assertClose(feb.buckets.ikze, 8000, f.eps, 'najpierw IKZE');
+  assertClose(feb.buckets.ike, 0, f.eps, 'IKE puste przed limitem IKZE');
+  const dec = row('2026-12');
+  assertClose(dec.buckets.ikze, f.limits.ikzeEmployee, f.eps, 'IKZE do limitu');
+  assertClose(dec.buckets.ike, f.limits.ike, f.eps, 'IKE do limitu');
+  assertClose(dec.buckets.taxable, f.taxableRemainder, f.eps, 'reszta na konto zwykłe');
+  // Styczeń otwiera nowe limity: cała miesięczna wpłata (4000) idzie na IKZE.
+  const jan = row('2027-01');
+  assertClose(jan.buckets.ikze - dec.buckets.ikze, 4000, f.eps, 'liczniki wyzerowane w styczniu');
+});
+
+test('F31b: limit dla działalności — IKZE wypełnia się do 16956 zanim IKE cokolwiek dostanie', () => {
+  const f = FIX.F31;
+  const p = E.projectionWith(f31State({ taxes: { ikeIkze: { employmentForm: 'selfEmployed' } } }), {}, NOW31);
+  const row = ym => p.series.find(r => r.ym === ym);
+  assertClose(row('2026-04').buckets.ikze, 16000, f.eps, '4 miesiące w całości na IKZE');
+  assertClose(row('2026-04').buckets.ike, 0, f.eps, 'IKE puste przed limitem IKZE');
+  assertClose(row('2026-12').buckets.ikze, f.limits.ikzeSelfEmployed, f.eps, 'IKZE do limitu działalności');
+});
+
+test('F31c: zwrot PIT — kwiecień następnego roku, tylko prognoza; szew historia→prognoza przez prevYearIkze', () => {
+  const f = FIX.F31;
+  const st = f31State();
+  const pOn = E.projectionWith(st, {}, NOW31);
+  const pOff = E.projectionWith(st, { taxes: { ikeIkze: { enabled: false } } }, NOW31);
+  const flows = p => new Map(p.series.map(r => [r.ym, r.flowPortfolio]));
+  const fOn = flows(pOn), fOff = flows(pOff);
+  let checked = 0;
+  for (const [ym, v] of fOn) {
+    if (!fOff.has(ym)) continue;
+    if (ym.endsWith('-04') && ym !== '2026-04') continue; // kwietnie z osobna niżej
+    assertClose(v - fOff.get(ym), 0, f.eps, `przepływy identyczne poza kwietniem (${ym})`);
+    checked++;
+  }
+  assertTrue(checked > 20, 'porównano sensowną liczbę miesięcy');
+  assertClose(fOn.get('2027-04') - fOff.get('2027-04'), f.refundEmployee12, f.eps, 'kwiecień 2027: 0,12 × 11304');
+  // Szew: wpłaty IKZE z HISTORII zasilają pierwszy PROGNOZOWANY kwiecień.
+  const mkH = ikeOn => {
+    const s = f31State(ikeOn ? {} : { taxes: { ikeIkze: { enabled: false } } });
+    for (let i = 0; i < 12; i++) s.entries.push(entry(E.addMonths('2026-01', i), 10000, 6000, { snapshot: 4000 }));
+    return s;
+  };
+  const NOWH = new Date(2027, 1, 15); // luty 2027 → upto 2027-01, kwiecień 2027 jest prognozą
+  const balH = E.replayBalances(mkH(true), '2027-01');
+  assertClose(balH.taxSnapshot.prevYearIkze, f.limits.ikzeEmployee, f.eps, 'szew niesie zeszłoroczne wpłaty IKZE');
+  assertClose(balH.taxSnapshot.ytdIkze, 0, f.eps, 'licznik bieżącego roku wyzerowany w styczniu');
+  const balHOff = E.replayBalances(mkH(false), '2027-01');
+  assertEq(
+    JSON.stringify(balH.rows.map(r => [r.ym, r.flowPortfolio, r.flowCash])),
+    JSON.stringify(balHOff.rows.map(r => [r.ym, r.flowPortfolio, r.flowCash])),
+    'historia nigdy nie wstrzykuje zwrotu (wpisy są prawdą, D7)',
+  );
+  const pH = E.projectionWith(mkH(true), {}, NOWH);
+  const pHOff = E.projectionWith(mkH(false), {}, NOWH);
+  const apr = pH.series.find(r => r.ym === '2027-04');
+  const aprOff = pHOff.series.find(r => r.ym === '2027-04');
+  assertTrue(apr.projected, 'kwiecień 2027 jest miesiącem prognozy');
+  assertClose(apr.flowPortfolio - aprOff.flowPortfolio, f.refundEmployee12, f.eps, 'zwrot za historyczny rok trafia do pierwszego prognozowanego kwietnia');
+});
+
+test('F31d: stawka PIT 32% — zwrot 3617,28', () => {
+  const f = FIX.F31;
+  const st = f31State({ taxes: { ikeIkze: { pitRate: 0.32 } } });
+  const pOn = E.projectionWith(st, {}, NOW31);
+  const pOff = E.projectionWith(st, { taxes: { ikeIkze: { enabled: false } } }, NOW31);
+  const get = (p, ym) => p.series.find(r => r.ym === ym).flowPortfolio;
+  assertClose(get(pOn, '2027-04') - get(pOff, '2027-04'), f.refundPit32, f.eps, '0,32 × 11304');
+});
+
+test('F31e: wycena netto przy progach wieku — IKE od 60, IKZE 10% od 65, wcześniej PIT; D11 przy wyłączonej Belce', () => {
+  const f = FIX.F31;
+  const mk = belka => {
+    const st = f31State({
+      profile: { birthDate: '1970-01-01' },
+      assumptions: { portfolioStart: 30000 },
+      taxes: { belkaEnabled: belka, ikeIkze: { ikeStart: 10000, ikzeStart: 5000 } },
+    });
+    const tr = E.makeTaxTracker(st);
+    tr.grow(1); // ×2: taxable 30000, IKE 20000, IKZE 10000; bases 15000/10000 → gainShare 0,5
+    return tr;
+  };
+  const tNet = 30000 * (1 - 0.19 * 0.5);
+  const iNetEarly = 20000 * (1 - 0.19 * 0.5);
+  const tr = mk(true);
+  assertClose(tr.netValueReal('2029-12'), tNet + iNetEarly + 10000 * 0.88, f.eps, 'wiek 59: wczesne stawki (IKE Belka, IKZE PIT 12%)');
+  assertClose(tr.netValueReal('2030-01'), tNet + 20000 + 10000 * 0.88, f.eps, 'wiek 60: IKE bez podatku');
+  assertClose(tr.netValueReal('2035-01'), tNet + 20000 + 10000 * 0.90, f.eps, 'wiek 65: IKZE 10% ryczałtu');
+  // D11: Belka wyłączona → taxable i wczesne IKE bez podatku, IKZE dalej płaci PIT.
+  const trOff = mk(false);
+  assertClose(trOff.netValueReal('2029-12'), 30000 + 20000 + 10000 * 0.88, f.eps, 'bez Belki: IKZE nadal płaci PIT');
+  // Brak daty urodzenia → konserwatywnie stawki wczesne.
+  const stNB = f31State({
+    profile: { birthDate: '' },
+    assumptions: { portfolioStart: 30000 },
+    taxes: { ikeIkze: { ikeStart: 10000, ikzeStart: 5000 } },
+  });
+  const trNB = E.makeTaxTracker(stNB);
+  trNB.grow(1);
+  assertClose(trNB.netValueReal('2050-01'), tNet + iNetEarly + 10000 * 0.88, f.eps, 'brak daty urodzenia → stawki wczesne');
+});
+
+test('F31f: IKE/IKZE przyspieszają FIRE przy włączonej Belce — kotwice regresji', () => {
+  const st = baseState({
+    assumptions: { portfolioStart: 100000 },
+    taxes: { belkaEnabled: true, ikeIkze: { enabled: true } },
+  });
+  const pIke = E.projectionWith(st, {}, NOW);
+  const pBase = E.projectionWith(st, { taxes: { ikeIkze: { enabled: false } } }, NOW);
+  assertTrue(pIke.reached && pBase.reached, 'obie prognozy osiągają FIRE');
+  assertTrue(E.ymToIdx(pIke.fireYm) <= E.ymToIdx(pBase.fireYm), 'z IKE/IKZE nie później');
+  assertEq(pBase.fireYm, '2047-06', 'kotwica: sama Belka (jak F30f)');
+  assertEq(pIke.fireYm, '2047-02', 'kotwica: Belka + IKE/IKZE (▲ 4 mies. wcześniej)');
+});
+
+test('F31g: suma kubełków = portfel w każdym wierszu; basis skalarny = suma bases', () => {
+  const st = baseState({
+    assumptions: { portfolioStart: 40000, cashStart: 10000 },
+    taxes: { belkaEnabled: true, ikeIkze: { enabled: true, ikeStart: 8000, ikzeStart: 2000 } },
+    housing: {
+      housePlan: housePlan({
+        moveInMonth: '2027-01',
+        houseSpend: { month: '2027-01', amount: 20000 },
+        mortgage: { startMonth: '2027-01', principal: 120000, rateNominal: 0.07, termYears: 10, paymentOverrideMonthly: null },
+        familyLoan: { enabled: true, startMonth: '2027-01', endMonth: '2028-12', principal: 24000, rateNominal: 0, paymentOverrideMonthly: null },
+      }),
+    },
+  });
+  st.entries.push(entry('2026-07', 10000, 6000, { snapshot: 4000 }));
+  st.entries.push(entry('2026-08', 3000, 9500, { snapshot: 4000 }));   // deficyt
+  st.entries.push(entry('2026-09', 8000, 5000, { snapshot: 4000, balanceOverride: 70000 }));
+  st.entries.push(entry('2026-10', 8000, 5000, { snapshot: 4000 }));
+  st.entries.push(entry('2026-11', 8000, 5000, { snapshot: 4000 }));
+  const p = E.projectionWith(st, {}, new Date(2026, 11, 15)); // upto 2026-11
+  let rowsChecked = 0;
+  for (const r of p.series) {
+    if (!r.buckets) continue;
+    const sum = r.buckets.taxable + r.buckets.ike + r.buckets.ikze;
+    const tol = Math.max(1e-6 * Math.abs(r.portfolio), 1e-6);
+    assertClose(sum, r.portfolio, tol, `suma kubełków = portfel (${r.ym})`);
+    assertClose(r.basisNominal, r.buckets.taxableBasisNominal + r.buckets.ikeBasisNominal, 1e-9, `basis skalarny = suma bases (${r.ym})`);
+    rowsChecked++;
+  }
+  assertTrue(rowsChecked > 100, 'sprawdzono historię i prognozę (korekty, deficyty, spille, zakup domu)');
+});
+
+test('F31h: korekta salda (D9) zachowuje miks kont i udziały zysku; z zera → wszystko taxable', () => {
+  const f = FIX.F31;
+  const st = f31State();
+  const mk = () => {
+    const tr = E.makeTaxTracker(st);
+    tr.contribute(20000, '2026-01'); // IKZE 11304, IKE 8696
+    tr.contribute(30000, '2026-02'); // IKE do 28260, reszta taxable
+    tr.grow(0.5);                    // zysk we wszystkich kubełkach
+    return tr;
+  };
+  const before = mk().row();
+  const tot = before.taxable + before.ike + before.ikze;
+  const gT0 = E.gainShareOf(before.taxable, before.taxableBasisNominal, '2026-01', '2026-06', 0);
+  const gI0 = E.gainShareOf(before.ike, before.ikeBasisNominal, '2026-01', '2026-06', 0);
+  assertTrue(gT0 > 0.3 && gI0 > 0.3, 'jest zysk do opodatkowania');
+  const tr = mk();
+  tr.setTotal(tot / 2, '2026-06');
+  const after = tr.row();
+  assertClose(after.taxable / (tot / 2), before.taxable / tot, 1e-9, 'udział taxable zachowany');
+  assertClose(after.ike / (tot / 2), before.ike / tot, 1e-9, 'udział IKE zachowany');
+  assertClose(after.ikze / (tot / 2), before.ikze / tot, 1e-9, 'udział IKZE zachowany');
+  assertClose(E.gainShareOf(after.taxable, after.taxableBasisNominal, '2026-01', '2026-06', 0), gT0, f.eps, 'gainShare taxable zachowany');
+  assertClose(E.gainShareOf(after.ike, after.ikeBasisNominal, '2026-01', '2026-06', 0), gI0, f.eps, 'gainShare IKE zachowany');
+  // Korekta z zera: wszystko do taxable, konta z ulgami puste, gainShare 0.
+  const tr0 = E.makeTaxTracker(st);
+  tr0.setTotal(50000, '2026-06');
+  const r0 = tr0.row();
+  assertEq(r0.ike, 0, 'IKE puste');
+  assertEq(r0.ikze, 0, 'IKZE puste');
+  assertClose(r0.taxable, 50000, 1e-9, 'całość na koncie zwykłym');
+  assertClose(E.gainShareOf(r0.taxable, r0.taxableBasisNominal, '2026-01', '2026-06', 0), 0, f.eps, 'gainShare 0');
+});
+
+test('F31i: salda startowe IKE/IKZE (D8) — basis = wartość, bez zaliczenia do limitów', () => {
+  const st = f31State({
+    assumptions: { portfolioStart: 30000 },
+    taxes: { ikeIkze: { ikeStart: 10000, ikzeStart: 5000 } },
+  });
+  const tr = E.makeTaxTracker(st);
+  const snap = tr.snapshot();
+  assertClose(snap.taxable, 15000, 1e-9, 'taxable = reszta portfela startowego');
+  assertClose(snap.ike, 10000, 1e-9, 'IKE = ikeStart');
+  assertClose(snap.ikze, 5000, 1e-9, 'IKZE = ikzeStart');
+  assertClose(snap.taxableBasisNominal, 15000, 1e-9, 'basis = wartość na kotwicy');
+  assertClose(snap.ikeBasisNominal, 10000, 1e-9, 'basis IKE = wartość');
+  assertEq(snap.ytdIkze, 0, 'start nie liczy się do limitu IKZE');
+  assertEq(snap.ytdIke, 0, 'start nie liczy się do limitu IKE');
+  tr.contribute(4000, '2026-01');
+  assertClose(tr.row().ikze, 9000, 1e-9, 'pełny limit dostępny — pierwsza wpłata w całości na IKZE');
+  // Uwaga: ograniczenia ikeStart + ikzeStart ≤ portfolioStart pilnuje UI —
+  // silnik ufa stanowi (bez rzucania), dlatego tu bez testu wyjątku (D8).
+  const bal = E.replayBalances(st, '2025-12'); // przed kotwicą → zero iteracji
+  assertClose(bal.taxSnapshot.ike, 10000, 1e-9, 'szew niesie kubełki startowe');
+  // Wyłączone ikeIkze → split ignorowany, wszystko na koncie zwykłym.
+  const stOff = f31State({
+    assumptions: { portfolioStart: 30000 },
+    taxes: { ikeIkze: { enabled: false, ikeStart: 10000, ikzeStart: 5000 } },
+  });
+  const snapOff = E.makeTaxTracker(stOff).snapshot();
+  assertClose(snapOff.taxable, 30000, 1e-9, 'wyłączone ikeIkze → wszystko taxable');
+  assertEq(snapOff.ike, 0, 'IKE puste przy wyłączonym ikeIkze');
+});
+
+test('F31j: faza wypłat — kolejność taxable → IKE → IKZE i klify podatkowe 60/65; czystość projectionWith', () => {
+  const f = FIX.F31;
+  const st = f31State({ profile: { birthDate: '1971-01-01' } }); // wiek 55 na starcie wypłat
+  const buckets = {
+    taxable: 240000, ike: 300000, ikze: 300000,
+    taxableBasisNominal: 240000, ikeBasisNominal: 150000, // taxable bez zysku, IKE w połowie zysk
+  };
+  const proj = {
+    reached: true, fireYm: '2026-01',
+    series: [{ ym: '2026-01', portfolio: 840000, basisNominal: 390000, buckets }],
+  };
+  const w = E.projectWithdrawal(st, { projection: proj, withdrawalRealYearly: 60000, years: 12 });
+  assertEq(w.taxesApplied.ikeIkze, true, 'wypłaty wiedzą o IKE/IKZE');
+  const t = y => w.rows[y - 1].taxReal;
+  for (let y = 1; y <= 4; y++) assertClose(t(y), 0, f.eps, `rok ${y}: najpierw konto zwykłe (bez zysku → bez podatku)`);
+  assertClose(t(5), (60000 / (1 - 0.19 * 0.5)) * 0.19 * 0.5, f.eps, 'rok 5 (wiek 59): wczesne IKE płaci Belkę od zysków');
+  assertClose(t(6), 0, f.eps, 'rok 6 (wiek 60): klif — IKE bez podatku');
+  assertClose(t(10), (60000 / (1 - 0.12)) * 0.12, f.eps, 'rok 10 (wiek 64): IKZE przed 65 → PIT od całości');
+  assertClose(t(11), (60000 / 0.9) * 0.1, f.eps, 'rok 11 (wiek 65): klif — ryczałt 10%');
+  // Czystość: override ikeIkze w projectionWith nie dotyka stanu wejściowego.
+  const st2 = baseState();
+  const before = JSON.stringify(st2);
+  E.projectionWith(st2, { taxes: { ikeIkze: { enabled: true } } }, NOW);
+  assertEq(JSON.stringify(st2), before, 'stan wejściowy nietknięty');
+});
+
+test('F31k: spill z kredytów omija limity (D6) — ląduje na koncie zwykłym mimo wolnego limitu IKZE', () => {
+  const f = FIX.F31;
+  const st = f31State({
+    assumptions: { monthlyIncome: 12000 },
+    housing: {
+      housePlan: housePlan({
+        moveInMonth: '2026-01',
+        mortgage: { startMonth: '2026-01', principal: 100, rateNominal: 0.07, termYears: 1, paymentOverrideMonthly: null },
+        familyLoan: { enabled: true, startMonth: '2026-02', endMonth: '2027-01', principal: 12000, rateNominal: 0, paymentOverrideMonthly: 5000 },
+      }),
+    },
+  });
+  const p = E.projectionWith(st, {}, NOW31);
+  const row = ym => p.series.find(r => r.ym === ym);
+  // Rodzinny 5000/mies. od lutego: luty 12000→7000, marzec →2000, kwiecień:
+  // ostatnia rata 5000 pokrywa 2000 → spill 3000 wraca do portfela.
+  const mar = row('2026-03'), apr = row('2026-04');
+  assertClose(apr.buckets.taxable - mar.buckets.taxable, 3000, f.eps, 'spill w całości na taxable');
+  assertTrue(apr.buckets.ikze < f.limits.ikzeEmployee - 1000, 'limit IKZE miał zapas — spill go ominął');
+  assertTrue(apr.buckets.ikze > mar.buckets.ikze, 'zwykła kwietniowa wpłata dalej trafia na IKZE');
+  // Przepływy poza kwietniami identyczne z wyłączonym ikeIkze (jedyną różnicą
+  // przepływów jest zwrot PIT — routing kubełków nie zmienia sald).
+  const pOff = E.projectionWith(st, { taxes: { ikeIkze: { enabled: false } } }, NOW31);
+  const fOn = new Map(p.series.map(r => [r.ym, r.flowPortfolio]));
+  for (const r of pOff.series) {
+    if (!fOn.has(r.ym) || r.ym.endsWith('-04')) continue;
+    assertClose(fOn.get(r.ym) - r.flowPortfolio, 0, f.eps, `przepływy identyczne (${r.ym})`);
+  }
 });

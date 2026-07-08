@@ -1,7 +1,7 @@
 // storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
 // migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 export const KEY = 'fireApp';
 export const BAK = 'fireApp.bak';
 export const APP_TAG = 'fire-companion';
@@ -75,6 +75,15 @@ export function migrate(s) {
       cur.version = 5;
       // fall-through
     case 5:
+      // v5 → v6: podsekcja IKE/IKZE, domyślnie wyłączona.
+      if (!cur.taxes) cur.taxes = { belkaEnabled: false };
+      if (!cur.taxes.ikeIkze) {
+        cur.taxes.ikeIkze = { enabled: false, employmentForm: 'employee',
+          pitRate: 0.12, ikeStart: 0, ikzeStart: 0 };
+      }
+      cur.version = 6;
+      // fall-through
+    case 6:
       break;
     default:
       throw new Error(`Nieznana wersja schematu: ${cur.version}`);

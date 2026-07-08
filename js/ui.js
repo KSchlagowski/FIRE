@@ -9,7 +9,7 @@ import { chartSVG, stackedBarSVG } from './charts.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.17.0';
+export const APP_VERSION = '1.18.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1174,15 +1174,26 @@ function renderAnaliza() {
       deathAge: anDeathAge,
     });
   } else if (anSection === 'podatki') {
-    // Jeden dodatkowy pełny przebieg prognozy (bez podatku) — tańszy niż
-    // istniejąca karta wrażliwości (13 przebiegów).
+    // Najwyżej dwa dodatkowe pełne przebiegi prognozy (bez Belki / bez
+    // IKE-IKZE) — tańsze niż istniejąca karta wrażliwości (13 przebiegów).
     const ts = E.taxStats(state, d.balances, nowYm);
-    const noBelka = E.projectionWith(state, { taxes: { belkaEnabled: false } });
-    body = An.belkaCard({
+    const withYm = proj.reached ? proj.fireYm : null;
+    const noBelka = ts.active.belka
+      ? E.projectionWith(state, { taxes: { belkaEnabled: false } }) : null;
+    const noIke = ts.active.ikeIkze
+      ? E.projectionWith(state, { taxes: { ikeIkze: { enabled: false } } }) : null;
+    body = (ts.active.belka ? An.belkaCard({
       ts,
-      fireWith: proj.reached ? proj.fireYm : null,
+      fireWith: withYm,
       fireWithout: noBelka.reached ? noBelka.fireYm : null,
-    });
+    }) : '')
+      + (ts.active.ikeIkze ? An.ikeIkzeCard({
+        ts,
+        fireWith: withYm,
+        fireWithout: noIke.reached ? noIke.fireYm : null,
+        pitRate: state.taxes.ikeIkze.pitRate,
+        employmentForm: state.taxes.ikeIkze.employmentForm,
+      }) : '');
   } else {
     // ── Kredyty ──
     // Wykres topnienia salda (sama rata vs z nadpłatami) — wspólny dla kredytu
@@ -1588,7 +1599,7 @@ function renderPlanHub() {
     ['🎯', 'Profil i FIRE', 'wiek, stopa wypłat, założenia', '#/plan/fire'],
     ['💰', 'Finanse i start planu', 'dochód, wydatki, salda startowe', '#/plan/finanse'],
     ['🏠', 'Mieszkanie i kredyt', 'czynsz, dom, kredyt, dług rodzinny', '#/plan/dom'],
-    ['🧾', 'Podatki', 'podatek Belki (19%)', '#/plan/podatki'],
+    ['🧾', 'Podatki', 'podatek Belki, IKE i IKZE', '#/plan/podatki'],
     ['⚙️', 'Aplikacja', 'motyw', '#/plan/aplikacja'],
     ['🩹', 'Korekty sald', 'wyrównanie gotówki, portfela i długu', '#/plan/korekty'],
     ['💾', 'Kopia zapasowa', 'eksport, import, aktualizacja', '#/backup'],
@@ -1881,6 +1892,7 @@ function renderPlanDom() {
 // ── Podatki ──
 function renderPlanPodatki() {
   const t = state.taxes || { belkaEnabled: false };
+  const ik = t.ikeIkze || { enabled: false, employmentForm: 'employee', pitRate: 0.12, ikeStart: 0, ikzeStart: 0 };
   view().innerHTML = `${planBack}
   <div id="plan-error"></div>
   <div class="card"><h2>Podatki 🧾</h2>
@@ -1888,13 +1900,57 @@ function renderPlanPodatki() {
       <input type="checkbox" id="pl-belka" ${t.belkaEnabled ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
       Uwzględniaj podatek Belki (19%)${tip('Podatek od zysków kapitałowych: przy sprzedaży inwestycji płacisz 19% od zysku — od tego, o ile cena sprzedaży przewyższa cenę zakupu. Liczony od kwot nominalnych, bez korekty o inflację — dlatego realnie oddajesz więcej niż 19% realnego zysku. Aplikacja śledzi koszt zakupu Twoich wpłat i sprawdza cel FIRE na portfelu «po podatku».')}</span></label>
     <div class="banner info small">Od 2027 planowana jest reforma OKI (Osobiste Konto Inwestycyjne) — część oszczędności ma być zwolniona z podatku Belki. Aplikacja liczy według przepisów obowiązujących w 2026 r.</div>
+    <label class="field"><span class="lbl">
+      <input type="checkbox" id="pl-ikeikze" ${ik.enabled ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
+      Oszczędzam przez IKE i IKZE${tip('Konta emerytalne z ulgami: IKE — bez podatku Belki przy wypłacie po 60. roku życia; IKZE — wpłaty odliczasz od podatku (zwrot PIT), a wypłatę po 65. roku życia obciąża tylko 10% ryczałtu. Aplikacja wypełnia najpierw limit IKZE, potem IKE, resztę odkłada na zwykłe konto maklerskie.')}</span></label>
+    <div id="pl-ike-fields" ${ik.enabled ? '' : 'hidden'}>
+      <label class="field"><span class="lbl">Forma zatrudnienia</span>
+        <select id="pl-emp">
+          <option value="employee" ${ik.employmentForm !== 'selfEmployed' ? 'selected' : ''}>Umowa o pracę</option>
+          <option value="selfEmployed" ${ik.employmentForm === 'selfEmployed' ? 'selected' : ''}>Działalność gospodarcza</option>
+        </select>
+        <div class="hint">Od formy zatrudnienia zależy roczny limit wpłat na IKZE: 11 304 zł (etat) albo 16 956 zł (działalność) — limity z 2026 r.</div>
+      </label>
+      <label class="field"><span class="lbl">Twoja stawka PIT</span>
+        <select id="pl-pit">
+          <option value="0.12" ${ik.pitRate !== 0.32 ? 'selected' : ''}>12%</option>
+          <option value="0.32" ${ik.pitRate === 0.32 ? 'selected' : ''}>32%</option>
+        </select>
+        <div class="hint">Tyle procent wpłaconej na IKZE kwoty wraca do Ciebie jako zwrot podatku w kolejnym roku.</div>
+      </label>
+      ${field({ id: 'pl-ike-start', label: 'Już zgromadzone na IKE', suffix: 'zł', value: moneyVal(ik.ikeStart || 0), hint: 'Część Twojego portfela startowego, która leży na IKE. Zostaw 0, jeśli zaczynasz od zera.' })}
+      ${field({ id: 'pl-ikze-start', label: 'Już zgromadzone na IKZE', suffix: 'zł', value: moneyVal(ik.ikzeStart || 0), hint: 'Część Twojego portfela startowego, która leży na IKZE. Zostaw 0, jeśli zaczynasz od zera.' })}
+    </div>
   </div>
   <button id="pl-save" class="primary wide">Zapisz</button>
+  <p class="muted small">Gdy podatek Belki jest wyłączony, IKE nie zmienia prognozy — jego zaletą jest właśnie brak Belki. IKZE działa niezależnie (zwrot PIT i 10% ryczałtu przy wypłacie).</p>
   ${planBack}`;
+
+  $('#pl-ikeikze').addEventListener('change', e => { $('#pl-ike-fields').hidden = !e.target.checked; });
 
   $('#pl-save').addEventListener('click', () => {
     $('#plan-error').innerHTML = '';
-    state.taxes = { ...state.taxes, belkaEnabled: $('#pl-belka').checked };
+    const ikeStart = parseMoney('pl-ike-start', { required: false });
+    const ikzeStart = parseMoney('pl-ikze-start', { required: false });
+    if (ikeStart.error || ikzeStart.error) {
+      return planFail('Popraw kwoty zgromadzone na IKE/IKZE.');
+    }
+    const iS = ikeStart.value != null ? ikeStart.value : 0;
+    const zS = ikzeStart.value != null ? ikzeStart.value : 0;
+    if (iS + zS > state.assumptions.portfolioStart) {
+      return planFail(`Środki na IKE i IKZE nie mogą łącznie przekraczać portfela startowego (${Fmt.formatPLN(state.assumptions.portfolioStart)}).`);
+    }
+    state.taxes = {
+      ...state.taxes,
+      belkaEnabled: $('#pl-belka').checked,
+      ikeIkze: {
+        enabled: $('#pl-ikeikze').checked,
+        employmentForm: $('#pl-emp').value,
+        pitRate: Number($('#pl-pit').value),
+        ikeStart: iS,
+        ikzeStart: zS,
+      },
+    };
     try { E.recomputeDerived(state); } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
     persist();
     toast('Zapisano ustawienia podatków.');

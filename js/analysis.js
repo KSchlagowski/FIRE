@@ -233,6 +233,9 @@ export function withdrawalCard({ w, chartHTML }) {
       `Wypłata (rok 1) = cel × SWR = ${money(target)} × ${Fmt.formatPct(w.swr)} = ${money(w.withdrawalRealYearly)}/rok; rośnie z inflacją ${Fmt.formatPct(w.inflation)}.`,
       taxed ? 'Wypłata brutto jest powiększona tak, aby po podatku zostało dokładnie tyle, ile potrzebujesz na wydatki; kolumna «Podatek» pokazuje różnicę.' : null,
       taxed ? 'Podatek = 19% × udział zysku nominalnego w portfelu — rośnie z czasem, bo coraz większa część portfela to zysk.' : null,
+      w.taxesApplied && w.taxesApplied.ikeIkze
+        ? 'Podatek maleje skokowo, gdy kończysz 60 lat (IKE bez Belki) i 65 lat (IKZE: 10% ryczałtu zamiast stawki PIT).'
+        : null,
       w.withdrawalGrowthReal > 0
         ? `Wydatki rosną o ${Fmt.formatPct(w.withdrawalGrowthReal)} realnie także po FIRE — tak wybrano w ustawieniach (Plan → Profil i FIRE).`
         : null,
@@ -321,6 +324,29 @@ export function belkaCard({ ts, fireWith, fireWithout }) {
       'Basis liczymy nominalnie, bo tak działa podatek Belki — zysk czysto inflacyjny też jest opodatkowany, więc realnie oddajesz więcej niż 19% realnego zysku.',
       'Cel brutto = cel netto ÷ (1 − 19% × udział zysku) — tyle musi mieć portfel, żeby po podatku zostało dokładnie tyle, ile potrzebujesz.',
       'Portfel startowy traktujemy jako w całości wpłaty (basis = wartość na starcie) — bez tej informacji to najprostsze bezpieczne założenie.',
+    ])}
+  </div>`;
+}
+
+// ── 4d. IKE i IKZE ──────────────────────────────────────────────────────
+
+export function ikeIkzeCard({ ts, fireWith, fireWithout, pitRate, employmentForm }) {
+  const empLabel = employmentForm === 'selfEmployed' ? 'działalność' : 'etat';
+  return `<div class="card"><h2>IKE i IKZE 🛡️</h2>
+    ${kv('Na IKE', money(ts.buckets.ike))}
+    ${kv('Na IKZE', money(ts.buckets.ikze))}
+    ${kv('Konto zwykłe (opodatkowane)', money(ts.buckets.taxable))}
+    ${kv('Roczny limit IKE (2026)', money(ts.limits.ike))}
+    ${kv('Roczny limit IKZE (2026)', `${money(ts.limits.ikze)} <span class="muted small">(${empLabel})</span>`)}
+    ${kv('Wpłacone na IKZE w tym roku', money(ts.ytdIkze))}
+    ${kv('Wpłacone na IKE w tym roku', money(ts.ytdIke))}
+    ${kv('Zwrot PIT w przyszłym roku (prognoza)', money(ts.nextRefund))}
+    ${kv('Data FIRE z IKE/IKZE', fireCell(fireWith, fireWithout))}
+    ${metodologia([
+      'Każda miesięczna nadwyżka wypełnia najpierw roczny limit IKZE, potem IKE, reszta idzie na zwykłe konto. Limity z 2026 r. traktujemy jako stałe w dzisiejszych złotówkach — ustawowo rosną z prognozowanym przeciętnym wynagrodzeniem, czyli mniej więcej z inflacją.',
+      `Zwrot PIT za wpłaty na IKZE (${Fmt.formatPct(pitRate)} wpłaconej kwoty) trafia do planu w kwietniu następnego roku jako dodatkowa oszczędność.`,
+      'Warunek FIRE porównuje z celem portfel «po podatku»: IKE bez podatku po 60. roku życia (wcześniej jak zwykłe konto), IKZE minus 10% ryczałtu po 65. (wcześniej minus Twoja stawka PIT od całości), zwykłe konto minus 19% od zysków.',
+      'W fazie wypłat pieniądze wypływają najpierw ze zwykłego konta, potem z IKE, na końcu z IKZE — konta z ulgami pracują najdłużej.',
     ])}
   </div>`;
 }

@@ -321,19 +321,35 @@ export function replayFamilyLoan(state, uptoYm) {
   }, state, uptoYm);
 }
 
-// ── Podatki: Belka (19% od zysków nominalnych) ──────────────────────────
+// ── Podatki: Belka + IKE/IKZE ────────────────────────────────────────────
 // Basis (koszt nabycia) śledzony NOMINALNIE w epoce kotwicy — podatek Belki
 // liczy się od zysków nominalnych, więc zysk czysto inflacyjny też jest
 // opodatkowany (realnie oddajesz więcej niż 19% realnego zysku). Konwersje
-// wyłącznie przez toNominal/toReal (inwariant repo).
+// wyłącznie przez toNominal/toReal (inwariant repo). IKE/IKZE: trzy kubełki
+// portfela (wpłaty IKZE → IKE → taxable wg limitów rocznych, D6), zwrot PIT
+// w kwietniu następnego roku (D7), podatek przy wypłacie zależny od wieku
+// (D4/D10). Limity stałe realnie na poziomie 2026 (D5).
 
 export const BELKA_RATE = 0.19;
+export const IKZE_EXIT_RATE = 0.10;           // ryczałt przy wypłacie po 65
+export const IKE_ACCESS_AGE = 60;             // pełne lata (D4)
+export const IKZE_ACCESS_AGE = 65;
+export const IKE_LIMIT_YEARLY = 28260;        // 2026, realnie (D5)
+export const IKZE_LIMIT_EMPLOYEE = 11304;     // 2026, realnie
+export const IKZE_LIMIT_SELFEMPLOYED = 16956; // 2026, realnie
+export const IKZE_REFUND_MONTH = 4;           // kwiecień (D7)
 
 // Aktywność podatków — jedno miejsce prawdy dla pętli i UI.
-// (Batch IKE/IKZE dołoży tu klucz ikeIkze.)
 export function taxesActive(state) {
   const t = state.taxes || {};
-  return { belka: !!t.belkaEnabled, any: !!t.belkaEnabled };
+  const ik = t.ikeIkze || {};
+  return { belka: !!t.belkaEnabled, ikeIkze: !!ik.enabled, any: !!t.belkaEnabled || !!ik.enabled };
+}
+
+// Roczny limit wpłat na IKZE zależy od formy zatrudnienia (D5).
+export function ikzeLimitFor(taxes) {
+  return (((taxes || {}).ikeIkze || {}).employmentForm === 'selfEmployed')
+    ? IKZE_LIMIT_SELFEMPLOYED : IKZE_LIMIT_EMPLOYEE;
 }
 
 // Udział zysku NOMINALNEGO: 1 − basisNominal / wartośćNominalna, clamp [0,1].
@@ -349,53 +365,139 @@ export function belkaGrossTarget(targetNetReal, gainShare, rate = BELKA_RATE) {
   return targetNetReal / (1 - rate * Math.min(1, Math.max(0, gainShare)));
 }
 
-// Tracker podatkowy portfela: wartość (realnie) + koszt nabycia (nominalnie,
-// epoka kotwicy). Tworzony WEWNĄTRZ każdego przebiegu replay/projekcji (zero
-// stanu modułu — funkcje pozostają czyste). Tracker tylko OBSERWUJE przepływy:
-// salda liczone obok są bit-w-bit identyczne z podatkami i bez nich.
+// Tracker podatkowy portfela: trzy kubełki (taxable / IKE / IKZE, realnie) +
+// koszt nabycia (nominalnie, epoka kotwicy; IKZE bez basisu — ryczałt liczy
+// się od CAŁEJ kwoty). Tworzony WEWNĄTRZ każdego przebiegu replay/projekcji
+// (zero stanu modułu — funkcje pozostają czyste). Tracker tylko OBSERWUJE
+// przepływy: salda liczone obok są bit-w-bit identyczne z podatkami i bez
+// nich. Z wyłączonym ikeIkze wszystko trafia do taxable — zachowanie
+// identyczne z trackerem jednokubełkowym z wydania Belki (F30 zielone).
 // snapshot wznawia tracker na szwie historia→prognoza.
-// (Batch IKE/IKZE rozszerzy go o kubełki/limity/zwrot PIT — nie przepisywać.)
 export function makeTaxTracker(state, snapshot = null) {
   const anchor = state.anchorMonth;
   const infl = state.assumptions.inflationAnnual;
+  const t = state.taxes || {};
+  const ik = t.ikeIkze || {};
+  const ikeIkzeOn = !!ik.enabled;
+  const belkaOn = !!t.belkaEnabled;
+  const pitRate = ik.pitRate != null ? ik.pitRate : 0.12;
+  const ikzeLimit = ikzeLimitFor(t);
+  const birth = (state.profile && state.profile.birthDate) || '';
   // D8: portfel startowy w całości jako wpłaty (basis = wartość; kotwica ⇒
-  // indeks cen 1, więc nominał = real). Założenie lekko zaniżające podatek.
-  let value = snapshot ? snapshot.value : (state.assumptions.portfolioStart || 0);
-  let basisNominal = snapshot ? snapshot.basisNominal : Math.max(0, value);
+  // indeks cen 1, więc nominał = real). ikeStart/ikzeStart dzielą portfel
+  // startowy między kubełki; NIE liczą się do limitów bieżącego roku.
+  let taxable, ike, ikze, taxableBasisNominal, ikeBasisNominal;
+  let ytdIkze = 0, ytdIke = 0, prevYearIkze = 0, year = Number(anchor.slice(0, 4));
+  if (snapshot) {
+    const legacy = snapshot.taxable == null; // stary kształt { value, basisNominal }
+    taxable = legacy ? snapshot.value : snapshot.taxable;
+    ike = legacy ? 0 : snapshot.ike;
+    ikze = legacy ? 0 : snapshot.ikze;
+    taxableBasisNominal = legacy ? snapshot.basisNominal : snapshot.taxableBasisNominal;
+    ikeBasisNominal = legacy ? 0 : snapshot.ikeBasisNominal;
+    ytdIkze = snapshot.ytdIkze || 0;
+    ytdIke = snapshot.ytdIke || 0;
+    prevYearIkze = snapshot.prevYearIkze || 0;
+    if (snapshot.year != null) year = snapshot.year;
+  } else {
+    ike = ikeIkzeOn ? (ik.ikeStart || 0) : 0;
+    ikze = ikeIkzeOn ? (ik.ikzeStart || 0) : 0;
+    taxable = (state.assumptions.portfolioStart || 0) - ike - ikze;
+    taxableBasisNominal = Math.max(0, taxable);
+    ikeBasisNominal = Math.max(0, ike);
+  }
   return {
-    // Wpłata (realnie): basis rośnie o ówczesną wartość nominalną.
-    contribute(cReal, ym) {
-      value += cReal;
-      basisNominal += toNominal(cReal, anchor, ym, infl);
-    },
-    // Wypłata/deficyt: basis maleje PROPORCJONALNIE — czynnik (value−w)/value
-    // liczony na realach jest niezależny od epoki. Nadmierny drenaż zostawia
-    // wartość ujemną, basis z podłogą 0 (dług nie generuje podatku).
-    withdraw(wReal) {
-      if (value > EPS) basisNominal *= Math.max(0, value - wReal) / value;
-      value -= wReal;
-    },
-    // Wzrost miesięczny: wartość × (1+r); basis bez zmian (wzrost to zysk).
-    grow(rMonthly) { value *= 1 + rMonthly; },
-    // Korekta salda (D9): skaluj wartość i basis przez new/old — zachowuje
-    // udział zysku. Stare saldo ≤ EPS → wszystko jako wpłata (gainShare 0).
-    setTotal(newTotalReal, ym) {
-      if (value > EPS) {
-        basisNominal *= newTotalReal / value;
-      } else {
-        basisNominal = Math.max(0, toNominal(newTotalReal, anchor, ym, infl));
+    // Początek miesiąca: przełom roku zeruje liczniki wpłat (skok > 1 rok →
+    // przepada też zwrot). Zwraca kwotę zwrotu PIT (realnie) należną w tym
+    // miesiącu — wołający decyduje, czy ją wstrzyknąć (prognoza: tak;
+    // historia: ignoruje — wpisy są prawdą, D7).
+    beginMonth(ym) {
+      const y = Number(ym.slice(0, 4));
+      if (y > year) {
+        prevYearIkze = (y === year + 1) ? ytdIkze : 0;
+        ytdIkze = 0; ytdIke = 0; year = y;
       }
-      value = newTotalReal;
+      return (ikeIkzeOn && Number(ym.slice(5, 7)) === IKZE_REFUND_MONTH) ? pitRate * prevYearIkze : 0;
     },
-    // Wartość netto "jakby zlikwidować dziś": value × (1 − 19% × udział zysku).
-    // Wartość ≤ EPS → surowa wartość (rezydualny minus nie niesie podatku).
+    // Zwykła wpłata (c ≥ 0, realnie): IKZE → IKE → taxable wg limitów (D6);
+    // basis rośnie o ówczesną wartość nominalną wpłaty.
+    contribute(cReal, ym) {
+      let rest = cReal;
+      if (ikeIkzeOn) {
+        const toIkze = Math.min(rest, Math.max(0, ikzeLimit - ytdIkze));
+        ikze += toIkze; ytdIkze += toIkze; rest -= toIkze;
+        const toIke = Math.min(rest, Math.max(0, IKE_LIMIT_YEARLY - ytdIke));
+        ike += toIke; ikeBasisNominal += toNominal(toIke, anchor, ym, infl);
+        ytdIke += toIke; rest -= toIke;
+      }
+      taxable += rest;
+      taxableBasisNominal += toNominal(rest, anchor, ym, infl);
+    },
+    // Wpływ omijający limity (spill z kredytów, D6) — prosto do taxable.
+    contributeTaxable(cReal, ym) {
+      taxable += cReal;
+      taxableBasisNominal += toNominal(cReal, anchor, ym, infl);
+    },
+    // Wypłata/deficyt: taxable → IKE → IKZE (D6); basis maleje PROPORCJONALNIE
+    // — czynnik (bal−x)/bal liczony na realach jest niezależny od epoki.
+    // Nadmierny drenaż ponad sumę kubełków ujemni taxable, bases z podłogą 0
+    // (dług nie generuje podatku).
+    withdraw(wReal) {
+      const fromT = Math.min(Math.max(taxable, 0), wReal);
+      if (taxable > EPS) taxableBasisNominal *= Math.max(0, taxable - fromT) / taxable;
+      taxable -= fromT;
+      let rest = wReal - fromT;
+      const fromI = Math.min(Math.max(ike, 0), rest);
+      if (ike > EPS) ikeBasisNominal *= Math.max(0, ike - fromI) / ike;
+      ike -= fromI; rest -= fromI;
+      const fromZ = Math.min(Math.max(ikze, 0), rest);
+      ikze -= fromZ; rest -= fromZ;
+      if (rest > 0) taxable -= rest;
+    },
+    // Wzrost miesięczny: kubełki × (1+r); bases bez zmian (wzrost to zysk).
+    grow(rMonthly) { taxable *= 1 + rMonthly; ike *= 1 + rMonthly; ikze *= 1 + rMonthly; },
+    // Korekta salda (D9): skaluj kubełki i bases przez new/old — zachowuje
+    // udziały zysku i miks kont. Stara suma ≤ EPS → wszystko do taxable.
+    setTotal(newTotalReal, ym) {
+      const tot = taxable + ike + ikze;
+      if (tot > EPS) {
+        const f = newTotalReal / tot;
+        ike *= f; ikze *= f;
+        taxable = newTotalReal - ike - ikze; // suma kubełków dokładnie = korekta
+        taxableBasisNominal *= f; ikeBasisNominal *= f;
+      } else {
+        taxable = newTotalReal; ike = 0; ikze = 0;
+        taxableBasisNominal = Math.max(0, toNominal(newTotalReal, anchor, ym, infl));
+        ikeBasisNominal = 0;
+      }
+    },
+    // Wartość netto „jakby zlikwidować dziś" (warunek FIRE, D3/D4): taxable i
+    // wczesne IKE płacą Belkę od zysków (gdy włączona), IKE po 60 bez podatku,
+    // IKZE 10% ryczałtu po 65, wcześniej stawka PIT od CAŁOŚCI (niezależnie
+    // od Belki — to PIT, D11). Brak daty urodzenia → stawki „wczesne".
+    // Kubełek ≤ EPS wyceniany surowo (rezydualny minus nie niesie podatku).
     netValueReal(ym) {
-      if (!(value > EPS)) return value;
-      return value * (1 - BELKA_RATE * gainShareOf(value, basisNominal, anchor, ym, infl));
+      const age = birth ? ageAt(birth, ym).years : -1;
+      const gT = gainShareOf(taxable, taxableBasisNominal, anchor, ym, infl);
+      const taxableNet = belkaOn ? taxable * (1 - BELKA_RATE * gT) : taxable;
+      const gI = gainShareOf(ike, ikeBasisNominal, anchor, ym, infl);
+      const ikeNet = age >= IKE_ACCESS_AGE ? ike : (belkaOn ? ike * (1 - BELKA_RATE * gI) : ike);
+      const ikzeNet = ikze > EPS
+        ? (age >= IKZE_ACCESS_AGE ? ikze * (1 - IKZE_EXIT_RATE) : ikze * (1 - pitRate))
+        : ikze;
+      return taxableNet + ikeNet + ikzeNet;
     },
-    gainShare(ym) { return gainShareOf(value, basisNominal, anchor, ym, infl); },
-    row() { return { basisNominal }; },
-    snapshot() { return { value, basisNominal }; },
+    // Udział zysku KONTA ZWYKŁEGO — karta Belki (pojedyncza liczba celu brutto).
+    gainShare(ym) { return gainShareOf(taxable, taxableBasisNominal, anchor, ym, infl); },
+    row() { return { taxable, ike, ikze, taxableBasisNominal, ikeBasisNominal }; },
+    snapshot() {
+      return {
+        taxable, ike, ikze, taxableBasisNominal, ikeBasisNominal,
+        ytdIkze, ytdIke, prevYearIkze, year,
+        value: taxable + ike + ikze,                          // sumy dla zgodności
+        basisNominal: taxableBasisNominal + ikeBasisNominal,  // (F30, karta Belki)
+      };
+    },
   };
 }
 
@@ -430,6 +532,9 @@ export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) 
 
   for (let idx = a0; idx <= upto; idx++) {
     const ym = idxToYm(idx);
+    // Przełom roku zeruje liczniki limitów; zwrot PIT IGNOROWANY w historii —
+    // wpisy są prawdą i zawierają zwrot, który faktycznie przyszedł (D7).
+    if (tracker) tracker.beginMonth(ym);
     const e = entriesByMonth.get(idx);
     const net = e ? roundGrosze(e.earned - e.spent) : 0;
     const contribution = e ? roundGrosze(net - (e.overpayment || 0) - (e.familyOverpayment || 0)) : 0;
@@ -459,8 +564,8 @@ export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) 
       if (tracker) tracker.withdraw(deficit); // tylko część portfelowa (po gotówce)
     }
 
-    if (d && d.spill > 0) { portfolio += d.spill; flowPortfolio += d.spill; if (tracker) tracker.contribute(d.spill, ym); } // nadpłata ponad spłatę wraca do inwestycji
-    if (fd && fd.spill > 0) { portfolio += fd.spill; flowPortfolio += fd.spill; if (tracker) tracker.contribute(fd.spill, ym); } // nadpłata długu rodzinnego ponad saldo → portfel
+    if (d && d.spill > 0) { portfolio += d.spill; flowPortfolio += d.spill; if (tracker) tracker.contributeTaxable(d.spill, ym); } // nadpłata ponad spłatę wraca do inwestycji (poza limitami, D6)
+    if (fd && fd.spill > 0) { portfolio += fd.spill; flowPortfolio += fd.spill; if (tracker) tracker.contributeTaxable(fd.spill, ym); } // nadpłata długu rodzinnego ponad saldo → portfel (poza limitami, D6)
 
     if (idx === hsMonth) {
       const amount = hsAmount == null ? cash : hsAmount; // null = "cała gotówka"
@@ -489,9 +594,14 @@ export function replayBalances(state, uptoYm, debtRes = null, familyRes = null) 
       if (tracker) tracker.setTotal(e.balanceOverride, ym); // cashOverride nie dotyka trackera
     }
 
+    const trRow = tracker ? tracker.row() : null;
     rows.push({
       ym, cash, portfolio, net, contribution, phase, hasEntry: !!e, flowCash, flowPortfolio, override,
-      ...(tracker ? { basisNominal: tracker.row().basisNominal, netPortfolio: tracker.netValueReal(ym) } : {}),
+      ...(trRow ? {
+        buckets: trRow,
+        basisNominal: trRow.taxableBasisNominal + trRow.ikeBasisNominal,
+        netPortfolio: tracker.netValueReal(ym),
+      } : {}),
     });
   }
   return { cash, portfolio, rows, houseUnderfunded, houseSpent, taxSnapshot: tracker ? tracker.snapshot() : null };
@@ -683,13 +793,16 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
   const active = taxesActive(state);
   const tracker = active.any
     ? makeTaxTracker(state, balances.taxSnapshot
-      || { value: balances.portfolio, basisNominal: Math.max(0, toNominal(balances.portfolio, anchor, uptoYm, a.inflationAnnual)) })
+      || { taxable: balances.portfolio, ike: 0, ikze: 0,
+        taxableBasisNominal: Math.max(0, toNominal(balances.portfolio, anchor, uptoYm, a.inflationAnnual)),
+        ikeBasisNominal: 0, ytdIkze: 0, ytdIke: 0, prevYearIkze: 0,
+        year: Number(uptoYm.slice(0, 4)) })
     : null;
 
   const series = balances.rows.map(r => ({
     ym: r.ym, cash: r.cash, portfolio: r.portfolio,
     flowCash: r.flowCash, flowPortfolio: r.flowPortfolio, override: r.override,
-    ...(r.basisNominal != null ? { basisNominal: r.basisNominal, netPortfolio: r.netPortfolio } : {}),
+    ...(r.basisNominal != null ? { basisNominal: r.basisNominal, netPortfolio: r.netPortfolio, buckets: r.buckets } : {}),
     debtReal: (debtRes.byMonth.get(ymToIdx(r.ym)) || { bal: 0 }).bal
       / Math.pow(1 + a.inflationAnnual, monthsBetween(anchor, r.ym) / 12),
     familyReal: (familyRes.byMonth.get(ymToIdx(r.ym)) || { bal: 0 }).bal
@@ -713,7 +826,11 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
       debtStarted = true;
     }
     const debtActive = houseOn && debtStarted && debtBal > 0;
-    const s = pm.plannedSavings + delta;
+    // Zwrot PIT za zeszłoroczne wpłaty na IKZE wpada do kwietniowych
+    // oszczędności — tylko w miesiącach PROGNOZY (D7); z wyłączonym ikeIkze
+    // beginMonth zwraca 0 i s pozostaje bez zmian.
+    const refund = tracker ? tracker.beginMonth(ym) : 0;
+    const s = pm.plannedSavings + delta + refund;
     let flowCash = 0, flowPortfolio = 0;
 
     // Dług rodzinny topi się równolegle wg harmonogramu (bez auto-nadpłat).
@@ -727,7 +844,7 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
         const spillReal = toReal(stepF.spill, anchor, ym, a.inflationAnnual);
         portfolio += spillReal;
         flowPortfolio += spillReal;
-        if (tracker) tracker.contribute(spillReal, ym);
+        if (tracker) tracker.contributeTaxable(spillReal, ym); // poza limitami (D6)
       }
       if (famBal <= EPS && !familyFreeYm) { famBal = 0; familyFreeYm = ym; }
     }
@@ -741,7 +858,7 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
         const spillReal = toReal(step.spill, anchor, ym, a.inflationAnnual);
         portfolio += spillReal;
         flowPortfolio += spillReal;
-        if (tracker) tracker.contribute(spillReal, ym);
+        if (tracker) tracker.contributeTaxable(spillReal, ym); // poza limitami (D6)
       }
       if (s < 0) {
         let deficit = -s;
@@ -798,13 +915,18 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
     portfolio *= 1 + rPort;
     if (tracker) tracker.grow(rPort);
 
+    const trRow = tracker ? tracker.row() : null;
     series.push({
       ym, cash, portfolio, flowCash, flowPortfolio, override: false,
       debtReal: toReal(debtBal, anchor, ym, a.inflationAnnual),
       familyReal: toReal(famBal, anchor, ym, a.inflationAnnual),
       target: pm.targetReal,
       projected: true,
-      ...(tracker ? { basisNominal: tracker.row().basisNominal, netPortfolio: tracker.netValueReal(ym) } : {}),
+      ...(trRow ? {
+        buckets: trRow,
+        basisNominal: trRow.taxableBasisNominal + trRow.ikeBasisNominal,
+        netPortfolio: tracker.netValueReal(ym),
+      } : {}),
     });
 
     const houseSettled = !houseOn || (debtStarted && debtBal <= EPS && idx >= hsMonth);
@@ -869,14 +991,17 @@ export function projectWithdrawal(state, opts = {}) {
   const birth = state.profile.birthDate;
   const startAge = birth ? ageAt(birth, startYm).years : null;
 
-  // Podatek Belki: basis nominalny (epoka kotwicy) zasiewany z wiersza serii
-  // prognozy w startYm (albo najbliższego wcześniejszego), przeskalowany przez
-  // startPortfolioReal/portfel wiersza — zachowuje udział zysku. Bez serii /
-  // bez basisu na wierszach → cały portfel jako wpłaty (gainShare 0,
-  // konserwatywnie zaniża podatek — udokumentowane w metodologii).
+  // Podatki: kubełki (realnie) + bases (nominalnie, epoka kotwicy) zasiewane
+  // z wiersza serii prognozy w startYm (albo najbliższego wcześniejszego),
+  // przeskalowane przez startPortfolioReal/portfel wiersza — zachowuje udziały
+  // zysku i miks kont. Bez serii / bez kubełków na wierszach → cały portfel
+  // jako wpłaty na taxable (gainShare 0, konserwatywnie zaniża podatek —
+  // udokumentowane w metodologii).
   const active = taxesActive(state);
   const anchor = state.anchorMonth;
-  let basisNominal = null;
+  const ikCfg = (state.taxes || {}).ikeIkze || {};
+  const pitRate = ikCfg.pitRate != null ? ikCfg.pitRate : 0.12;
+  let bT = 0, bIke = 0, bIkze = 0, basisT = 0, basisIke = 0;
   if (active.any) {
     let seedRow = null;
     if (proj && proj.series) {
@@ -886,9 +1011,20 @@ export function projectWithdrawal(state, opts = {}) {
         if (r.basisNominal != null) seedRow = r;
       }
     }
-    basisNominal = seedRow && seedRow.portfolio > EPS
-      ? seedRow.basisNominal * (startPortfolioReal / seedRow.portfolio)
-      : Math.max(0, toNominal(startPortfolioReal, anchor, startYm, inflation));
+    if (seedRow && seedRow.buckets && seedRow.portfolio > EPS) {
+      const f = startPortfolioReal / seedRow.portfolio;
+      bT = seedRow.buckets.taxable * f;
+      bIke = seedRow.buckets.ike * f;
+      bIkze = seedRow.buckets.ikze * f;
+      basisT = seedRow.buckets.taxableBasisNominal * f;
+      basisIke = seedRow.buckets.ikeBasisNominal * f;
+    } else if (seedRow && seedRow.portfolio > EPS) {
+      bT = startPortfolioReal; // stary wiersz bez kubełków — wszystko taxable
+      basisT = seedRow.basisNominal * (startPortfolioReal / seedRow.portfolio);
+    } else {
+      bT = startPortfolioReal;
+      basisT = Math.max(0, toNominal(startPortfolioReal, anchor, startYm, inflation));
+    }
   }
 
   const rows = [];
@@ -901,17 +1037,39 @@ export function projectWithdrawal(state, opts = {}) {
     const withdrawalReal = withdrawalRealYearly * Math.pow(wG, n - 1);
     let endReal, taxReal = 0, grossReal = withdrawalReal;
     if (active.any) {
-      // Wypłata brutto powiększona tak, by NETTO pokryło wydatki: efektywna
-      // stawka = 19% × udział zysku (ułamki niezmiennicze względem epoki).
-      const g = gainShareOf(startReal, basisNominal, anchor, ym, inflation);
-      const rT = BELKA_RATE * g;
-      const gross = Math.min(Math.max(startReal, 0), withdrawalReal / (1 - rT));
-      if (startReal > EPS) basisNominal *= (startReal - gross) / startReal;
-      taxReal = gross * rT;
-      grossReal = gross;
-      endReal = (startReal - gross) * (1 + realRate);
+      // Wypłata brutto per kubełek, kolejność taxable → IKE → IKZE (D10) —
+      // konta z ulgami pracują najdłużej. Każda noga powiększona tak, by
+      // NETTO pokryło wydatki: taxable 19% × udział zysku (gdy Belka), IKE
+      // 0% po 60 (wcześniej jak taxable), IKZE po 65 ryczałt 10%, wcześniej
+      // stawka PIT — od CAŁEJ kwoty, bez basisu (ułamki udziału zysku
+      // niezmiennicze względem epoki).
+      const age = birth ? ageAt(birth, ym).years : -1;
+      let need = withdrawalReal;
+      let grossSum = 0;
+      { // 1) konto zwykłe
+        const g = gainShareOf(bT, basisT, anchor, ym, inflation);
+        const r = active.belka ? BELKA_RATE * g : 0;
+        const gross = Math.min(Math.max(bT, 0), need / (1 - r));
+        if (bT > EPS) basisT *= (bT - gross) / bT;
+        bT -= gross; need -= gross * (1 - r); taxReal += gross * r; grossSum += gross;
+      }
+      { // 2) IKE
+        const g = gainShareOf(bIke, basisIke, anchor, ym, inflation);
+        const r = age >= IKE_ACCESS_AGE ? 0 : (active.belka ? BELKA_RATE * g : 0);
+        const gross = Math.min(Math.max(bIke, 0), need / (1 - r));
+        if (bIke > EPS) basisIke *= (bIke - gross) / bIke;
+        bIke -= gross; need -= gross * (1 - r); taxReal += gross * r; grossSum += gross;
+      }
+      { // 3) IKZE
+        const r = age >= IKZE_ACCESS_AGE ? IKZE_EXIT_RATE : pitRate;
+        const gross = Math.min(Math.max(bIkze, 0), need / (1 - r));
+        bIkze -= gross; need -= gross * (1 - r); taxReal += gross * r; grossSum += gross;
+      }
+      grossReal = grossSum;
+      bT *= 1 + realRate; bIke *= 1 + realRate; bIkze *= 1 + realRate;
+      endReal = bT + bIke + bIkze;
       // Wyczerpanie: netto dostarczone poniżej potrzeby albo saldo na zerze.
-      if (gross * (1 - rT) < withdrawalReal - EPS || endReal <= EPS) {
+      if (need > EPS || endReal <= EPS) {
         if (endReal <= EPS) endReal = 0;
         depletedYear = n;
       }
@@ -950,17 +1108,23 @@ export function projectWithdrawal(state, opts = {}) {
 export function taxStats(state, balances, nowYm = todayYm()) {
   const active = taxesActive(state);
   if (!active.any || !balances.taxSnapshot) return null;
-  const tracker = makeTaxTracker(state, balances.taxSnapshot); // O(1)
-  const gainShare = tracker.gainShare(nowYm);
+  const snap = balances.taxSnapshot;
+  const tracker = makeTaxTracker(state, snap); // O(1)
+  const gainShare = tracker.gainShare(nowYm);  // udział zysku konta zwykłego
   const targetNet = fireTargetAt(state, nowYm);
+  const ikCfg = (state.taxes || {}).ikeIkze || {};
   return {
     active,
     gainShare,
     netValueReal: tracker.netValueReal(nowYm),
     targetNet,
-    targetGross: belkaGrossTarget(targetNet, gainShare),
-    basisNominal: balances.taxSnapshot.basisNominal,
+    targetGross: active.belka ? belkaGrossTarget(targetNet, gainShare) : targetNet,
+    basisNominal: snap.basisNominal,
     portfolio: balances.portfolio,
+    buckets: { taxable: snap.taxable, ike: snap.ike, ikze: snap.ikze },
+    ytdIkze: snap.ytdIkze, ytdIke: snap.ytdIke,
+    nextRefund: active.ikeIkze ? (ikCfg.pitRate != null ? ikCfg.pitRate : 0.12) * snap.ytdIkze : 0,
+    limits: { ike: IKE_LIMIT_YEARLY, ikze: ikzeLimitFor(state.taxes) },
   };
 }
 
@@ -1168,7 +1332,12 @@ export function excelProjection(state, opts = {}) {
 // są czystymi czytelnikami — stan wejściowy pozostaje nietknięty, test F15a).
 export function projectionWith(state, { assumptions = {}, taxes = null, extraMonthlySavings = 0, extraSavings = null } = {}, now = new Date()) {
   const st = { ...state, assumptions: { ...state.assumptions, ...assumptions } };
-  if (taxes) st.taxes = { ...state.taxes, ...taxes }; // płytka kopia — stan wejściowy nietknięty
+  if (taxes) {
+    // Płytkie kopie + zagnieżdżony merge podsekcji ikeIkze — stan wejściowy
+    // nietknięty (testy F30i/F31j).
+    st.taxes = { ...state.taxes, ...taxes,
+      ikeIkze: { ...(state.taxes || {}).ikeIkze, ...(taxes.ikeIkze || {}) } };
+  }
   const upto = lastCompleteMonth(now);
   let plan = buildPlan(st);
   if (extraMonthlySavings) {
@@ -1591,7 +1760,7 @@ export function defaultAssumptions() {
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 5,
+    version: 6,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },
@@ -1609,7 +1778,10 @@ export function createState(partial = {}, now = new Date()) {
       },
     },
     debt: { overrides: [], familyOverrides: [] },
-    taxes: { belkaEnabled: false },
+    taxes: {
+      belkaEnabled: false,
+      ikeIkze: { enabled: false, employmentForm: 'employee', pitRate: 0.12, ikeStart: 0, ikzeStart: 0 },
+    },
     entries: [],
     ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null },
   };

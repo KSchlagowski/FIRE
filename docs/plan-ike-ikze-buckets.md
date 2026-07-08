@@ -1,5 +1,10 @@
 # IKE/IKZE buckets — tax-sheltered accounts, limits, PIT refund (`taxes.ikeIkze`)
 
+> **As shipped (v1.18.0):** the Belka release actually landed as **v1.17.0**
+> with fixture **F30** (not v1.16.0/F29 as assumed below), so this feature
+> shipped as **v1.18.0** with fixture **F31** (tests F31a–k). Schema step
+> **5 → 6** as planned. Next free fixture key: F32.
+
 ## Context
 
 Poland's two retirement wrappers change both the *tax* and the *timing* math:

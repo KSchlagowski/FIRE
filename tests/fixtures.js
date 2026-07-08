@@ -125,4 +125,15 @@ export const FIX = {
   // niezmienniki włącz/wyłącz. Wartości oczekiwane z form zamkniętych w testach.
   // (F29 zajęte przez charts.js — plan docs/plan-belka-tax-toggle.md → F30.)
   F30: { singleContrib: 10000, months: 24, infl: 0.03, netTarget: 1800000, eps: 1e-6 },
+  // IKE/IKZE: limity 2026, kolejność wypełniania IKZE → IKE → taxable, zwrot
+  // PIT w kwietniu. (Plan docs/plan-ike-ikze-buckets.md mówił F30 — zajęte
+  // przez Belkę → F31.)
+  F31: {
+    limits: { ike: 28260, ikzeEmployee: 11304, ikzeSelfEmployed: 16956 },
+    yearlyContrib: 48000,        // 4000/mies. → IKZE 11304, IKE 28260, taxable 8436
+    taxableRemainder: 8436,
+    refundEmployee12: 1356.48,   // 0.12 × 11304
+    refundPit32: 3617.28,        // 0.32 × 11304
+    eps: 0.01,
+  },
 };
