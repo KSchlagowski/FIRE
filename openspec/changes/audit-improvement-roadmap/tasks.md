@@ -91,8 +91,10 @@
   on „Portfel vs cel"; add engine/fixtures per doc; release (v1.21.0; fixture group
   F38 — doc said F32, taken by the parsing audit; band def carries no `label` so
   the 5.1 tooltips skip it, per the doc's forward-compat note)
-- [ ] 5.3 Implement crash stress test (`docs/plan-crash-stress-test.md`): sequence-of-returns
-  in Analiza/Symulacja; engine math + fixtures; release
+- [x] 5.3 Implement crash stress test (`docs/plan-crash-stress-test.md`): sequence-of-returns
+  in Analiza/Symulacja; engine math + fixtures; release (v1.22.0; fixture group F39 —
+  doc said F31, taken by IKE/IKZE; crash also scales the Belka/IKE/IKZE buckets,
+  which post-date the doc)
 - [ ] 5.4 Implement CSV export of entries (`docs/plan-csv-export-entries.md`): include a
   properly quoted `Notatka` column (ships after notes); release
 

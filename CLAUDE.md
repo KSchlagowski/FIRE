@@ -321,7 +321,14 @@ manual QA, not Node. F38 covers the projection band (`projectionBand`/
 FIRE date, band rows aligned with the series and collapsed to the actual balance
 on history months (the shared-base-replay guard — a naive `projectionWith` rerun
 fails it), the lo ≤ base ≤ hi envelope on projected rows, spread-0/purity edges,
-and the band polygon's geometry/scale/tooltip-exclusion.
+and the band polygon's geometry/scale/tooltip-exclusion. F39 covers the crash
+stress test (`stressTestRetirement` + `projectWithdrawal`'s `crash` option,
+Symulacja „Krach" tab): the year-1 crash ≡ start-at-70% identity, untouched
+prefix before the shock year, no-crash flags all false (existing F13/F27 numbers
+pin the values), shock-0 ≡ base, the independent-recurrence depletion years
+(year-1 crash depletes strictly earlier than year-10 — sequence risk), horizon
+clamps, out-of-horizon shock filtering, no-birthDate → `null`, and the
+`hypothetical` flag; nothing is persisted.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

@@ -328,6 +328,39 @@ export function retirementResult({ ro, dz, dzBase, w, deathAge }) {
   ].join('');
 }
 
+// ── 7. Test krachu (ryzyko sekwencji zwrotów) ────────────────────────────
+
+export function crashResult({ st }) {
+  if (st == null) {
+    return '<p class="muted">Uzupełnij datę urodzenia w Plan → Profil, aby policzyć fazę emerytalną.</p>';
+  }
+  const pathCell = s => s.survives
+    ? `✅ portfel wystarcza do wieku ${st.deathAge} <span class="muted small">(zostaje ${money(s.endReal)})</span>`
+    : `⚠️ portfel kończy się w wieku ${s.depletedAge} <span class="muted small">(${s.depletedYear}. rok wypłat)</span>`;
+  const pathCls = s => s.survives ? 'good' : 'warn-text';
+  return [
+    st.hypothetical ? '<div class="banner info small">FIRE poza horyzontem prognozy — scenariusz modelowy liczony od dziś.</div>' : '',
+    kv('Bez krachu', pathCell(st.base), pathCls(st.base)),
+    ...st.scenarios.map(s => kv(`Krach w ${s.shockYear}. roku FIRE`, pathCell(s), pathCls(s))),
+    `<p class="muted small">Ten sam krach dziesięć lat później boli mniej — portfel zdążył urosnąć, a część wypłat masz już za sobą. O bezpieczeństwie planu decyduje więc nie tylko średni zwrot, ale i to, KIEDY przyjdą złe lata. Dlatego niższa stopa wypłat i bezpieczniejszy portfel po FIRE to Twoja poduszka.</p>`,
+    metodologia([
+      'Bez losowania: liczymy zwykłą fazę wypłat i w wybranym roku obniżamy portfel o podany procent, a potem liczymy dalej. Dwa terminy krachu pokazują tzw. ryzyko sekwencji zwrotów.',
+      `Portfel po FIRE rośnie o ${gl('realnie', 'realny')} zwrot po FIRE z Twoich ustawień; niczego nie zapisujemy — to podgląd.`,
+    ]),
+  ].join('');
+}
+
+export function crashCard({ pct, deathAge, resultHTML }) {
+  return `<div class="card"><h2>Test krachu 📉</h2>
+    <p class="muted small">Największy wróg świeżego emeryta to krach tuż po przejściu na FIRE — portfel traci, a Ty i tak musisz z niego żyć. Sprawdź, czy Twój plan przeżyje spadek o podany procent: raz w pierwszym roku FIRE, raz — dla porównania — w dziesiątym.</p>
+    <label class="field"><span class="lbl">Spadek portfela <span class="muted">(%)</span></span>
+      <input type="text" id="sym-crash-pct" inputmode="numeric" value="${esc(pct)}" placeholder="np. 30"></label>
+    <label class="field"><span class="lbl">Dożywam do wieku</span>
+      <input type="text" id="sym-crash-age" inputmode="numeric" value="${esc(deathAge)}" placeholder="np. 90"></label>
+    <div id="sym-crash-result">${resultHTML}</div>
+  </div>`;
+}
+
 export function retirementCard({ value, base, freeze, resultHTML }) {
   const v = value == null ? base : Number(value);
   return `<div class="card"><h2>Emerytura po FIRE 🏖️</h2>

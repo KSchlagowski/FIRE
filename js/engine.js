@@ -962,6 +962,7 @@ export function retirementOpts(state, overrides = {}) {
       : (a.postRetirementReturnReal != null ? a.postRetirementReturnReal : 0.02),
     freezeExpenses: overrides.freezeExpenses != null ? overrides.freezeExpenses
       : (a.freezeExpensesAtRetirement != null ? a.freezeExpensesAtRetirement : true),
+    crash: overrides.crash || null, // { year, pct } — what-if Symulacji, nigdy nie zapisywane
   };
 }
 
@@ -971,6 +972,7 @@ export function retirementOpts(state, overrides = {}) {
 export function projectWithdrawal(state, opts = {}) {
   const a = state.assumptions;
   const ro = opts.ro || retirementOpts(state);
+  const crash = opts.crash != null ? opts.crash : ro.crash; // szok { year, pct } albo nic
   const proj = opts.projection || null;
   const reached = !!(proj && proj.reached);
   const hypothetical = opts.startYm == null && !reached;
@@ -1035,6 +1037,14 @@ export function projectWithdrawal(state, opts = {}) {
   let bal = startPortfolioReal;
   for (let n = 1; n <= years; n++) {
     const ym = addMonths(startYm, (n - 1) * 12);
+    // Krach (test sekwencji zwrotów): szok na POCZĄTKU roku crash.year, przed
+    // wypłatą. Skaluje też kubełki podatkowe (spadek wartości, basis bez zmian
+    // — gainShareOf i tak zaciska do [0,1], wartość < basis ⇒ zysk 0).
+    const crashed = !!(crash && n === crash.year);
+    if (crashed) {
+      bal *= (1 - crash.pct);
+      bT *= (1 - crash.pct); bIke *= (1 - crash.pct); bIkze *= (1 - crash.pct);
+    }
     const startReal = bal;
     const withdrawalReal = withdrawalRealYearly * Math.pow(wG, n - 1);
     let endReal, taxReal = 0, grossReal = withdrawalReal;
@@ -1088,7 +1098,7 @@ export function projectWithdrawal(state, opts = {}) {
     const endNominal = endReal * pfN;
     const growthNominal = endNominal - (startNominal - withdrawalNominal - (active.any ? taxReal * pf1 : 0));
     rows.push({
-      year: n, ym, age: birth ? ageAt(birth, ym).years : null,
+      year: n, ym, age: birth ? ageAt(birth, ym).years : null, crashed,
       startReal, startNominal,
       withdrawalReal, withdrawalNominal,
       growthReal, growthNominal, endReal, endNominal,
@@ -1101,6 +1111,7 @@ export function projectWithdrawal(state, opts = {}) {
     startYm, startAge, hypothetical, swr, realRate, inflation, nominalRate,
     withdrawalRealYearly, withdrawalGrowthReal: wG - 1, priceFactorAtStart,
     rows, depletedYear, ro, taxesApplied: active,
+    crashApplied: rows.some(r => r.crashed),
     ...(active.any ? { taxTotalReal } : {}),
   };
 }
@@ -1259,6 +1270,45 @@ export function projectDieWithZero(state, opts = {}) {
     fireYm, classicFireYm, hypothetical, realRate: r, inflation,
     nominalRate, withdrawalYear1: W1, withdrawalGrowthReal: wG - 1, rows, ro,
   };
+}
+
+// Deterministyczny test krachu (ryzyko sekwencji zwrotów). Bez losowania:
+// dla każdego roku szoku k liczymy pełną fazę wypłat (projectWithdrawal)
+// z krachem {year: k, pct} na starcie k-tego roku wypłat; przebieg bazowy
+// (bez krachu) dla kontrastu. Horyzont = deathAge − wiek startowy; lata
+// szoku poza horyzontem są pomijane. Czysta analiza — nic nie zapisujemy.
+// Passthrough startYm/startPortfolioReal/withdrawalRealYearly istnieje dla
+// determinizmu testów (todayYm() nie jest wstrzykiwalne) — UI ich nie podaje.
+export function stressTestRetirement(state, opts = {}) {
+  const birth = state.profile.birthDate;
+  if (!birth) return null;
+  const ro = opts.ro || retirementOpts(state);
+  const shockPct = opts.shockPct != null ? opts.shockPct : 0.30;
+  const deathAge = opts.deathAge != null ? opts.deathAge : 90;
+  const proj = opts.projection || null;
+  const reached = !!(proj && proj.reached);
+  const startYm = opts.startYm != null ? opts.startYm : (reached ? proj.fireYm : todayYm());
+  const startAge = ageAt(birth, startYm).years;
+  const horizonYears = Math.max(1, deathAge - startAge);
+  const shockYears = (opts.shockYears || [1, 10]).filter(y => y >= 1 && y <= horizonYears);
+  const common = {
+    projection: proj, ro, startYm, years: horizonYears,
+    startPortfolioReal: opts.startPortfolioReal,
+    withdrawalRealYearly: opts.withdrawalRealYearly,
+  };
+  const summarize = w => ({
+    depletedYear: w.depletedYear,
+    depletedAge: w.depletedYear != null ? w.rows[w.depletedYear - 1].age : null,
+    survives: w.depletedYear == null,
+    endReal: w.rows.length ? w.rows[w.rows.length - 1].endReal : 0,
+  });
+  const base = summarize(projectWithdrawal(state, common));
+  const scenarios = shockYears.map(k => ({
+    shockYear: k,
+    ...summarize(projectWithdrawal(state, { ...common, crash: { year: k, pct: shockPct } })),
+  }));
+  return { startYm, startAge, horizonYears, shockPct, deathAge,
+           hypothetical: !reached, base, scenarios };
 }
 
 // Projekcja roczna (model aplikacji): serie miesięczne pogrupowane w bloki

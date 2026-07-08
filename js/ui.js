@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.21.0';
+export const APP_VERSION = '1.22.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1436,6 +1436,8 @@ let symLoanT = null;   // Kalkulator kredytu: okres w latach (null = seed)
 let symLoanOp = 0;     // Kalkulator kredytu: nadpłata zł/mies.
 let symRetPost = null; // Emerytura: zwrot po FIRE (ułamek; null = z ustawień)
 let symRetFreeze = null; // Emerytura: mrożenie wydatków po FIRE (null = z ustawień)
+let symCrashPct = '30'; // Krach: % spadku portfela
+let symCrashAge = '90'; // Krach: dożywam do wieku
 
 const SYM_CAP = 100000;   // górny limit dopłaty w „Cel: wiek FIRE"
 
@@ -1595,6 +1597,16 @@ function renderSymulacja() {
     return Sim.retirementResult({ ro, dz, dzBase, w, deathAge: 90 });
   };
 
+  const crashResult = () => {
+    const pct = Fmt.parsePLN(symCrashPct);
+    if (pct == null || pct <= 0 || pct >= 100) return '<div class="field-error">Podaj spadek w procentach (między 0 a 100).</div>';
+    const deathAge = Fmt.parsePLN(symCrashAge);
+    if (deathAge == null || deathAge <= 0) return '<div class="field-error">Podaj wiek.</div>';
+    const st = E.stressTestRetirement(state, { projection: proj, shockPct: pct / 100, shockYears: [1, 10], deathAge });
+    if (st && deathAge <= st.startAge) return `<div class="field-error">Podaj wiek większy niż wiek w chwili FIRE (${st.startAge} lat).</div>`;
+    return Sim.crashResult({ st });
+  };
+
   const tabs = [
     ['cojesli', 'Co jeśli?'],
     ['wiek', 'Cel: wiek'],
@@ -1602,6 +1614,7 @@ function renderSymulacja() {
     ['wiecej', 'Więcej'],
     ['zwrot', 'Zwrot'],
     ['emerytura', 'Emerytura'],
+    ['krach', 'Krach'],
     ['kredyt', 'Kredyt'],
     ...(showNadplata ? [['nadplata', 'Nadpłata']] : []),
   ];
@@ -1628,13 +1641,16 @@ function renderSymulacja() {
       freeze: symRetFreeze == null ? a.freezeExpensesAtRetirement : symRetFreeze,
       resultHTML: retirementResult(),
     });
+  } else if (symTab === 'krach') {
+    body = Sim.crashCard({ pct: symCrashPct, deathAge: symCrashAge, resultHTML: crashResult() });
   } else {
     body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
   }
 
   // Zakładki dokładające kwotę do planu — przypomnij, że liczy się sama nadwyżka.
-  // Nie dotyczy „Zwrotu", „Nadpłaty", „Kredytu" ani „Emerytury" (czyste podglądy).
-  const note = symTab === 'zwrot' || symTab === 'nadplata' || symTab === 'kredyt' || symTab === 'emerytura' ? '' : Sim.nadwyzkaNote();
+  // Nie dotyczy „Zwrotu", „Nadpłaty", „Kredytu", „Emerytury" ani „Krachu"
+  // (czyste podglądy — nic nie dokładają do planu).
+  const note = symTab === 'zwrot' || symTab === 'nadplata' || symTab === 'kredyt' || symTab === 'emerytura' || symTab === 'krach' ? '' : Sim.nadwyzkaNote();
 
   view().innerHTML = seg + body + note;
 
@@ -1699,6 +1715,10 @@ function renderSymulacja() {
       symRetFreeze = freezeEl.checked;
       $('#sym-ret-result').innerHTML = retirementResult();
     });
+  } else if (symTab === 'krach') {
+    const refresh = () => { const r = $('#sym-crash-result'); if (r) r.innerHTML = crashResult(); };
+    const pEl = $('#sym-crash-pct'); if (pEl) pEl.addEventListener('input', () => { symCrashPct = pEl.value; refresh(); });
+    const aEl = $('#sym-crash-age'); if (aEl) aEl.addEventListener('input', () => { symCrashAge = aEl.value; refresh(); });
   } else {
     const retEl = $('#sym-return');
     if (retEl) retEl.addEventListener('input', () => {

@@ -1787,6 +1787,8 @@ test('F27a: retirementOpts — domyślna, override, fallback, czystość', () =>
   const st = E.createState();
   assertEq(E.retirementOpts(st).postReturnReal, 0.02, 'nowy stan → domyślna marża EDO 2%');
   assertEq(E.retirementOpts(st, { postReturnReal: 0.045 }).postReturnReal, 0.045, 'override wygrywa');
+  assertEq(E.retirementOpts(st).crash, null, 'crash domyślnie null (F39)');
+  assertEq(E.retirementOpts(st, { crash: { year: 1, pct: 0.3 } }).crash.year, 1, 'override crash wygrywa');
   // Brak założenia w stanie → fallback 0.02.
   const noField = E.createState();
   delete noField.assumptions.postRetirementReturnReal;
@@ -2815,4 +2817,104 @@ test('F38e: chartSVG def {band:true} — wielokąt za liniami, skala z hi, bez l
   // Wiersze bez skończonych lo/hi wypadają z wielokąta, a < 2 punktów → brak.
   const sparse = rows.map((r, i) => i < 11 ? { ...r, lo: undefined, hi: undefined } : r);
   assertTrue(!chartSVG(sparse, defs).includes('<polygon'), '≤1 użyteczny punkt → bez wielokąta');
+});
+
+// ── F39: test krachu (ryzyko sekwencji zwrotów) ───────────────────────────
+// Deterministyczny szok {year, pct} w projectWithdrawal + stressTestRetirement
+// (bez losowania, D2: crash płynie przez retirementOpts/opts, nic nie
+// zapisujemy). Plan: docs/plan-crash-stress-test.md (tam „F31" — zajęte
+// przez IKE/IKZE → F39). Wartości oczekiwane z niezależnej rekurencji w teście:
+// P ← (P − W₁)·(1+r), szok mnoży P ×(1−pct) na starcie roku k, przed wypłatą.
+
+test('F39a: projectWithdrawal — mechanika krachu (tożsamość roku 1, prefiks do szoku, brak = bez zmian)', () => {
+  const f = FIX.F39;
+  const st = baseState();
+  const common = { startYm: f.startYm, startPortfolioReal: f.start, withdrawalRealYearly: f.wYear, years: 10 };
+  const base = E.projectWithdrawal(st, common);
+  // Krach w roku 1 ≡ przebieg bez krachu od kapitału ×0,7 (poza flagą crashed).
+  const c1 = E.projectWithdrawal(st, { ...common, crash: { year: 1, pct: f.shockPct } });
+  const c1ref = E.projectWithdrawal(st, { ...common, startPortfolioReal: f.start * (1 - f.shockPct) });
+  assertEq(c1.rows.length, c1ref.rows.length, 'ta sama długość przebiegu');
+  c1.rows.forEach((r, i) => {
+    const { crashed: _a, ...rest } = r;
+    const { crashed: _b, ...ref } = c1ref.rows[i];
+    assertEq(JSON.stringify(rest), JSON.stringify(ref), `rok ${i + 1} identyczny poza flagą`);
+  });
+  assertEq(c1.rows[0].crashed, true, 'rok 1 oflagowany');
+  assertEq(c1.crashApplied, true, 'crashApplied');
+  // Krach w roku 3: prefiks 1–2 bajt-w-bajt z bazą, potem start = end₂ × 0,7.
+  const c3 = E.projectWithdrawal(st, { ...common, crash: { year: 3, pct: f.shockPct } });
+  assertEq(JSON.stringify(c3.rows.slice(0, 2)), JSON.stringify(base.rows.slice(0, 2)), 'lata przed szokiem nietknięte');
+  assertEq(c3.rows[2].crashed, true, 'rok szoku oflagowany');
+  assertClose(c3.rows[2].startReal, base.rows[1].endReal * (1 - f.shockPct), 1e-6, 'start roku 3 = end roku 2 × 0,7');
+  // Bez krachu: każda flaga false, crashApplied false (ścieżka jak dotąd —
+  // liczby F13/F27 pilnują wartości).
+  assertTrue(base.rows.every(r => r.crashed === false), 'bez krachu flagi false');
+  assertEq(base.crashApplied, false, 'crashApplied false');
+});
+
+test('F39b: stressTestRetirement — szok 0 ≡ baza, determinizm, czystość', () => {
+  const f = FIX.F39;
+  const st = baseState();
+  const opts = { startYm: f.startYm, startPortfolioReal: f.start, withdrawalRealYearly: f.wYear, deathAge: f.deathAge };
+  const zero = E.stressTestRetirement(st, { ...opts, shockPct: 0 });
+  zero.scenarios.forEach(s => {
+    assertEq(s.survives, zero.base.survives, `szok 0 (rok ${s.shockYear}): survives = baza`);
+    assertEq(s.depletedYear, zero.base.depletedYear, 'depletedYear = baza');
+    assertClose(s.endReal, zero.base.endReal, 1e-9, 'endReal = baza');
+  });
+  const before = JSON.stringify(st);
+  const r1 = E.stressTestRetirement(st, { ...opts, shockPct: f.shockPct });
+  assertEq(JSON.stringify(st), before, 'czystość (wzorzec F15a)');
+  assertEq(JSON.stringify(E.stressTestRetirement(st, { ...opts, shockPct: f.shockPct })), JSON.stringify(r1), 'dwa wywołania identyczne');
+});
+
+test('F39c: ryzyko sekwencji — baza przeżywa, krach w roku 1 boli bardziej niż w roku 10', () => {
+  const f = FIX.F39;
+  const st = baseState();
+  const r = st.assumptions.postRetirementReturnReal; // 5% — mrożenie włączone, wypłaty płaskie realnie
+  const res = E.stressTestRetirement(st, {
+    startYm: f.startYm, startPortfolioReal: f.start, withdrawalRealYearly: f.wYear,
+    deathAge: f.deathAge, shockPct: f.shockPct, shockYears: f.years,
+  });
+  assertEq(res.horizonYears, f.deathAge - res.startAge, 'horyzont = deathAge − wiek startowy');
+  assertEq(res.base.survives, true, 'baza przeżywa (1,8M > równowagi 1 512 000)');
+  // Niezależna rekurencja: rok n → P ← (P − W₁)·(1+r); szok ×(1−pct) na starcie roku k.
+  const depletion = shockYear => {
+    let P = f.start;
+    for (let n = 1; n <= res.horizonYears; n++) {
+      if (n === shockYear) P *= (1 - f.shockPct);
+      P = (P - f.wYear) * (1 + r);
+      if (P <= 0.005) return n;
+    }
+    return null;
+  };
+  const s1 = res.scenarios.find(s => s.shockYear === 1);
+  const s10 = res.scenarios.find(s => s.shockYear === 10);
+  assertEq(s1.survives, false, 'krach w roku 1 → wyczerpanie');
+  assertEq(s1.depletedYear, depletion(1), 'rok wyczerpania = rekurencja niezależna (szok w 1.)');
+  assertEq(s10.depletedYear, depletion(10), 'rok wyczerpania = rekurencja niezależna (szok w 10.)');
+  assertTrue(s10.depletedYear == null || s10.depletedYear > s1.depletedYear, 'ten sam krach 10 lat później → później albo wcale');
+  assertEq(s1.depletedAge, res.startAge + s1.depletedYear - 1, 'wiek wyczerpania (szok 1)');
+  assertEq(s10.depletedAge, res.startAge + s10.depletedYear - 1, 'wiek wyczerpania (szok 10)');
+});
+
+test('F39d: horyzont i strażnicy — filtr lat szoku, brak profilu, clamp, hypothetical', () => {
+  const f = FIX.F39;
+  const st = baseState();
+  const opts = { startYm: f.startYm, startPortfolioReal: f.start, withdrawalRealYearly: f.wYear, deathAge: f.deathAge };
+  const filtered = E.stressTestRetirement(st, { ...opts, shockYears: [1, 999] });
+  assertEq(filtered.scenarios.length, 1, 'rok poza horyzontem odfiltrowany');
+  assertEq(filtered.scenarios[0].shockYear, 1, 'został tylko rok 1');
+  const noBirth = baseState({ profile: { birthDate: null } });
+  assertEq(E.stressTestRetirement(noBirth, opts), null, 'bez daty urodzenia → null');
+  const clamp = E.stressTestRetirement(st, { ...opts, deathAge: 10 });
+  assertEq(clamp.horizonYears, 1, 'deathAge ≤ wiek startowy → horyzont 1 (clamp)');
+  assertEq(E.stressTestRetirement(st, opts).hypothetical, true, 'bez osiągniętej prognozy → hypothetical');
+  const withProj = E.stressTestRetirement(st, {
+    ...opts, startYm: undefined,
+    projection: { reached: true, fireYm: f.startYm, series: [] },
+  });
+  assertEq(withProj.hypothetical, false, 'osiągnięta prognoza → nie-hipotetyczny');
+  assertEq(withProj.startYm, f.startYm, 'startYm = fireYm prognozy');
 });
