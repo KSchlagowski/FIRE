@@ -18,11 +18,17 @@ function kv(label, val, cls = '') {
   return `<div class="kv"><span>${label}</span><b${cls ? ` class="${cls}"` : ''}>${val}</b></div>`;
 }
 
-function metodologia(lines) {
+// Kroki zwykłym tekstem (ol.howto); opcjonalny wzór w monospace (.formula)
+// tylko jako ostatnia linia „Wzór dla dociekliwych".
+function metodologia(steps, formula = '') {
   return `<details class="section"><summary>Jak to liczymy?</summary>
-    ${lines.map(l => `<div class="formula">${l}</div>`).join('')}
+    <ol class="howto">${steps.filter(Boolean).map(s => `<li>${s}</li>`).join('')}</ol>
+    ${formula ? `<div class="formula">Wzór dla dociekliwych: ${formula}</div>` : ''}
   </details>`;
 }
+
+// Link do wpisu w Słowniczku (#/slowniczek/:term).
+const gl = (term, text) => `<a href="#/slowniczek/${term}">${text}</a>`;
 
 // Wspólna uwaga: dla FIRE liczy się sama nadwyżka, nie jej źródło. Pokazywana
 // pod zakładkami, które dokładają kwotę do planu (nie dotyczy zakładki „Zwrot").
@@ -90,8 +96,8 @@ export function whatIfCard({ nowYm, month, amount, recurring, resultHTML }) {
     </label>
     <div id="sim-result">${resultHTML}</div>
     ${metodologia([
-      'Symulacja = pełny przebieg prognozy (plan → dług → salda → projekcja) z kwotą dodaną do planu wybranego miesiąca.',
-      'Nic nie zapisujemy — po odświeżeniu ekranu symulacja znika, a wpisy i założenia pozostają nietknięte.',
+      'Dodajemy Twoją kwotę do planu wybranego miesiąca i liczymy całą prognozę od nowa (plan → dług → salda → projekcja) — dokładnie tak, jakby ta kwota naprawdę się pojawiła.',
+      'Niczego nie zapisujemy — po odświeżeniu ekranu symulacja znika, a Twoje wpisy i założenia pozostają nietknięte.',
     ])}
   </div>`;
 }
@@ -124,9 +130,9 @@ export function targetAgeCard({ ageValue, defaultAge, resultHTML }) {
     </label>
     <div id="sym-age-result">${resultHTML}</div>
     ${metodologia([
-      'Poszukiwanie binarne minimalnej dodatkowej kwoty/mies., przy której prognoza osiąga FIRE najpóźniej w zadanym wieku.',
-      'Każdy krok to pełny przebieg prognozy — funkcja monotoniczna: więcej oszczędności ⇒ FIRE nie później.',
-      '„Łącznie z planem" = ta dopłata + Twój bieżący plan miesięczny.',
+      `Próbujemy różnych miesięcznych dopłat i szukamy najmniejszej, przy której ${gl('cel-fire', 'FIRE')} wypada najpóźniej w zadanym wieku.`,
+      'Każda próba to pełna prognoza. Więcej oszczędności nigdy nie opóźnia FIRE, więc najmniejszą wystarczającą kwotę znajdujemy szybko, kolejnymi przybliżeniami (raz za dużo, raz za mało, aż do celu).',
+      '„Łącznie z planem” = ta dopłata + Twój bieżący plan miesięczny.',
     ])}
   </div>`;
 }
@@ -153,8 +159,8 @@ export function latteCard({ amountValue, resultHTML }) {
     </label>
     <div id="sym-latte-result">${resultHTML}</div>
     ${metodologia([
-      'Wartość przyszła równych wpłat (annuity-due) przy Twoim realnym zwrocie — kwoty w dzisiejszych złotówkach.',
-      'Wpływ na datę FIRE = pełny przebieg prognozy z tą kwotą doliczaną do planu każdego miesiąca.',
+      `Liczymy, do czego urosłaby ta kwota, gdybyś odkładał ją co miesiąc przez 10, 20 i 30 lat przy Twoim realnym zwrocie — wynik w dzisiejszych złotówkach (${gl('realnie', 'realnie')}).`,
+      'Wpływ na datę FIRE to pełna prognoza z tą kwotą doliczaną do planu każdego miesiąca.',
     ])}
   </div>`;
 }
@@ -179,8 +185,8 @@ export function moreSavingsCard({ value, max, resultHTML }) {
     </label>
     <div id="sym-more-result">${resultHTML}</div>
     ${metodologia([
-      'Suwak dolicza stałą kwotę do planu każdego prognozowanego miesiąca i przelicza całą prognozę.',
-      'Zakres suwaka: 0 … zaokrąglony miesięczny dochód.',
+      'Suwak dolicza stałą kwotę do planu każdego prognozowanego miesiąca i przelicza całą prognozę od nowa.',
+      'Zakres suwaka to 0 … Twój zaokrąglony miesięczny dochód.',
     ])}
   </div>`;
 }
@@ -215,9 +221,9 @@ export function overpaymentCard({ loans, activeLoan, amount, resultHTML }) {
     </label>
     <div id="sym-overpay-result">${resultHTML}</div>
     ${metodologia([
-      'Punkt wyjścia to spłata „przy samej racie”: bieżące saldo + rata kontraktowa, bez nadpłat. Prognoza FIRE i tak nadpłaca kredyt hipoteczny całą nadwyżką — ten kalkulator odpowiada na ogólniejsze „co daje stała nadpłata X”, niezależnie od tej strategii.',
-      'Nadpłata dochodzi do raty w każdym miesiącu aż do spłaty; nadwyżka ostatniego miesiąca nie przepada w rachunku odsetek.',
-      'Słupek = stan na początku roku spłaty: saldo kapitału + wszystkie przyszłe odsetki.',
+      'Punktem wyjścia jest spłata „przy samej racie”: bieżące saldo + rata z umowy, bez żadnych nadpłat.',
+      `Do każdej raty doliczamy Twoją ${gl('nadplata', 'nadpłatę')} aż do spłaty; nadwyżka ostatniego miesiąca nie przepada w rachunku odsetek.`,
+      'Prognoza FIRE i tak nadpłaca kredyt hipoteczny całą nadwyżką — ten kalkulator pokazuje czysty efekt stałej nadpłaty, niezależnie od tej strategii. Słupek na wykresie = saldo kapitału + wszystkie przyszłe odsetki na początku roku spłaty.',
     ])}
   </div>`;
 }
@@ -257,11 +263,11 @@ export function loanCalcCard({ principal, rate, term, amount, resultHTML }) {
     </label>
     <div id="sym-loan-result">${resultHTML}</div>
     ${metodologia([
-      'Rata liczona metodą raty równej (annuitet): stałe oprocentowanie przez cały okres, kapitalizacja miesięczna. Miesięczna stopa to (1+roczna)^(1/12)−1.',
-      'Nadpłata dochodzi do raty w każdym miesiącu aż do spłaty; nadwyżka ostatniego miesiąca nie przepada w rachunku odsetek.',
-      'Słupek = stan na początku roku spłaty: saldo kapitału + wszystkie przyszłe odsetki. „Blade” = sama rata, „pełne” = z nadpłatą.',
-      'Kalkulator hipotetyczny — nie korzysta z Twojego planu ani zapisanych kredytów i niczego nie zmienia.',
-    ])}
+      `Rata jest stała przez cały okres — to ${gl('annuitet', 'rata równa (annuitet)')} przy stałym oprocentowaniu i miesięcznej kapitalizacji.`,
+      `${gl('nadplata', 'Nadpłata')} dochodzi do raty w każdym miesiącu aż do spłaty; nadwyżka ostatniego miesiąca nie przepada w rachunku odsetek.`,
+      'Słupek na wykresie = saldo kapitału + wszystkie przyszłe odsetki na początku roku spłaty; blade słupki to sama rata, pełne — z nadpłatą.',
+      'Kalkulator jest hipotetyczny — nie korzysta z Twojego planu ani zapisanych kredytów i niczego nie zmienia.',
+    ], 'stopa miesięczna = (1+roczna)^(1/12) − 1')}
   </div>`;
 }
 
@@ -285,8 +291,8 @@ export function returnCard({ value, min, max, baseReturn, resultHTML }) {
     </label>
     <div id="sym-return-result">${resultHTML}</div>
     ${metodologia([
-      'Suwak zmienia tylko realny zwrot roczny i przelicza całą prognozę (± 3 pp wokół Twojego założenia).',
-      'Pokrywa się z tabelą Wrażliwość w Analizie — tu jest interaktywnie.',
+      `Suwak zmienia tylko ${gl('realnie', 'realny')} zwrot roczny (±3 pp wokół Twojego założenia ${Fmt.formatPct(baseReturn)}) i przelicza całą prognozę od nowa.`,
+      'To ta sama matematyka co tabela „Wrażliwość prognozy” w Analizie — tu masz ją interaktywnie.',
     ])}
   </div>`;
 }
@@ -315,8 +321,8 @@ export function retirementResult({ ro, dz, dzBase, w, deathAge }) {
       : 'rosną o ' + Fmt.formatPct(w.withdrawalGrowthReal) + ' realnie/rok'),
     longevity,
     metodologia([
-      'Każda zmiana przelicza fazę wypłat od nowa: po FIRE portfel rośnie o podany realny zwrot, a wypłaty pokrywają Twoje wydatki.',
-      'Odznaczenie „wydatki przestają rosnąć” podnosi wypłaty co roku o realny wzrost wydatków — portfel musi być większy albo skończy się wcześniej.',
+      `Każde przesunięcie suwaka przelicza fazę wypłat od nowa: po FIRE portfel rośnie o wybrany ${gl('realnie', 'realny')} zwrot, a wypłaty pokrywają Twoje wydatki.`,
+      `Odznaczenie „wydatki przestają rosnąć” podnosi wypłaty co roku o realny wzrost wydatków — ${gl('do-zera', 'cel „do zera”')} musi być większy albo portfel skończy się wcześniej.`,
       'Niczego nie zapisujemy — to podgląd; ustawienie na stałe jest w Plan → Profil i FIRE.',
     ]),
   ].join('');

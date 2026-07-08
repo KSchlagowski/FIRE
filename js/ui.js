@@ -6,10 +6,11 @@ import * as An from './analysis.js';
 import * as Sim from './simulation.js';
 import * as Mot from './motivation.js';
 import { chartSVG, stackedBarSVG } from './charts.js';
+import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview } from './storage.js';
 
-export const APP_VERSION = '1.18.0';
+export const APP_VERSION = '1.19.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -254,15 +255,19 @@ function route() {
   else if (hash === '#/symulacja') renderSymulacja();
   else if (hash === '#/plan') renderPlanHub();
   else if (hash.startsWith('#/plan/')) renderPlanSection(hash.split('/')[2]);
+  else if (hash === '#/slowniczek') renderGlossary(null);
+  else if (hash.startsWith('#/slowniczek/')) renderGlossary(hash.split('/')[2]);
   else if (hash === '#/backup') renderBackup();
   else renderDashboard();
 }
 
-// Podświetlenie zakładki: check-in należy do Pulpitu, a Kopia i wszystkie
-// pod-strony Planu (#/plan/*) — do zakładki Plan (slice(0,2) daje już „#/plan").
+// Podświetlenie zakładki: check-in należy do Pulpitu, a Kopia, Słowniczek
+// i wszystkie pod-strony Planu (#/plan/*) — do zakładki Plan
+// (slice(0,2) daje już „#/plan").
 function activeRoute(hash) {
   if (hash.startsWith('#/checkin')) return '#/';
   if (hash === '#/backup') return '#/plan';
+  if (hash.startsWith('#/slowniczek')) return '#/plan';
   return hash.split('/').slice(0, 2).join('/');
 }
 
@@ -319,7 +324,7 @@ function renderOnboarding() {
       ${on ? `
       ${field({ id: 'ob-mtg-start', label: 'Start kredytu', type: 'month', value: ob.d.mtgStart })}
       ${field({ id: 'ob-mtg-principal', label: 'Kwota kredytu', suffix: 'zł', value: ob.d.mtgPrincipal })}
-      ${field({ id: 'ob-mtg-rate', label: 'Oprocentowanie nominalne', suffix: '%', value: ob.d.mtgRate, tipText: 'Nominalne oprocentowanie kredytu z umowy (kredyt to jedyna nominalna rzecz w aplikacji — reszta liczona jest w dzisiejszych złotówkach).' })}
+      ${field({ id: 'ob-mtg-rate', label: 'Oprocentowanie nominalne', suffix: '%', value: ob.d.mtgRate, tipText: 'Nominalne oprocentowanie kredytu z umowy (kredyt i dług rodzinny to jedyne nominalne kontrakty w aplikacji — reszta liczona jest realnie, w dzisiejszych złotówkach).' })}
       ${field({ id: 'ob-mtg-term', label: 'Okres kredytu', suffix: 'lata', value: ob.d.mtgTerm, mode: 'numeric' })}
       <div class="banner info" id="ob-annuity">Rata: —</div>
       ${field({ id: 'ob-mtg-override', label: 'Rata ręcznie (opcjonalnie)', suffix: 'zł', value: ob.d.mtgOverride, hint: 'Zostaw puste, aby użyć raty wyliczonej.' })}
@@ -1602,6 +1607,7 @@ function renderPlanHub() {
     ['🧾', 'Podatki', 'podatek Belki, IKE i IKZE', '#/plan/podatki'],
     ['⚙️', 'Aplikacja', 'motyw', '#/plan/aplikacja'],
     ['🩹', 'Korekty sald', 'wyrównanie gotówki, portfela i długu', '#/plan/korekty'],
+    ['📖', 'Słowniczek', 'pojęcia używane w aplikacji', '#/slowniczek'],
     ['💾', 'Kopia zapasowa', 'eksport, import, aktualizacja', '#/backup'],
   ];
   view().innerHTML = `<div class="card"><h2>Ustawienia</h2>
@@ -1613,6 +1619,24 @@ function renderPlanHub() {
       </button>`).join('')}</div>
   </div>`;
   $$('[data-go]').forEach(el => el.addEventListener('click', () => { location.hash = el.dataset.go; }));
+}
+
+// ── Słowniczek (#/slowniczek, #/slowniczek/:term) ──
+// Builder jest czysty (glossary.js); tu tylko render + przewinięcie i
+// podświetlenie wpisu, gdy weszliśmy z deep-linku #/slowniczek/:term.
+// „Wróć" cofa historię (wejścia są i z Planu, i z bloków „Jak to liczymy?");
+// przy wejściu bez historii spada na hub Planu.
+function renderGlossary(term) {
+  view().innerHTML = `<button type="button" id="gl-back" class="btn ghost wide">← Wróć</button>${glossaryScreen()}`;
+  $('#gl-back').addEventListener('click', () => {
+    if (history.length > 1) history.back();
+    else location.hash = '#/plan';
+  });
+  if (!term) return;
+  const el = document.getElementById('gl-' + term);
+  if (!el) return;
+  el.classList.add('gl-hit');
+  el.scrollIntoView({ block: 'center' });
 }
 
 function renderPlanSection(section) {
@@ -1773,7 +1797,7 @@ function renderPlanDom() {
         ${field({ id: 'pl-fl-principal', label: 'Kwota długu rodzinnego', suffix: 'zł', value: moneyVal(fl.principal) })}
         ${field({ id: 'pl-fl-rate', label: 'Oprocentowanie nominalne', suffix: '%', value: pctVal(fl.rateNominal) })}
         ${field({ id: 'pl-fl-start', label: 'Start spłaty', type: 'month', value: fl.startMonth || '', tipText: 'Miesiąc, w którym pojawia się saldo długu (= kwota) i zaczyna się spłata.' })}
-        ${field({ id: 'pl-fl-end', label: 'Koniec spłaty', type: 'month', value: fl.endMonth || '', tipText: 'Ostatni miesiąc spłaty (włącznie). Rata annuitetowa jest tak dobrana, by dług zniknął dokładnie wtedy.' })}
+        ${field({ id: 'pl-fl-end', label: 'Koniec spłaty', type: 'month', value: fl.endMonth || '', tipText: 'Ostatni miesiąc spłaty (włącznie). Rata równa (annuitet) jest tak dobrana, by dług zniknął dokładnie wtedy.' })}
         <div class="banner info" id="pl-fl-annuity">Rata: —</div>
         ${field({ id: 'pl-fl-override', label: 'Rata ręcznie (opcjonalnie)', suffix: 'zł', value: moneyVal(fl.paymentOverrideMonthly) })}
       </div>

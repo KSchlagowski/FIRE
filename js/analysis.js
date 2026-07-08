@@ -31,11 +31,17 @@ function table(headers, rowsHtml) {
   </table></div>`;
 }
 
-function metodologia(lines) {
+// Kroki zwykłym tekstem (ol.howto); opcjonalny wzór w monospace (.formula)
+// tylko jako ostatnia linia „Wzór dla dociekliwych".
+function metodologia(steps, formula = '') {
   return `<details class="section"><summary>Jak to liczymy?</summary>
-    ${lines.map(l => `<div class="formula">${l}</div>`).join('')}
+    <ol class="howto">${steps.filter(Boolean).map(s => `<li>${s}</li>`).join('')}</ol>
+    ${formula ? `<div class="formula">Wzór dla dociekliwych: ${formula}</div>` : ''}
   </details>`;
 }
+
+// Link do wpisu w Słowniczku (#/slowniczek/:term).
+const gl = (term, text) => `<a href="#/slowniczek/${term}">${text}</a>`;
 
 // ── Legendy wykresów (jedno źródło prawdy: karta i nakładka pełnoekranowa) ─
 // Wyeksportowane, by ui.js użył ich pod wykresem powiększonym bez duplikatów.
@@ -56,6 +62,7 @@ export function statsCard({ fi, cvg, balances, a, nowYm }) {
   const runway = fi.runwayMonths != null ? Fmt.formatYearsMonths(Math.floor(fi.runwayMonths)) : '—';
   const star = cvg.hasOverride ? '*' : '';
   return `<div class="card"><h2>Statystyki FIRE 🎯</h2>
+    <p class="muted small">Twoje kluczowe liczby w jednym miejscu: ile drogi za Tobą, na jak długo starczą oszczędności i ile zarobił za Ciebie rynek.</p>
     ${kv('FI% (postęp do celu)', Fmt.formatPct(fi.fiPct, 1))}
     ${kv('Cel FIRE (dziś)', money(fi.target))}
     ${fi.coast ? kv('Coast FIRE', `${money(fi.coast.number)}${fi.coast.reached ? ' <span class="good">✓</span>' : ''}`) : ''}
@@ -67,11 +74,11 @@ export function statsCard({ fi, cvg, balances, a, nowYm }) {
     ${fi.coast ? 'Coast FIRE = portfel, który bez dalszych wpłat sam dorośnie do celu w docelowym wieku FIRE.' : ''}
     ${cvg.hasOverride ? ' * wzrost zawiera ręczne korekty sald.' : ''}</p>
     ${metodologia([
-      `FI% = portfel ÷ cel = ${money(balances.portfolio)} ÷ ${money(fi.target)} = ${Fmt.formatPct(fi.fiPct, 1)}`,
-      fi.coast ? `Coast FIRE = cel w wieku FIRE ÷ (1+r)^lata = ${money(fi.coast.number * Math.pow(1 + a.realReturnAnnual, coastYears))} ÷ ${Math.pow(1 + a.realReturnAnnual, coastYears).toFixed(4).replace('.', ',')} = ${money(fi.coast.number)}` : '',
-      `Zapas = (gotówka + portfel) ÷ wydatki mies. = ${money(balances.cash + balances.portfolio)} ÷ ${money(fi.monthlyExpenses)} = ${fi.runwayMonths != null ? Math.floor(fi.runwayMonths) + ' mies.' : '—'}`,
-      `Wzrost = stan dziś − stan startowy − wpłaty = ${money(cvg.now)} − ${money(cvg.start)} − ${money(cvg.totalFlow)} = ${money(cvg.growth)}`,
-    ].filter(Boolean))}
+      `${gl('fi-procent', 'FI%')} to Twój portfel podzielony przez ${gl('cel-fire', 'cel FIRE')}: ${money(balances.portfolio)} ÷ ${money(fi.target)} = ${Fmt.formatPct(fi.fiPct, 1)} — tyle drogi masz już za sobą.`,
+      `${gl('zapas', 'Zapas')}: sumujemy gotówkę i portfel (${money(balances.cash + balances.portfolio)}) i dzielimy przez miesięczne wydatki (${money(fi.monthlyExpenses)}) — bez żadnych dochodów starczy Ci na ${fi.runwayMonths != null ? 'ok. ' + Math.floor(fi.runwayMonths) + ' mies.' : '—'}`,
+      fi.coast ? `${gl('coast-fire', 'Coast FIRE')} (${money(fi.coast.number)}) to portfel, który bez ani jednej nowej wpłaty sam urośnie do celu do Twojego docelowego wieku FIRE — cofamy cel o ${coastYears.toFixed(1).replace('.', ',')} lat wzrostu.` : '',
+      `Wzrost rynkowy: od dzisiejszego stanu (${money(cvg.now)}) odejmujemy stan startowy (${money(cvg.start)}) i wszystkie Twoje wpłaty (${money(cvg.totalFlow)}) — reszta, ${money(cvg.growth)}, to praca rynku.`,
+    ], 'FI% = portfel ÷ cel; zapas = (gotówka + portfel) ÷ wydatki mies.')}
   </div>`;
 }
 
@@ -90,6 +97,7 @@ export function planPerfCard({ sav, pva, chartHTML }) {
       <div class="vbar"><i class="v-${v}" style="width:${w.toFixed(0)}%"></i></div><span class="vbar-count">${c}</span></div>`;
   }).join('');
   return `<div class="card"><h2>Wykonanie planu 📋</h2>
+    <p class="muted small">Jak Twoje realne wyniki z check-inów mają się do planu — miesiąc po miesiącu i narastająco.</p>
     ${kv('Stopa oszczędzania (ostatni mies.)', rate(sav.last))}
     ${kv('Stopa oszczędzania (12 mies.)', rate(sav.trailing12))}
     ${kv('Stopa oszczędzania (od początku)', rate(sav.overall))}
@@ -103,9 +111,9 @@ export function planPerfCard({ sav, pva, chartHTML }) {
     ${chartHTML ? `<h3>Skumulowane: odłożone vs plan</h3>${chartHTML}
       ${cumLegend()}` : ''}
     ${metodologia([
-      'Stopa oszczędzania = (zarobione − wydane) ÷ zarobione.',
-      'Plan każdego miesiąca to snapshot zamrożony przy zapisie wpisu — późniejsza zmiana założeń nie przepisuje przeszłości.',
-      `Skumulowana różnica = ${money(pva.cumNet)} − ${money(pva.cumPlanned)} = ${signed(pva.cumDelta)}`,
+      'Stopa oszczędzania mówi, jaka część zarobków u Ciebie zostaje: (zarobione − wydane) ÷ zarobione.',
+      `Każdy check-in porównujemy z planem zamrożonym w chwili zapisu wpisu — stąd ${gl('werdykty', 'werdykt')} miesiąca; późniejsza zmiana założeń nie przepisuje przeszłości.`,
+      `Skumulowana różnica: odłożone łącznie ${money(pva.cumNet)} minus plan łącznie ${money(pva.cumPlanned)} = ${signed(pva.cumDelta)}.`,
     ])}
   </div>`;
 }
@@ -177,25 +185,24 @@ export function projectionCard({ mode, blocks, series, excelRows, houseOn, selec
         ? '<p class="muted small">Tabela ucięta kilka lat po osiągnięciu celu.</p>' : '');
   }
 
-  const noteLines = mode === 'excel'
-    ? [
-      `Konwencja arkusza Projekcja: saldo końc. = (saldo pocz. + wpłaty) × (1+r) — kapitalizacja ROCZNA.`,
-      `Start = dzisiejszy portfel = ${money(excelStart)}; wpłaty roczne = plan bieżącego miesiąca × 12 = ${money(excelContrib)}.`,
-      'Ten widok różni się od modelu aplikacji: aplikacja liczy miesięcznie (annuity-due), zna fazy (dom/dług), dwa kubełki i deltę z Twoich wpisów. Excel służy do ręcznego cross-checku z arkuszem.',
-    ]
-    : [
-      'Saldo końc. = saldo pocz. + wpłaty + wzrost — tożsamość zachodzi dokładnie; wzrost jest rezydualny.',
-      hasOverride ? '* wzrost zawiera ręczne korekty sald (korekta nie jest wpłatą).' : '',
-      'Lata planu to bloki 12 miesięcy od startu planu (kotwicy), nie lata kalendarzowe.',
+  const noteHTML = mode === 'excel'
+    ? metodologia([
+      `Ten widok liczy tak jak arkusz kalkulacyjny: raz na rok, saldo końcowe = (saldo początkowe + wpłaty) × (1 + zwrot).`,
+      `Startujemy od Twojego dzisiejszego portfela (${money(excelStart)}); wpłaty roczne to bieżący plan miesięczny × 12 = ${money(excelContrib)}.`,
+      `Aplikacja liczy dokładniej — co miesiąc, z fazami (dom/dług), ${gl('dwa-kubelki', 'dwoma kubełkami')} i deltą z Twoich wpisów. Ten widok służy do ręcznego porównania z arkuszem Excel.`,
+    ])
+    : metodologia([
+      `Każdy wiersz to prosta suma: saldo końcowe = saldo początkowe + wpłaty + wzrost — zgadza się co do grosza.${hasOverride ? ` Gwiazdka (*) oznacza, że we wzroście siedzą też Twoje ręczne ${gl('korekty', 'korekty sald')} — korekta nie jest wpłatą.` : ''}`,
+      'Lata planu to bloki 12 miesięcy od startu planu, nie lata kalendarzowe.',
       byPlanOnly
-        ? 'Prognoza wg planu — po 3 wpisach doliczana będzie delta z Twoich realnych wyników.'
-        : `Prognozowane miesiące = plan + delta z ostatnich wpisów (${signed(delta)}/mies.).`,
-      hasFamily ? 'Kolumna „Dług (real.)” to suma kredytu i długu rodzinnego (realnie).' : '',
-      'Tabela kończy się w miesiącu osiągnięcia FIRE (jak kolumna „Osiągnięto?” w Excelu) — dalej liczy się Faza wypłat poniżej.',
-    ];
+        ? `Na razie ${gl('delta', 'prognoza „wg planu"')} — po 3 wpisach zaczniemy doliczać deltę z Twoich realnych wyników.`
+        : `Prognozowane miesiące = plan + ${gl('delta', 'delta')} z Twoich ostatnich wpisów (${signed(delta)}/mies.) — prognoza uczy się na tym, jak naprawdę Ci idzie.`,
+      `Tabela kończy się w miesiącu osiągnięcia FIRE — dalej liczy się Faza wypłat poniżej.${hasFamily ? ' Kolumna „Dług (real.)” to kredyt i dług rodzinny razem, w dzisiejszych złotówkach.' : ''}`,
+    ]);
 
   return `<div class="card"><h2>Projekcja — akumulacja 📈</h2>
-    ${seg}${body}${metodologia(noteLines.filter(Boolean))}
+    <p class="muted small">Droga Twojego portfela do celu FIRE, rok po roku: historia z wpisów + prognoza (wiersze na szarym tle).</p>
+    ${seg}${body}${noteHTML}
   </div>`;
 }
 
@@ -225,25 +232,17 @@ export function withdrawalCard({ w, chartHTML }) {
     : '';
   const postRateBanner = `<div class="banner info small">Po FIRE portfel pracuje na ${Fmt.formatPct(w.realRate)} realnie — tak, jakby pieniądze leżały w bezpieczniejszych instrumentach (np. obligacjach). Zmienisz to w Plan → Profil i FIRE.</div>`;
   return `<div class="card"><h2>Faza wypłat 🏖️</h2>
+    <p class="muted small">Co dzieje się z portfelem po osiągnięciu FIRE: coroczne wypłaty pokrywają wydatki, a reszta dalej pracuje.</p>
     ${banner}${postRateBanner}${depletionWarn}
     ${chartHTML ? `${chartHTML}${withdrawalLegend()}` : ''}
     ${taxed ? kv('Podatki w fazie wypłat łącznie (realnie)', money(w.taxTotalReal)) : ''}
     ${table(headers, rows)}
     ${metodologia([
-      `Wypłata (rok 1) = cel × SWR = ${money(target)} × ${Fmt.formatPct(w.swr)} = ${money(w.withdrawalRealYearly)}/rok; rośnie z inflacją ${Fmt.formatPct(w.inflation)}.`,
-      taxed ? 'Wypłata brutto jest powiększona tak, aby po podatku zostało dokładnie tyle, ile potrzebujesz na wydatki; kolumna «Podatek» pokazuje różnicę.' : null,
-      taxed ? 'Podatek = 19% × udział zysku nominalnego w portfelu — rośnie z czasem, bo coraz większa część portfela to zysk.' : null,
-      w.taxesApplied && w.taxesApplied.ikeIkze
-        ? 'Podatek maleje skokowo, gdy kończysz 60 lat (IKE bez Belki) i 65 lat (IKZE: 10% ryczałtu zamiast stawki PIT).'
-        : null,
-      w.withdrawalGrowthReal > 0
-        ? `Wydatki rosną o ${Fmt.formatPct(w.withdrawalGrowthReal)} realnie także po FIRE — tak wybrano w ustawieniach (Plan → Profil i FIRE).`
-        : null,
-      `Po FIRE portfel rośnie o realny zwrot po FIRE (${Fmt.formatPct(w.realRate)}), nie o zwrot z fazy oszczędzania — po przejściu na emeryturę zwykle inwestuje się bezpieczniej.`,
-      `R nominalne = (1+${Fmt.formatPct(w.realRate)})·(1+${Fmt.formatPct(w.inflation)}) − 1 = ${Fmt.formatPct(w.nominalRate)}`,
-      'Saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r) — rekurencja w dzisiejszych zł; kolumny nominalne = realne × (1+inflacja)^n.',
-      `Kwoty nominalne w złotówkach z cen roku przejścia na FIRE (indeks cen = 1 w ${esc(Fmt.formatMonthGenitive(w.startYm))}).`,
-    ].filter(Boolean))}
+      `Pierwsza roczna wypłata to cel × ${gl('swr', 'stopa wypłat')}: ${money(target)} × ${Fmt.formatPct(w.swr)} = ${money(w.withdrawalRealYearly)}. W kolejnych latach rośnie z inflacją (${Fmt.formatPct(w.inflation)})${w.withdrawalGrowthReal > 0 ? ` i dodatkowo o ${Fmt.formatPct(w.withdrawalGrowthReal)} realnie — tak wybrano w Plan → Profil i FIRE` : ''}.`,
+      `Co roku portfel najpierw oddaje wypłatę, a reszta pracuje na ${Fmt.formatPct(w.realRate)} ${gl('realnie', 'realnie')} — to zwrot „po FIRE”, niższy niż w fazie oszczędzania, bo na emeryturze zwykle inwestuje się bezpieczniej.`,
+      taxed ? `Wypłatę powiększamy tak, aby po ${gl('belka', 'podatku Belki')} (19% od części, która jest zyskiem) zostało dokładnie tyle, ile potrzebujesz — kolumna „Podatek” pokazuje różnicę. Podatek rośnie z czasem, bo coraz większa część portfela to zysk${w.taxesApplied && w.taxesApplied.ikeIkze ? ', a maleje skokowo przy 60. urodzinach (IKE bez podatku) i 65. (IKZE: 10% ryczałtu)' : ''}.` : null,
+      `Kolumny nominalne pokazują przyszłe złotówki: kwoty realne × (1+inflacja)^lata, w cenach z ${esc(Fmt.formatMonthGenitive(w.startYm))} — miesiąca przejścia na FIRE.`,
+    ], `saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r); r nominalne = (1+${Fmt.formatPct(w.realRate)})·(1+${Fmt.formatPct(w.inflation)}) − 1 = ${Fmt.formatPct(w.nominalRate)}`)}
   </div>`;
 }
 
@@ -285,16 +284,11 @@ export function dieWithZeroResult({ z, deathAgeRaw }) {
   return `${banner}${summary}
     ${table(headers, rows)}
     ${metodologia([
-      `Cel = W₁·(1−qᴺ)/(1−q), q = 1/(1+r) = PV renty o stałej realnej wypłacie; portfel = 0 dokładnie w wieku ${z.deathAge} (N = ${z.yearsN} lat wypłat).`,
-      `Wypłata = cel klasyczny × SWR = ${money(z.withdrawalYear1)}/rok, stała realnie (nominalnie rośnie z inflacją) — ten sam model wydatków co klasyczna faza wypłat.`,
-      z.withdrawalGrowthReal > 0
-        ? `Wypłaty rosną o ${Fmt.formatPct(z.withdrawalGrowthReal)} realnie każdego roku — dlatego cel „do zera” jest wyższy niż przy stałych wydatkach.`
-        : null,
-      `Cel klasyczny do porównania liczony w tym samym miesiącu co cel „do zera” (${esc(Fmt.formatMonthGenitive(z.startYm))}) — oba cele rosną z wydatkami, więc porównanie z dwóch dat byłoby mylące.`,
-      `Saldo końc. (realnie) = (saldo pocz. − wypłata) × (1+r); R realne = ${Fmt.formatPct(z.realRate)}. Kwoty nominalne w cenach roku startu wypłat (indeks cen = 1 w ${esc(Fmt.formatMonthGenitive(z.startYm))}).`,
-      `Portfel rośnie o realny zwrot po FIRE (${Fmt.formatPct(z.realRate)}) — ustawisz go w Plan → Profil i FIRE.`,
-      'Tabela startuje od dokładnie celu „do zera” (nie od prognozowanej nadwyżki portfela) — dlatego kończy się na 0 zł. Wiek N to pełne lata (podłoga z wieku).',
-    ].filter(Boolean))}`;
+      `Zamiast portfela „na zawsze” liczymy taki, który wystarczy dokładnie do wieku ${z.deathAge} — czyli na ${z.yearsN} lat wypłat. ${gl('do-zera', 'Cel „do zera”')} to dzisiejsza wartość wszystkich tych wypłat razem.`,
+      `Wypłata w pierwszym roku jest taka sama jak w klasycznej fazie wypłat: cel klasyczny × ${gl('swr', 'stopa wypłat')} = ${money(z.withdrawalYear1)}/rok${z.withdrawalGrowthReal > 0 ? `; rośnie o ${Fmt.formatPct(z.withdrawalGrowthReal)} realnie rocznie — dlatego cel „do zera” jest wyższy niż przy stałych wydatkach` : ', stała w dzisiejszych złotówkach (nominalnie rośnie z inflacją)'}.`,
+      `Między wypłatami portfel pracuje na ${Fmt.formatPct(z.realRate)} ${gl('realnie', 'realnie')} (realny zwrot po FIRE — ustawisz go w Plan → Profil i FIRE).`,
+      `Tabela startuje od dokładnie celu „do zera” i kończy się na 0 zł. Cel klasyczny do porównania liczymy w tym samym miesiącu (${esc(Fmt.formatMonthGenitive(z.startYm))}) — oba cele rosną z wydatkami, więc porównanie z dwóch różnych dat byłoby mylące.`,
+    ], `cel = W₁·(1−qᴺ)/(1−q), q = 1/(1+r), N = ${z.yearsN}`)}`;
 }
 
 export function dieWithZeroCard({ resultHTML, deathAge }) {
@@ -312,6 +306,7 @@ export function dieWithZeroCard({ resultHTML, deathAge }) {
 
 export function belkaCard({ ts, fireWith, fireWithout }) {
   return `<div class="card"><h2>Podatek Belki 🧾</h2>
+    <p class="muted small">Ile 19% podatku od zysków kapitałowych zabierze przy wypłacie — i o ile przez to rośnie Twój cel FIRE.</p>
     ${kv('Cel FIRE (netto, bez podatku)', money(ts.targetNet))}
     ${kv('Cel FIRE (brutto, z podatkiem)', money(ts.targetGross))}
     ${kv('Różnica przez podatek', money(ts.targetGross - ts.targetNet), 'warn-text')}
@@ -319,12 +314,11 @@ export function belkaCard({ ts, fireWith, fireWithout }) {
     ${kv('Portfel po podatku (dziś)', money(ts.netValueReal))}
     ${kv('Data FIRE z podatkiem', fireCell(fireWith, fireWithout))}
     ${metodologia([
-      'Aplikacja śledzi koszt zakupu (basis) Twoich wpłat nominalnie: wpłata powiększa basis o swoją ówczesną wartość w złotówkach, wypłata zabiera basis proporcjonalnie, wzrost portfela go nie zmienia.',
-      'Podatek przy wypłacie = 19% × udział zysku = 19% × (1 − basis ÷ wartość nominalna). Od samych wpłat (kapitału) podatku nie ma.',
-      'Basis liczymy nominalnie, bo tak działa podatek Belki — zysk czysto inflacyjny też jest opodatkowany, więc realnie oddajesz więcej niż 19% realnego zysku.',
-      'Cel brutto = cel netto ÷ (1 − 19% × udział zysku) — tyle musi mieć portfel, żeby po podatku zostało dokładnie tyle, ile potrzebujesz.',
-      'Portfel startowy traktujemy jako w całości wpłaty (basis = wartość na starcie) — bez tej informacji to najprostsze bezpieczne założenie.',
-    ])}
+      `Zapisujemy, ile złotówek naprawdę wpłacasz — to Twój ${gl('belka', 'koszt nabycia')}. Wpłata go powiększa, wypłata zabiera proporcjonalny kawałek, a wzrost rynku go nie zmienia. Portfel startowy traktujemy w całości jako wpłaty.`,
+      'Przy wypłacie podatek to 19% × udział zysku w portfelu. Od samych wpłat (Twojego kapitału) podatku nie ma.',
+      `Liczymy ${gl('realnie', 'nominalnie')}, bo tak działa podatek Belki: zysk czysto inflacyjny też jest opodatkowany — realnie oddajesz więcej niż 19% realnego zysku.`,
+      'Cel brutto powiększamy dokładnie o tyle, żeby po zapłaceniu podatku zostało to, czego potrzebujesz na wydatki.',
+    ], 'cel brutto = cel netto ÷ (1 − 19% × udział zysku); udział zysku = 1 − koszt nabycia ÷ wartość nominalna')}
   </div>`;
 }
 
@@ -333,6 +327,7 @@ export function belkaCard({ ts, fireWith, fireWithout }) {
 export function ikeIkzeCard({ ts, fireWith, fireWithout, pitRate, employmentForm }) {
   const empLabel = employmentForm === 'selfEmployed' ? 'działalność' : 'etat';
   return `<div class="card"><h2>IKE i IKZE 🛡️</h2>
+    <p class="muted small">Jak dzielą się Twoje pieniądze między konta emerytalne a zwykłe — i ile podatku oszczędzają ulgi.</p>
     ${kv('Na IKE', money(ts.buckets.ike))}
     ${kv('Na IKZE', money(ts.buckets.ikze))}
     ${kv('Konto zwykłe (opodatkowane)', money(ts.buckets.taxable))}
@@ -343,9 +338,9 @@ export function ikeIkzeCard({ ts, fireWith, fireWithout, pitRate, employmentForm
     ${kv('Zwrot PIT w przyszłym roku (prognoza)', money(ts.nextRefund))}
     ${kv('Data FIRE z IKE/IKZE', fireCell(fireWith, fireWithout))}
     ${metodologia([
-      'Każda miesięczna nadwyżka wypełnia najpierw roczny limit IKZE, potem IKE, reszta idzie na zwykłe konto. Limity z 2026 r. traktujemy jako stałe w dzisiejszych złotówkach — ustawowo rosną z prognozowanym przeciętnym wynagrodzeniem, czyli mniej więcej z inflacją.',
-      `Zwrot PIT za wpłaty na IKZE (${Fmt.formatPct(pitRate)} wpłaconej kwoty) trafia do planu w kwietniu następnego roku jako dodatkowa oszczędność.`,
-      'Warunek FIRE porównuje z celem portfel «po podatku»: IKE bez podatku po 60. roku życia (wcześniej jak zwykłe konto), IKZE minus 10% ryczałtu po 65. (wcześniej minus Twoja stawka PIT od całości), zwykłe konto minus 19% od zysków.',
+      'Każda miesięczna nadwyżka wypełnia najpierw roczny limit IKZE, potem IKE, a reszta idzie na zwykłe konto. Limity z 2026 r. traktujemy jako stałe w dzisiejszych złotówkach (ustawowo rosną mniej więcej z inflacją).',
+      `Za wpłaty na IKZE dostajesz zwrot PIT — ${Fmt.formatPct(pitRate)} wpłaconej kwoty. Doliczamy go do planu w kwietniu następnego roku jako dodatkową oszczędność.`,
+      `Do warunku FIRE porównujemy z celem portfel „po podatku”: IKE bez podatku po 60. urodzinach, IKZE minus 10% ryczałtu po 65. (wcześniej oba jak zwykłe konto), zwykłe konto minus 19% ${gl('belka', 'podatku Belki')} od zysków.`,
       'W fazie wypłat pieniądze wypływają najpierw ze zwykłego konta, potem z IKE, na końcu z IKZE — konta z ulgami pracują najdłużej.',
     ])}
   </div>`;
@@ -386,9 +381,9 @@ export function sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows }
     ${mini('Miesięczne oszczędności', ['Zmiana', 'Data FIRE'], savings)}
     ${mini('Stopa wypłat (SWR)', ['SWR', 'Mnożnik', 'Cel', 'Różnica vs 4%', 'Data FIRE'], swr)}
     ${metodologia([
-      'Każdy wariant to pełny przebieg prognozy (plan → dług → salda → projekcja) z jednym zmienionym założeniem.',
-      'Cel przy SWR = roczne wydatki ÷ SWR; mnożnik = 1 ÷ SWR (4% → 25× rocznych wydatków).',
-    ])}
+      'Bierzemy Twoją prognozę, zmieniamy jedno założenie i liczymy wszystko od nowa (plan → dług → salda → projekcja) — reszta zostaje bez zmian.',
+      `Cel przy danej ${gl('swr', 'stopie wypłat')} to roczne wydatki ÷ stopa; przy 4% potrzebujesz 25× rocznych wydatków, przy 3% już 33×.`,
+    ], 'cel = roczne wydatki ÷ SWR; mnożnik = 1 ÷ SWR')}
   </div>`;
 }
 
@@ -419,6 +414,7 @@ function remainingSection(remainingBarHTML, overLabel) {
 export function mortgageCard({ ma, chartHTML, barHTML, remainingBarHTML }) {
   const saved = ma.interestSavedSoFar;
   return `<div class="card"><h2>Kredyt 🏠</h2>
+    <p class="muted small">Gdzie jesteś w spłacie kredytu, ile kosztują Cię odsetki i ile realnie dają nadpłaty.</p>
     ${kv('Saldo (nominalnie)', money(ma.balanceNominal))}
     ${kv('Odsetki zapłacone', money(ma.paidInterest))}
     ${kv('Kapitał spłacony', money(ma.paidPrincipal))}
@@ -436,10 +432,10 @@ export function mortgageCard({ ma, chartHTML, barHTML, remainingBarHTML }) {
     ${barHTML ? `<h3>Struktura rat: kapitał vs odsetki</h3>${barHTML}${barLegend()}
       <p class="muted small">Rozkład kontraktowy (bez nadpłat) po latach kredytu — odsetki maleją, kapitał rośnie.</p>` : ''}
     ${metodologia([
-      `Rata = ${money(ma.payment, 2)}/mies. (annuitet, nominalnie — kredyt to jeden z dwóch nominalnych kontraktów, obok długu rodzinnego).`,
-      `Oszczędność = Σ odsetek kontraktu − zapłacone − pozostałe wg harmonogramu = ${money(ma.contractTotalInterest)} − ${money(ma.paidInterest)} − ${money(ma.scheduleOnlyRemainingInterest)} = ${money(saved)}`,
-      'Prognoza „z nadpłatami” zakłada strategię aplikacji: cała miesięczna nadwyżka nadpłaca kredyt, nadmiar wraca do portfela.',
-      'Wykres „Ile zostało do spłaty”: na początku każdego roku kredytu saldo kapitału + suma wszystkich przyszłych odsetek; blade słupki = kontrakt bez nadpłat, pełne = historia z nadpłatami + prognoza.',
+      `Twoja rata to ${money(ma.payment, 2)}/mies. — stała przez cały okres (${gl('annuitet', 'rata równa')}) i ${gl('realnie', 'nominalna')}: umowa kredytu jest w przyszłych złotówkach, więc realnie rata z czasem „topnieje” z inflacją.`,
+      `Oszczędność z nadpłat: od wszystkich odsetek umowy (${money(ma.contractTotalInterest)}) odejmujemy już zapłacone (${money(ma.paidInterest)}) i te, które zostały przy samej racie (${money(ma.scheduleOnlyRemainingInterest)}) = ${money(saved)}.`,
+      `Prognoza „z nadpłatami” zakłada strategię aplikacji: cała miesięczna nadwyżka ${gl('nadplata', 'nadpłaca')} kredyt, nadmiar wraca do portfela.`,
+      'Wykres „Ile zostało do spłaty”: na początku każdego roku kredytu pokazujemy saldo kapitału + wszystkie przyszłe odsetki. Blade słupki to umowa bez nadpłat, pełne — historia z nadpłatami + prognoza.',
     ])}
   </div>`;
 }
@@ -449,6 +445,7 @@ export function mortgageCard({ ma, chartHTML, barHTML, remainingBarHTML }) {
 export function familyLoanCard({ fa, chartHTML, barHTML, remainingBarHTML }) {
   const saved = fa.interestSavedSoFar;
   return `<div class="card"><h2>Dług rodzinny 👨‍👩‍👧</h2>
+    <p class="muted small">Gdzie jesteś w spłacie długu rodzinnego i co zmieniają jawne nadpłaty z check-inów.</p>
     ${kv('Saldo (nominalnie)', money(fa.balanceNominal))}
     ${kv('Odsetki zapłacone', money(fa.paidInterest))}
     ${kv('Kapitał spłacony', money(fa.paidPrincipal))}
@@ -466,10 +463,10 @@ export function familyLoanCard({ fa, chartHTML, barHTML, remainingBarHTML }) {
     ${barHTML ? `<h3>Struktura rat: kapitał vs odsetki</h3>${barHTML}${barLegend()}
       <p class="muted small">Rozkład kontraktowy (bez nadpłat) po latach spłaty.</p>` : ''}
     ${metodologia([
-      `Rata = ${money(fa.payment, 2)}/mies. (annuitet z okna spłaty, nominalnie — dług rodzinny to drugi nominalny kontrakt w aplikacji).`,
-      `Oszczędność = Σ odsetek kontraktu − zapłacone − pozostałe wg harmonogramu = ${money(fa.contractTotalInterest)} − ${money(fa.paidInterest)} − ${money(fa.scheduleOnlyRemainingInterest)} = ${money(saved)}`,
-      'Dług rodzinny ma harmonogram stały — nie jest agresywnie nadpłacany; przyspieszają go tylko jawne nadpłaty z check-inu.',
-      'Wykres „Ile zostało do spłaty”: na początku każdego roku spłaty saldo kapitału + suma wszystkich przyszłych odsetek; blade słupki = kontrakt, pełne = historia (z jawnymi nadpłatami) + prognoza.',
+      `Rata to ${money(fa.payment, 2)}/mies. — ${gl('annuitet', 'rata równa')} dobrana tak, by dług zniknął dokładnie na koniec umówionego okna spłaty. Jak kredyt, dług rodzinny jest ${gl('realnie', 'nominalny')} (umowa w przyszłych złotówkach).`,
+      `Oszczędność z nadpłat: od wszystkich odsetek umowy (${money(fa.contractTotalInterest)}) odejmujemy już zapłacone (${money(fa.paidInterest)}) i te, które zostały przy samej racie (${money(fa.scheduleOnlyRemainingInterest)}) = ${money(saved)}.`,
+      `Dług rodzinny spłaca się według stałego harmonogramu — miesięczna nadwyżka go nie nadpłaca; przyspieszają go tylko jawne ${gl('nadplata', 'nadpłaty')} z check-inu.`,
+      'Wykres „Ile zostało do spłaty”: na początku każdego roku spłaty pokazujemy saldo kapitału + wszystkie przyszłe odsetki. Blade słupki to umowa, pełne — historia (z jawnymi nadpłatami) + prognoza.',
     ])}
   </div>`;
 }

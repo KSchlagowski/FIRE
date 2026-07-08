@@ -516,6 +516,29 @@ input[type="range"]:focus::-webkit-slider-thumb { outline: 2px solid var(--accen
   overflow-x: auto;
 }
 
+/* „Jak to liczymy?" — kroki zwykłym tekstem; .formula zostaje tylko dla
+   opcjonalnej linii „Wzór dla dociekliwych". */
+.howto {
+  margin: .35rem 0;
+  padding-left: 1.35rem;
+  font-size: .82rem;
+  font-weight: 400;
+}
+.howto li { margin: .35rem 0; line-height: 1.5; }
+.howto a { color: var(--accent); text-decoration: underline dotted; }
+
+/* Słowniczek: wpis + podświetlenie po wejściu z linku #/slowniczek/:term */
+.gl-entry { padding: .6rem 0; border-bottom: 1px solid var(--line); }
+.gl-entry:last-child { border-bottom: none; }
+.gl-entry h3 { margin: 0 0 .25rem; font-size: .95rem; }
+.gl-entry p { margin: 0; font-size: .82rem; font-weight: 400; line-height: 1.5; }
+.gl-entry.gl-hit {
+  background: var(--card2);
+  outline: 2px solid var(--accent);
+  border-radius: 10px;
+  padding: .6rem .6rem;
+}
+
 .vbar-row { display: flex; align-items: center; gap: .5rem; margin: .25rem 0; font-size: .78rem; }
 .vbar-row .vbar-label { flex: 0 0 8rem; }
 .vbar-row .vbar-count { flex: 0 0 1.5rem; text-align: right; color: var(--muted); }
