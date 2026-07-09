@@ -79,17 +79,28 @@
 
 ## 4. Phase 4 — Habit & motivation features (one release each)
 
-- [ ] 4.1 Rebase `docs/plan-checkin-notes.md` to schema v6: `case 5` migration stamps
+- [x] 4.1 Rebase `docs/plan-checkin-notes.md` to schema v6: `case 5` migration stamps
   `note: null`, `createState` version 6, fixture group renumbered to next free F-number
-- [ ] 4.2 Implement check-in notes: optional ≤200-char note on the entry, inert in math,
+  (the doc did not exist — authored from the habit-motivation spec; **rebased to v7**,
+  since IKE/IKZE had meanwhile taken v6: `case 6` migration, fixture group **F42**)
+- [x] 4.2 Implement check-in notes: optional ≤200-char note on the entry, inert in math,
   `esc()` at render, shown in Historia; add the migration + note fixtures; release
-- [ ] 4.3 Implement savings-history chart (`docs/plan-savings-history-chart.md`): actual-vs-
-  plan line at top of Historia, reuse `chartSVG` + `zoomable`; release
-- [ ] 4.4 Implement milestones with celebration (`docs/plan-milestones-celebration.md`):
+  (**v1.26.0**; also added the quoted `Notatka` CSV column deferred by task 5.4 —
+  appended last so no F40 column index moved)
+- [x] 4.3 Implement savings-history chart (`docs/plan-savings-history-chart.md`): actual-vs-
+  plan line at top of Historia, reuse `chartSVG` + `zoomable`; release (**v1.27.0**;
+  engine fixture group **F43** — doc said F30, taken by Belka; the negative-domain
+  `chartSVG` extension landed as F29f–g with the doc's byte-parity guard, and the
+  chart defs carry `label`s so the 5.1 tap-to-inspect works on it)
+- [x] 4.4 Implement milestones with celebration (`docs/plan-milestones-celebration.md`):
   10/25/50/75/100% + first 100k + half/full mortgage, celebrated via the check-in modal
   layer; persist `milestonesSeen` (schema bump, renumbered fixtures); release
-- [ ] 4.5 Implement annual report (`docs/plan-annual-report.md`): read-only `#/raport/:year`
-  retrospective; surface notes where useful; release
+  (**v1.28.0**; schema **v7→v8** — doc said v4→v5 — and fixture group **F44**;
+  milestone copy authored in coach.js since the doc's `plans/E` source is long gone)
+- [x] 4.5 Implement annual report (`docs/plan-annual-report.md`): read-only `#/raport/:year`
+  retrospective; surface notes where useful; release (**v1.29.0**; fixture group **F45**
+  — doc said F30, taken by Belka; notes surfaced as a „Notatki z roku" card since 4.2
+  shipped first, resolving the design's open question)
 
 ## 5. Phase 5 — Deeper analysis features (one release each)
 
@@ -111,9 +122,13 @@
 
 ## 6. Per-phase verification (repeat for every release)
 
-Done for the four Phase 5 releases (v1.20.0–v1.23.0), Phase 3 (v1.24.0), and Phase 2
+Done for the four Phase 5 releases (v1.20.0–v1.23.0), Phase 3 (v1.24.0), Phase 2
 (v1.25.0 — re-bumped from v1.24.0 on merge, since Phase 3 shipped first and took v1.24.0;
-no new app files, PRECACHE unchanged, CACHE bumped); repeat when Phase 4 ships.
+no new app files, PRECACHE unchanged, CACHE bumped), and the four Phase 4 releases
+(v1.26.0–v1.29.0 — no new app files, PRECACHE unchanged, CACHE bumped 4×; 217/217 in
+Node and in the browser runner under `/FIRE/`; headless dark+light click-through incl.
+a v5→v8 boot migration, the XSS literal-render check on notes (6.5), the once-ever
+milestone celebration, the negative-domain Historia chart, and `#/raport` routing/redirects).
 
 - [x] 6.1 `node tests/run-tests.js` → exit 0 (extend fixtures when engine/storage behavior
   changes; copy-only phases need none) — 195/195 after F37–F40
