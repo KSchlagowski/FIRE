@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (217 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (248 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -141,6 +141,7 @@ and, if it's a top-level tab, the `#tabbar` list in `index.html`.
   taxes:       { belkaEnabled,                   // Belka 19% toggle (default false)
                  ikeIkze: { enabled, employmentForm, pitRate, ikeStart, ikzeStart } },
   entries:     [ … monthly check-ins (incl. an optional inert `note`, ≤200 chars) … ],
+  events:      [ … planned one-off {id, month, amount(signed real PLN), label, createdAt} … ],
   ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt,
                  milestonesSeen } }   // celebrated milestone keys — once ever
 ```
@@ -386,6 +387,27 @@ classic, the Plan-A worked-example correction — and the r=5% closed form with
 `target < classic`), F46h (pension + barista monotonicity + purity), and F47e
 (`projectBridgeFire` barista echo fields + FIRE-date-not-later). The barista
 `null` default keeps every prior expected number byte-identical.
+F48 covers the planned one-off events (`state.events`, schema v10): the
+`createState` default + `version 10`/`SCHEMA_VERSION 10`, the v9→v10 migration
+(missing `events` → `[]`, explicit list untouched, full v1 chain), validation
+(a pre-v10 blob without `events` passes via `s.events || []`, a non-array list /
+bad `month` / non-finite `amount` rejected), the `addEvent`/`removeEvent`
+mutations (reject invalid/past/zero, accept the current month, monotonic ids —
+`max+1`, no reuse after deleting the middle — grosze rounding, month sort,
+80-char label slice, unknown-id no-op, `recomputeDerived` fired), and the
+`projectFire` injection: an income event in the invest phase lifts the portfolio
+series by exactly `amount × (1+rPort)^k` and pulls `fireYm` not-later; an expense
+in the saving phase drains cash then portfolio (hand-computed) and a big one
+pushes `fireYm` later; a debt-phase income overpays the mortgage (earlier
+`debtFreeYm`, spill to portfolio when it exceeds the balance); no double counting
+(an event ≤ `uptoYm` or pre-anchor leaves the series byte-identical); verdicts
+untouched (`buildPlan`/`plannedSavingsFor`/check-in snapshot+verdict identical
+with and without an event); purity (`projectionWith` doesn't mutate `state`,
+`recomputeDerived` twice → identical series); the solver monotonicity (a large
+future expense raises `solveExtraSavingsForAge`'s requirement); and the
+export/import round-trip preserving `events` exactly. A state with no events is
+byte-identical to prior behavior — the regression guard is the rest of the suite
+passing untouched.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

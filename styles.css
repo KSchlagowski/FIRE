@@ -361,6 +361,23 @@ details.section summary { cursor: pointer; font-weight: 600; min-height: 40px; d
 .hist-actions .hist-remove { flex-basis: 100%; }   /* długa etykieta = własny wiersz */
 .hist-add { margin-top: .75rem; }
 
+/* ── Zdarzenia jednorazowe ── */
+.ev-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .65rem .25rem;
+  border-bottom: 1px solid var(--line);
+  min-height: 48px;
+}
+.ev-row:last-child { border-bottom: none; }
+.ev-row .ev-main { flex: 1; overflow-wrap: anywhere; }
+.ev-row .ev-when { font-weight: 600; }
+.ev-row .ev-amount { font-weight: 700; white-space: nowrap; }
+.ev-row.ev-past { opacity: .55; }
+.ev-badge { margin-top: .1rem; }
+.ev-del { flex: 0 0 48px; min-height: 48px; padding: 0; font-size: 1.1rem; line-height: 1; }
+
 /* ── Toast ── */
 .toast {
   position: fixed;
