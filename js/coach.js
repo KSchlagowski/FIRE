@@ -153,9 +153,86 @@ const DECISION = {
   ],
 };
 
+// ── Kamienie milowe (engine.MILESTONES_ORDER) — tytuł + 2 warianty treści ──
+// Klucze są schematem (utrwalane w state.ui.milestonesSeen) — nie zmieniać.
+// Uwaga: const MILESTONES wyżej to kamienie SERII (3/6/12 mies.) — co innego.
+
+const MILESTONE_MSGS = {
+  fi10: {
+    title: '10% celu FIRE',
+    variants: [
+      'Pierwsze 10% celu za Tobą. Najtrudniejszy jest start — a Ty już jedziesz.',
+      'Co dziesiąta złotówka Twojej wolności już pracuje. Fundament stoi.',
+    ],
+  },
+  fi25: {
+    title: 'Ćwierć celu FIRE',
+    variants: [
+      'Ćwierć drogi do FIRE. To już nie próba — to rozpędzona maszyna.',
+      '25% celu w portfelu. Procent składany właśnie dostał do ręki poważny kapitał.',
+    ],
+  },
+  fi50: {
+    title: 'Połowa celu FIRE',
+    variants: [
+      'Połowa celu! Od teraz rynek dokłada się niemal równo z Tobą — druga połowa pójdzie szybciej.',
+      'Półmetek. Druga połowa zwykle przychodzi szybciej niż pierwsza — wzrost robi swoje.',
+    ],
+  },
+  fi75: {
+    title: '75% celu FIRE',
+    variants: [
+      '75% celu. Ostatnia prosta — metę już widać.',
+      'Trzy czwarte drogi za Tobą. FIRE przestało być planem, zaczęło być terminem.',
+    ],
+  },
+  fi100: {
+    title: 'Cel FIRE osiągnięty!',
+    variants: [
+      'Portfel pokrywa Twój cel FIRE. To jest ten moment, o który grałeś od pierwszego check-inu.',
+      'Cel FIRE osiągnięty. Cokolwiek dalej — od dziś to Twój wybór, nie konieczność.',
+    ],
+  },
+  port100k: {
+    title: 'Pierwsze 100 000 zł',
+    variants: [
+      'Sześć cyfr w portfelu. Pierwsze 100 tysięcy jest najtrudniejsze — dalej jest z górki.',
+      '100 000 zł pracuje na Ciebie. Od teraz rynek to odczuwalny współpracownik, nie kieszonkowe.',
+    ],
+  },
+  mortgageHalf: {
+    title: 'Połowa kredytu spłacona',
+    variants: [
+      'Połowa kredytu za Tobą. Od teraz w każdej racie kapitał wygrywa z odsetkami.',
+      'Kredyt spłacony w połowie — bank ma już mniejszy kawałek Twojego domu niż Ty.',
+    ],
+  },
+  mortgageDone: {
+    title: 'Kredyt spłacony!',
+    variants: [
+      'Zero na saldzie kredytu. Dom jest Twój — a cała nadwyżka od dziś idzie w portfel.',
+      'Kredyt spłacony! Największa kotwica odpięta; teraz pieniądze pracują tylko dla Ciebie.',
+    ],
+  },
+  familyDone: {
+    title: 'Dług rodzinny spłacony!',
+    variants: [
+      'Dług rodzinny zamknięty. Słowo dotrzymane — i kolejny strumień wraca do Ciebie.',
+      'Rodzinne rozliczenia wyczyszczone. Zostały tylko cele, które wybierasz sam.',
+    ],
+  },
+};
+
 function pickSeeded(variants, seed) {
   const i = ((Math.trunc(seed) % variants.length) + variants.length) % variants.length;
   return variants[i];
+}
+
+// { title, text } dla klucza kamienia; null dla nieznanego (UI pomija blok).
+export function milestoneMessage(key, seed) {
+  const m = MILESTONE_MSGS[key];
+  if (!m) return null;
+  return { title: m.title, text: pickSeeded(m.variants, seed) };
 }
 
 export function checkinCelebration(verdict, seed) {

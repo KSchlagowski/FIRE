@@ -7,10 +7,10 @@ import * as Sim from './simulation.js';
 import * as Mot from './motivation.js';
 import { chartSVG, stackedBarSVG, tipHit } from './charts.js';
 import { glossaryScreen } from './glossary.js';
-import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
+import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage, milestoneMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.27.0';
+export const APP_VERSION = '1.28.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1061,6 +1061,10 @@ function renderCheckin(month) {
     const prevFireYm = state.derived.projection.reached ? state.derived.projection.fireYm : null;
     const wasFirst = state.entries.length === 0;
     const prevEntry = [...state.entries].filter(e => e.month < m).sort((a, b) => (a.month < b.month ? 1 : -1))[0];
+    // Kamienie milowe: snapshot statusu PRZED mutacją, diff PO niej — celebrują
+    // tylko przekroczenia z tego zapisu; obejrzane klucze jadą tym samym persist().
+    const d0 = state.derived;
+    const msBefore = E.milestoneStatus(state, d0.balances, d0.debt, d0.family, d0.uptoYm);
     let entry;
     try {
       entry = E.applyCheckIn(state, {
@@ -1074,11 +1078,21 @@ function renderCheckin(month) {
       errBox.innerHTML = `<div class="field-error">${esc(err.message)}</div>`;
       return;
     }
+    const d1 = state.derived; // applyCheckIn przeliczył pochodne
+    const msAfter = E.milestoneStatus(state, d1.balances, d1.debt, d1.family, d1.uptoYm);
+    const crossed = E.newMilestones(msBefore, msAfter, state.ui.milestonesSeen);
+    if (crossed.length) {
+      const seen = Array.isArray(state.ui.milestonesSeen) ? state.ui.milestonesSeen : [];
+      state.ui.milestonesSeen = [...seen, ...crossed];
+    }
     persist();
     renderCheckinResult(entry, { prevFireYm, wasFirst, prevEntry });
+    const seed = Math.floor(Math.random() * 1e6);
+    const ms = crossed.length ? milestoneMessage(crossed[0], seed) : null;
     showModal(Mot.checkinModal({
       verdict: entry.verdict,
-      message: checkinCelebration(entry.verdict, Math.floor(Math.random() * 1e6)),
+      message: checkinCelebration(entry.verdict, seed),
+      milestone: ms ? { ...ms, extraTitles: crossed.slice(1).map(k => milestoneMessage(k, seed).title) } : null,
     }));
   });
 }

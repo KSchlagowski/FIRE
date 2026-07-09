@@ -4,7 +4,7 @@
 import * as E from '../js/engine.js';
 import * as F from '../js/format.js';
 import * as S from '../js/storage.js';
-import { coachMessage, checkinCelebration, decisionMessage } from '../js/coach.js';
+import { coachMessage, checkinCelebration, decisionMessage, milestoneMessage } from '../js/coach.js';
 import { chartSVG, stackedBarSVG, tipHit } from '../js/charts.js';
 import { FIX } from './fixtures.js';
 
@@ -3226,4 +3226,143 @@ test('F43e: zamrożony snapshot — zmiana założeń nie przepisuje wykresu', (
   E.recomputeDerived(st, NOW);
   const h = E.monthlySavingsHistory(st.entries);
   assertEq(h[0].planned, frozen, 'planned = snapshot sprzed zmiany założeń');
+});
+
+// ── F44: kamienie milowe z celebracją (milestoneStatus/newMilestones) ──────
+// Celebracja tylko przy przekroczeniu (false→true wokół zapisu check-inu) i
+// tylko raz (state.ui.milestonesSeen, schemat v8). Plan:
+// docs/plan-milestones-celebration.md (tam „F30"/v5 — zajęte → F44/v8).
+
+const NO_LOAN = () => ({ started: false, paidPct: 0, balanceNominal: 0 });
+
+test('F44a: milestoneStatus — progi FI% (z EPS), port100k, cel zdegenerowany', () => {
+  const st = baseState();
+  const upto = '2026-06';
+  const target = E.fireTargetAt(st, upto);
+  assertTrue(target > 0, 'cel dodatni w fixture');
+  const at = p => E.milestoneStatus(st, { portfolio: p }, NO_LOAN(), NO_LOAN(), upto);
+  assertEq(at(0.10 * target - 1).fi10, false, 'tuż pod 10% → false');
+  assertEq(at(0.10 * target - E.EPS / 2).fi10, true, '10% − EPS/2 → true (tolerancja)');
+  const q25 = at(0.25 * target);
+  assertEq(q25.fi25, true, '25% → fi25');
+  assertEq(q25.fi50, false, '25% → fi50 false');
+  const full = at(target);
+  for (const k of ['fi10', 'fi25', 'fi50', 'fi75', 'fi100']) assertEq(full[k], true, `${k} przy pełnym celu`);
+  assertEq(at(99999.98).port100k, false, '99 999,98 → false');
+  assertEq(at(100000).port100k, true, '100 000 → true');
+  // Cel 0 (zerowe wydatki) → żaden próg FI% nie jest „osiągnięty", zero dzielenia.
+  const zero = baseState({ assumptions: { monthlyLivingExpenses: 0 } });
+  const z = E.milestoneStatus(zero, { portfolio: 1e9 }, NO_LOAN(), NO_LOAN(), upto);
+  for (const k of ['fi10', 'fi25', 'fi50', 'fi75', 'fi100']) assertEq(z[k], false, `${k} przy celu 0`);
+});
+
+test('F44b: newMilestones — przekroczenie, seen, priorytet, odporność', () => {
+  const before = { fi10: true, fi25: false, fi50: false, fi75: false, fi100: false, port100k: false, mortgageHalf: false, mortgageDone: false, familyDone: false };
+  const after = { ...before, fi25: true, port100k: true };
+  assertEq(E.newMilestones(before, after).join(','), 'fi25,port100k', 'kolejność wg MILESTONES_ORDER');
+  assertEq(E.newMilestones(before, after, ['fi25']).join(','), 'port100k', 'obejrzane pomijane');
+  assertEq(E.newMilestones(before, after, null).join(','), 'fi25,port100k', 'seen=null bezpieczne');
+  assertEq(E.newMilestones(before, after, 'oops').join(','), 'fi25,port100k', 'seen nie-tablica bezpieczne');
+  assertEq(E.newMilestones(after, after).length, 0, 'true→true nigdy nie wraca');
+});
+
+test('F44c: kredytowe kamienie przez replay — połowa, spłata, dług rodzinny', () => {
+  // Kredyt 120 000 @ 0% / 10 lat → rata 1000; rodzinny 6 000 @ 0%, okno 6 mies. → rata 1000.
+  const st = baseState({
+    anchorMonth: '2026-01',
+    housing: {
+      housePlan: housePlan({
+        moveInMonth: '2026-01',
+        mortgage: { startMonth: '2026-01', principal: 120000, rateNominal: 0, termYears: 10 },
+        familyLoan: { enabled: true, startMonth: '2026-01', endMonth: '2026-06', principal: 6000, rateNominal: 0, paymentOverrideMonthly: null },
+      }),
+    },
+  });
+  // Nadpłata 57 000 w marcu: po 3 ratach (3 000) + nadpłacie spłacone 60 000 = 50%.
+  st.entries.push(entry('2026-03', 70000, 5000, { overpayment: 57000 }));
+  // Nadpłata 59 000 w maju zeruje resztę salda (60 000 − rata kwietnia i maja).
+  st.entries.push(entry('2026-05', 70000, 5000, { overpayment: 59000 }));
+  const stat = upto => E.milestoneStatus(st, { portfolio: 0 },
+    E.replayDebt(st, upto), E.replayFamilyLoan(st, upto), upto);
+  assertEq(stat('2026-02').mortgageHalf, false, 'luty: przed połową');
+  assertEq(stat('2026-03').mortgageHalf, true, 'marzec: paidPct ≥ 0.5');
+  assertEq(stat('2026-04').mortgageDone, false, 'kwiecień: saldo > 0');
+  assertEq(stat('2026-05').mortgageDone, true, 'maj: saldo 0 po nadpłacie');
+  assertEq(stat('2026-05').familyDone, false, 'maj: rodzinny jeszcze żywy');
+  assertEq(stat('2026-06').familyDone, true, 'czerwiec (endMonth): rodzinny 0');
+  // Stan bez kredytu: kamienie kredytowe nigdy nie strzelą (started false).
+  const plain = baseState();
+  const s = E.milestoneStatus(plain, { portfolio: 1e9 },
+    E.replayDebt(plain, '2026-06'), E.replayFamilyLoan(plain, '2026-06'), '2026-06');
+  assertEq(s.mortgageHalf || s.mortgageDone || s.familyDone, false, 'EMPTY_LOAN → false');
+});
+
+test('F44d: integracja z check-inem — przekroczenie raz, seen wycisza', () => {
+  const mk = () => {
+    const s = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 95000 } });
+    E.recomputeDerived(s, NOW);
+    return s;
+  };
+  const run = seen => {
+    const s = mk();
+    const d0 = s.derived;
+    const before = E.milestoneStatus(s, d0.balances, d0.debt, d0.family, d0.uptoYm);
+    E.applyCheckIn(s, { month: '2026-01', earned: 20000, spent: 5000 }, NOW);
+    const d1 = s.derived;
+    const after = E.milestoneStatus(s, d1.balances, d1.debt, d1.family, d1.uptoYm);
+    return E.newMilestones(before, after, seen);
+  };
+  assertEq(run([]).join(','), 'port100k', 'wpłata 15 000 przekracza 100 tys.');
+  assertEq(run(['port100k']).length, 0, 'obejrzany klucz nie celebruje ponownie');
+});
+
+test('F44e: milestoneMessage — tytuły/warianty per klucz, seed, nieznany klucz', () => {
+  for (const key of E.MILESTONES_ORDER) {
+    const texts = new Set();
+    for (const seed of [0, 1]) {
+      const m = milestoneMessage(key, seed);
+      assertTrue(m && m.title && m.title.length > 0, `${key}: tytuł niepusty`);
+      assertTrue(m.text && m.text.length > 0, `${key}: treść niepusta`);
+      texts.add(m.text);
+    }
+    assertEq(texts.size, 2, `${key}: 2 unikalne warianty`);
+    assertEq(milestoneMessage(key, 2).text, milestoneMessage(key, 0).text, `${key}: seed modulo`);
+    assertEq(milestoneMessage(key, -1).title, milestoneMessage(key, 1).title, `${key}: ujemny seed bezpieczny`);
+  }
+  assertEq(milestoneMessage('nie-ma-takiego', 0), null, 'nieznany klucz → null');
+});
+
+test('F44f: migracja v7→v8 — milestonesSeen dokładane/normalizowane/nietykane', () => {
+  const st = baseState();
+  assertEq(st.version, S.SCHEMA_VERSION, 'createState zsynchronizowany (v8)');
+  assertTrue(Array.isArray(st.ui.milestonesSeen) && st.ui.milestonesSeen.length === 0, 'nowy stan: pusta lista');
+  // v7 bez pola → [] po migracji.
+  const v7 = JSON.parse(JSON.stringify(st));
+  v7.version = 7;
+  delete v7.ui.milestonesSeen;
+  const m7 = S.migrate(S.validateState(v7));
+  assertEq(m7.version, S.SCHEMA_VERSION);
+  assertEq(JSON.stringify(m7.ui.milestonesSeen), '[]', 'pole dołożone jako []');
+  // Nie-tablica → znormalizowana do [].
+  const bad = JSON.parse(JSON.stringify(st));
+  bad.version = 7;
+  bad.ui.milestonesSeen = 'oops';
+  assertEq(JSON.stringify(S.migrate(S.validateState(bad)).ui.milestonesSeen), '[]', 'nie-tablica → []');
+  // Istniejąca niepusta lista przeżywa migrację nietknięta.
+  const keep = JSON.parse(JSON.stringify(st));
+  keep.version = 7;
+  keep.ui.milestonesSeen = ['fi10', 'port100k'];
+  assertEq(S.migrate(S.validateState(keep)).ui.milestonesSeen.join(','), 'fi10,port100k', 'jawna lista nietknięta');
+  // Łańcuch v1→…→v8 dokłada pole (v1 sprzed ui.milestonesSeen).
+  const v1 = JSON.parse(JSON.stringify(st));
+  v1.version = 1;
+  delete v1.housing.housePlan.familyLoan;
+  delete v1.debt.familyOverrides;
+  delete v1.assumptions.postRetirementReturnReal;
+  delete v1.assumptions.freezeExpensesAtRetirement;
+  delete v1.taxes;
+  delete v1.ui.milestonesSeen;
+  const m1 = S.migrate(S.validateState(v1));
+  assertEq(m1.version, S.SCHEMA_VERSION, 'łańcuch 1→…→8');
+  assertEq(JSON.stringify(m1.ui.milestonesSeen), '[]', 'pole dołożone w łańcuchu');
 });

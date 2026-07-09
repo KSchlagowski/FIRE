@@ -140,7 +140,8 @@ and, if it's a top-level tab, the `#tabbar` list in `index.html`.
   taxes:       { belkaEnabled,                   // Belka 19% toggle (default false)
                  ikeIkze: { enabled, employmentForm, pitRate, ikeStart, ikzeStart } },
   entries:     [ … monthly check-ins (incl. an optional inert `note`, ≤200 chars) … ],
-  ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt } }
+  ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt,
+                 milestonesSeen } }   // celebrated milestone keys — once ever
 ```
 
 `state.derived` is attached at runtime by `recomputeDerived` and **stripped before
@@ -354,7 +355,16 @@ null on zero income, a build-month row with a negative frozen snapshot AND a
 negative net (the row the negative chart domain exists for), purity, and the
 frozen-snapshot invariant (assumption edits don't rewrite the chart); F29f–g
 pin the `chartSVG` negative domain (4 axis lines + min label, 0-axis at the
-plot midpoint for symmetric data) and the min = 0 byte-parity guard.
+plot midpoint for symmetric data) and the min = 0 byte-parity guard. F44 covers
+milestones (`MILESTONES_ORDER`/`milestoneStatus`/`newMilestones`, schema v8):
+FI% thresholds with the EPS tolerance and the target-0 degenerate case,
+crossing semantics (false→true only, `seen` filtering, priority order,
+null/non-array `seen` safe), the loan milestones via real replays
+(`paidPct ≥ 0.5`, zero balance, family `endMonth`; `EMPTY_LOAN` never fires),
+the check-in integration diff (a seen key stays silent), the
+`milestoneMessage` selector (2 unique variants per key, seed modulo, unknown
+key → null), and the v7→v8 migration (missing/non-array `milestonesSeen` →
+`[]`, explicit list untouched, v1 chain).
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

@@ -1,8 +1,10 @@
 // motivation.js — czyste buildery HTML warstwy motywacyjnej: modal po check-inie
 // oraz karta „Dzisiejsza decyzja" na pulpicie. Zero DOM, zero stanu modułu:
 // dane (werdykt, wpływ z engine.js, komunikat z coach.js) wchodzą parametrami,
-// wychodzi string. Mirror analysis.js/simulation.js. Wszystko efemeryczne —
-// nic nie zapisujemy (patrz ui.js: żadnego persist() w tej ścieżce).
+// wychodzi string. Mirror analysis.js/simulation.js. Kalkulatory „Dzisiejszej
+// decyzji" są efemeryczne (żadnego persist() w ich ścieżce); ścieżka modala
+// check-inu jedzie na persist() wpisu w ui.js — tam też zapisuje się
+// milestonesSeen, gdy modal niesie baner kamienia milowego.
 
 import * as Fmt from './format.js';
 import { verdictLabel, verdictEmoji } from './coach.js';
@@ -48,9 +50,17 @@ function payoffLines(amount, impact, { kind }) {
 
 // ── Modal motywacyjny po zapisaniu check-inu ─────────────────────────────
 
-export function checkinModal({ verdict, message }) {
+// milestone: null | { title, text, extraTitles?: string[] } — baner 🏆 między
+// badge'em a komunikatem trenera; kolejne klucze z tego samego zapisu idą
+// jedną linią „A do tego: …" (jeden modal, nie łańcuszek).
+export function checkinModal({ verdict, message, milestone = null }) {
+  const ms = milestone ? `<div class="banner success small">🏆 <b>${esc(milestone.title)}</b><br>${esc(milestone.text)}${
+    milestone.extraTitles && milestone.extraTitles.length
+      ? `<br><span class="muted">A do tego: ${milestone.extraTitles.map(esc).join(' · ')}</span>` : ''
+  }</div>` : '';
   return `<div class="modal-emoji">${verdictEmoji(verdict)}</div>
     <div class="badge v-${verdict}">${esc(verdictLabel(verdict))}</div>
+    ${ms}
     <div class="modal-msg">${esc(message)}</div>
     <button class="btn primary wide" data-close-modal>Dalej 🔥</button>`;
 }

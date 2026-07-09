@@ -634,6 +634,43 @@ export function computeStreak(entries) {
   return { current: run, best };
 }
 
+// ── Kamienie milowe ─────────────────────────────────────────────────────
+// Celebracja tylko przy PRZEKROCZENIU (false→true między snapshotami wokół
+// zapisu check-inu) i tylko raz w życiu (state.ui.milestonesSeen). Majątek,
+// który próg spełniał już wcześniej (onboarding, edycja założeń), milczy.
+
+// Kolejność priorytetu — pierwszy przekroczony klucz zostaje nagłówkiem
+// modala, reszta idzie w linii „A do tego…". Klucze są utrwalane w
+// state.ui.milestonesSeen — NIGDY ich nie zmieniaj (to schemat).
+export const MILESTONES_ORDER = [
+  'fi100', 'mortgageDone', 'familyDone', 'fi75', 'fi50',
+  'mortgageHalf', 'fi25', 'port100k', 'fi10',
+];
+
+// Status logiczny każdego kamienia z wyników potoku pochodnych. Czysty
+// czytelnik (styl fiStats): nic nie liczy od nowa, nic nie cache'uje.
+// fi100 to kamień PORTFELA (lustro FI%), celowo bez bramki długów — pełny
+// warunek FIRE (cel + kredyt 0 + rodzinny 0) należy wyłącznie do projectFire.
+export function milestoneStatus(state, balances, debt, family, uptoYm) {
+  const target = fireTargetAt(state, uptoYm);
+  const p = balances.portfolio;
+  const pct = q => target > 0 && p >= q * target - EPS;
+  return {
+    fi10: pct(0.10), fi25: pct(0.25), fi50: pct(0.50), fi75: pct(0.75), fi100: pct(1.0),
+    port100k: p >= 100000 - EPS,
+    mortgageHalf: debt.started && debt.paidPct >= 0.5,
+    mortgageDone: debt.started && debt.balanceNominal <= EPS,
+    familyDone: family.started && family.balanceNominal <= EPS,
+  };
+}
+
+// Przekroczenie = false→true między dwoma statusami, minus już obejrzane.
+// Zwraca klucze w kolejności MILESTONES_ORDER; toleruje seen == null/nie-tablicę.
+export function newMilestones(before, after, seen = []) {
+  const s = Array.isArray(seen) ? seen : [];
+  return MILESTONES_ORDER.filter(k => after[k] && !before[k] && !s.includes(k));
+}
+
 // ── Check-in ────────────────────────────────────────────────────────────
 
 export function applyCheckIn(state, input, now = new Date()) {
@@ -1870,7 +1907,7 @@ export function defaultAssumptions() {
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 7,
+    version: 8,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },
@@ -1893,7 +1930,7 @@ export function createState(partial = {}, now = new Date()) {
       ikeIkze: { enabled: false, employmentForm: 'employee', pitRate: 0.12, ikeStart: 0, ikzeStart: 0 },
     },
     entries: [],
-    ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null },
+    ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null, milestonesSeen: [] },
   };
   deepMerge(state, partial);
   return state;
