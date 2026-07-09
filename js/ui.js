@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.25.0';
+export const APP_VERSION = '1.26.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1012,6 +1012,10 @@ function renderCheckin(month) {
     ${field({ id: 'ci-spent', label: 'Wydane', suffix: 'zł', value: existing ? moneyVal(existing.spent) : '', hint: 'Razem z czynszem i ratą kredytu.' })}
     ${debtActive ? field({ id: 'ci-overpay', label: 'Nadpłata kredytu', suffix: 'zł', value: existing ? moneyVal(existing.overpayment) : '', placeholder: '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług.', tipText: 'Kwota wpłacona na kredyt PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
     ${familyActive ? field({ id: 'ci-fl-overpay', label: 'Nadpłata długu rodzinnego', suffix: 'zł', value: existing ? moneyVal(existing.familyOverpayment) : '', placeholder: '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług rodzinny.', tipText: 'Kwota wpłacona na dług rodzinny PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
+    <label class="field"><span class="lbl">Notatka <span class="muted">(opcjonalnie)</span></span>
+      <textarea id="ci-note" maxlength="200" rows="2" placeholder="np. premia, urlop, naprawa auta…">${existing && existing.note ? esc(existing.note) : ''}</textarea>
+      <div class="hint">Krótka historia miesiąca (do 200 znaków) — zobaczysz ją w Historii. Na liczby nie wpływa.</div>
+    </label>
     <details class="section"><summary>Popraw salda (opcjonalnie)</summary>
       <p class="muted small">Jeśli rzeczywiste saldo na koniec miesiąca różni się od wyliczonego — wpisz je tutaj. Puste = bez korekty.</p>
       ${field({ id: 'ci-cash-ov', label: 'Rzeczywista gotówka', suffix: 'zł', value: existing && existing.cashOverride != null ? moneyVal(existing.cashOverride) : '' })}
@@ -1064,6 +1068,7 @@ function renderCheckin(month) {
         overpayment: over.value || 0,
         familyOverpayment: flOver.value || 0,
         cashOverride: cashOv.value, balanceOverride: portOv.value,
+        note: $('#ci-note').value,
       });
     } catch (err) {
       errBox.innerHTML = `<div class="field-error">${esc(err.message)}</div>`;
@@ -1161,7 +1166,8 @@ function renderHistory() {
     const delta = net - e.plannedSavingsSnapshot;
     rows.push(`<div class="hist-row" data-m="${ym}">
       <div class="m"><b>${esc(Fmt.formatMonthName(ym))}</b>
-        <span class="muted small">odłożone ${Fmt.formatPLN(net)} · ${delta >= 0 ? '+' : ''}${Fmt.formatPLN(delta)} vs plan</span></div>
+        <span class="muted small">odłożone ${Fmt.formatPLN(net)} · ${delta >= 0 ? '+' : ''}${Fmt.formatPLN(delta)} vs plan</span>
+        ${e.note ? `<span class="muted small hist-note">📝 ${esc(e.note)}</span>` : ''}</div>
       <span class="badge v-${e.verdict}">${verdictEmoji(e.verdict)}</span>
     </div>
     ${histExpanded === ym ? `<div class="hist-actions">

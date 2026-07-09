@@ -505,7 +505,7 @@ test('F33: import odrzuca stany, które UI już zabrania (D6)', () => {
   const ok = baseState();
   ok.assumptions.portfolioStart = 20000;
   ok.taxes.ikeIkze = { enabled: true, employmentForm: 'employee', pitRate: 0.12, ikeStart: 8000, ikzeStart: 7000 };
-  assertEq(S.validateState(ok).version, 6, 'poprawna kompozycja przechodzi');
+  assertEq(S.validateState(ok).version, S.SCHEMA_VERSION, 'poprawna kompozycja przechodzi');
 });
 
 test('F41: głęboka walidacja importu — NaN/typy/kształty odrzucone (Faza 3)', () => {
@@ -541,13 +541,13 @@ test('F41: głęboka walidacja importu — NaN/typy/kształty odrzucone (Faza 3)
   // włączony plan domu) nadal przechodzi.
   const ok = baseState({ housing: { housePlan: housePlan() } });
   ok.entries.push(entry('2026-07', 8000, 5000));
-  assertEq(S.validateState(ok).version, 6, 'poprawny stan przechodzi');
+  assertEq(S.validateState(ok).version, S.SCHEMA_VERSION, 'poprawny stan przechodzi');
   // Kopie sprzed v5 (bez sekcji podatków) nadal przechodzą i migrują —
   // walidacja podatków jest bramkowana wersją.
   const v4 = JSON.parse(JSON.stringify(baseState()));
   v4.version = 4;
   delete v4.taxes;
-  assertEq(S.migrate(S.validateState(v4)).version, 6, 'v4 bez taxes przechodzi i migruje');
+  assertEq(S.migrate(S.validateState(v4)).version, S.SCHEMA_VERSION, 'v4 bez taxes przechodzi i migruje');
 });
 
 test('F11: odzysk z .bak po korupcji', () => {
@@ -564,18 +564,25 @@ test('F11: odzysk z .bak po korupcji', () => {
   assertEq(res.state.assumptions.monthlyIncome, 10000, '.bak trzyma poprzedni pełny zapis');
 });
 
-test('F11: v6 round-trip; migracja v1→…→6, v2→…→6, v3→…→6, v4→…→6, v5→6; nowsza wersja odrzucona', () => {
+test('F11: round-trip do najnowszej wersji; łańcuch migracji v1→…→SCHEMA_VERSION; nowsza wersja odrzucona', () => {
   const st = baseState();
-  assertEq(st.version, 6, 'nowy stan = v6');
   assertEq(st.version, S.SCHEMA_VERSION, 'engine i storage zsynchronizowane');
-  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, 6);
+  assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, S.SCHEMA_VERSION);
   const defaultIkeIkze = JSON.stringify({ enabled: false, employmentForm: 'employee', pitRate: 0.12, ikeStart: 0, ikzeStart: 0 });
+  // v6 → v7: notatka na wpisie — brakujące pole dostemplowane jako null.
+  const v6 = JSON.parse(JSON.stringify(st));
+  v6.version = 6;
+  v6.entries = [{ ...entry('2026-07', 8000, 5000), note: undefined }];
+  delete v6.entries[0].note;
+  const m6 = S.migrate(S.validateState(v6));
+  assertEq(m6.version, S.SCHEMA_VERSION);
+  assertEq(m6.entries[0].note, null, 'note dostemplowane jako null przy 6→7');
   // v5 → v6: dokładana podsekcja IKE/IKZE, domyślnie wyłączona.
   const v5 = JSON.parse(JSON.stringify(st));
   v5.version = 5;
   v5.taxes = { belkaEnabled: true }; // kształt v5: bez ikeIkze
   const m5 = S.migrate(S.validateState(v5));
-  assertEq(m5.version, 6);
+  assertEq(m5.version, S.SCHEMA_VERSION);
   assertEq(m5.taxes.belkaEnabled, true, 'Belka nietknięta przy 5→6');
   assertEq(JSON.stringify(m5.taxes.ikeIkze), defaultIkeIkze, 'dokładny domyślny kształt ikeIkze');
   // Istniejąca konfiguracja ikeIkze przeżywa migrację bez zmian.
@@ -591,7 +598,7 @@ test('F11: v6 round-trip; migracja v1→…→6, v2→…→6, v3→…→6, v4�
   v4.version = 4;
   delete v4.taxes;
   const m4 = S.migrate(S.validateState(v4));
-  assertEq(m4.version, 6);
+  assertEq(m4.version, S.SCHEMA_VERSION);
   assertEq(m4.taxes.belkaEnabled, false, 'Belka domyślnie wyłączona');
   assertEq(JSON.stringify(m4.taxes.ikeIkze), defaultIkeIkze, 'ikeIkze dołożone w łańcuchu 4→…→6');
   // Jawnie włączona Belka przeżywa migrację bez zmian.
@@ -605,7 +612,7 @@ test('F11: v6 round-trip; migracja v1→…→6, v2→…→6, v3→…→6, v4�
   delete v3.assumptions.freezeExpensesAtRetirement;
   delete v3.taxes;
   const m3 = S.migrate(S.validateState(v3));
-  assertEq(m3.version, 6);
+  assertEq(m3.version, S.SCHEMA_VERSION);
   assertEq(m3.assumptions.freezeExpensesAtRetirement, true, 'domyślnie stałe realnie');
   // Jawne false przeżywa migrację bez zmian.
   const v3b = JSON.parse(JSON.stringify(st));
@@ -619,7 +626,7 @@ test('F11: v6 round-trip; migracja v1→…→6, v2→…→6, v3→…→6, v4�
   delete v2.assumptions.freezeExpensesAtRetirement;
   delete v2.taxes;
   const m2 = S.migrate(S.validateState(v2));
-  assertEq(m2.version, 6, 'łańcuch 2→3→4→5→6');
+  assertEq(m2.version, S.SCHEMA_VERSION, 'łańcuch 2→3→4→5→6→7');
   assertEq(m2.taxes.belkaEnabled, false, 'podatki dołożone w łańcuchu');
   assertEq(m2.assumptions.postRetirementReturnReal, 0.02, 'domyślna marża EDO 2%');
   assertEq(m2.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dołożone');
@@ -637,14 +644,14 @@ test('F11: v6 round-trip; migracja v1→…→6, v2→…→6, v3→…→6, v4�
   delete v1.assumptions.freezeExpensesAtRetirement;
   delete v1.taxes;
   const migrated = S.migrate(S.validateState(v1));
-  assertEq(migrated.version, 6);
+  assertEq(migrated.version, S.SCHEMA_VERSION);
   assertTrue(migrated.housing.housePlan.familyLoan && migrated.housing.housePlan.familyLoan.enabled === false, 'familyLoan dodany, wyłączony');
   assertTrue(Array.isArray(migrated.debt.familyOverrides) && migrated.debt.familyOverrides.length === 0, 'familyOverrides = []');
   assertEq(migrated.assumptions.postRetirementReturnReal, 0.02, 'zwrot po FIRE dodany w łańcuchu');
   assertEq(migrated.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dodane w łańcuchu');
-  assertEq(migrated.taxes.belkaEnabled, false, 'podatki dodane w łańcuchu 1→…→6');
-  assertTrue(migrated.taxes.ikeIkze && migrated.taxes.ikeIkze.enabled === false, 'ikeIkze dodane w łańcuchu 1→…→6');
-  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 7, state: {} })), 'v7 odrzucona');
+  assertEq(migrated.taxes.belkaEnabled, false, 'podatki dodane w łańcuchu 1→…→7');
+  assertTrue(migrated.taxes.ikeIkze && migrated.taxes.ikeIkze.enabled === false, 'ikeIkze dodane w łańcuchu 1→…→7');
+  assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: S.SCHEMA_VERSION + 1, state: {} })), 'wersja o 1 nowsza odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99 odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: 'inna-apka', version: 1, state: {} })), 'obcy plik odrzucony');
 });
@@ -2966,12 +2973,13 @@ test('F39d: horyzont i strażnicy — filtr lat szoku, brak profilu, clamp, hypo
 // grupowania (dwa miejsca), BOM UTF-8, CRLF bez końcowego, cytowanie RFC 4180.
 // Kolumny pochodne z state.derived po ym (bez derived → puste); verdictLabel
 // wstrzykiwany. Plan: docs/plan-csv-export-entries.md (tam „F30" — zajęte
-// przez Belkę → F40; kolumna „Notatka" dojdzie razem z notatkami z fazy 4).
+// przez Belkę → F40; kolumna „Notatka" doszła z notatkami z fazy 4 — na końcu,
+// żeby nie ruszać indeksów istniejących kolumn).
 
 const CSV_HEADER = 'Miesiąc;Zarobione;Wydane;Oszczędności;Plan oszczędności;'
   + 'Różnica vs plan;Werdykt;Werdykt (opis);Nadpłata kredytu;Nadpłata długu rodzinnego;'
   + 'Korekta gotówki;Korekta portfela;Gotówka po miesiącu;Portfel po miesiącu;Faza;'
-  + 'Kredyt — saldo (nominalnie);Dług rodzinny — saldo (nominalnie);Utworzono;Zaktualizowano';
+  + 'Kredyt — saldo (nominalnie);Dług rodzinny — saldo (nominalnie);Utworzono;Zaktualizowano;Notatka';
 const csvNumT = x => Number(x).toFixed(2).replace('.', ',');
 
 test('F40a: dokładna serializacja — BOM, nagłówek, CRLF bez końcowego, przecinek dziesiętny, derived po ym', () => {
@@ -2980,6 +2988,7 @@ test('F40a: dokładna serializacja — BOM, nagłówek, CRLF bez końcowego, prz
   st.entries.push(entry('2026-02', 9000.5, 7500.25, {
     snapshot: 4000, verdict: 'behind', overpayment: 300, familyOverpayment: 150,
     cashOverride: 1000, balanceOverride: 50000, updatedAt: '2026-03-02T10:00:00.000Z',
+    note: 'Premia roczna',
   }));
   E.recomputeDerived(st, NOW);
   const labels = { on_plan: 'W planie', behind: 'Lekko pod planem' };
@@ -2994,11 +3003,11 @@ test('F40a: dokładna serializacja — BOM, nagłówek, CRLF bez końcowego, prz
   assertEq(lines[1], ['2026-01', '10000,00', '6000,00', '4000,00', '4000,00', '0,00',
     'on_plan', 'W planie', '0,00', '0,00', '', '',
     csvNumT(b1.cash), csvNumT(b1.portfolio), b1.phase, '', '',
-    '2026-01-01T00:00:00.000Z', ''].join(';'), 'wiersz 1 co do bajta');
+    '2026-01-01T00:00:00.000Z', '', ''].join(';'), 'wiersz 1 co do bajta (bez notatki: pusta komórka)');
   assertEq(lines[2], ['2026-02', '9000,50', '7500,25', '1500,25', '4000,00', '-2499,75',
     'behind', 'Lekko pod planem', '300,00', '150,00', '1000,00', '50000,00',
     csvNumT(b2.cash), csvNumT(b2.portfolio), b2.phase, '', '',
-    '2026-01-01T00:00:00.000Z', '2026-03-02T10:00:00.000Z'].join(';'), 'wiersz 2 co do bajta');
+    '2026-01-01T00:00:00.000Z', '2026-03-02T10:00:00.000Z', 'Premia roczna'].join(';'), 'wiersz 2 co do bajta');
 });
 
 test('F40b: cytowanie RFC 4180 — średnik/cudzysłów/nowa linia w komórce', () => {
@@ -3010,9 +3019,15 @@ test('F40b: cytowanie RFC 4180 — średnik/cudzysłów/nowa linia w komórce', 
   const row = csv.slice(1).split('\r\n')[1];
   const quoted = row.match(/"([^"]|"")*"/g);
   assertEq(quoted.length, 1, 'jedna komórka cytowana');
-  assertEq(row.replace(/"([^"]|"")*"/g, 'X').split(';').length, 19, '19 pól mimo średnika w treści');
+  assertEq(row.replace(/"([^"]|"")*"/g, 'X').split(';').length, 20, '20 pól mimo średnika w treści');
   const nl = S.entriesCSV(st, { verdictLabel: () => 'a\nb' });
   assertTrue(nl.includes(';"a\nb";'), 'nowa linia w komórce → cytowanie');
+  // Notatka ze średnikiem/cudzysłowem → cytowana RFC 4180 (ostatnia kolumna).
+  const st2 = baseState({ anchorMonth: '2026-01' });
+  st2.entries.push(entry('2026-01', 10000, 6000, { note: 'urlop; "all inclusive"' }));
+  E.recomputeDerived(st2, NOW);
+  const row2 = S.entriesCSV(st2).slice(1).split('\r\n')[1];
+  assertTrue(row2.endsWith(';"urlop; ""all inclusive"""'), 'notatka cytowana, cudzysłowy podwojone');
 });
 
 test('F40c: puste komórki — brak derived, miesiąc sprzed kotwicy, brak kredytu; kredyt wypełnia saldo', () => {
@@ -3072,4 +3087,55 @@ test('F40f: domyślne opcje — opis = surowy klucz; zero i ujemne kwoty w diale
   assertEq(row[7], 'hard', 'bez opcji opis = klucz');
   assertEq(row[3], '-1500,75', 'ujemne oszczędności z minusem');
   assertEq(row[8], '0,00', 'zero jako 0,00');
+});
+
+// ── F42: notatki check-inów (note) — schemat v7 ───────────────────────────
+// Notatka jest obojętna dla matematyki; trim/cięcie do 200 znaków przy zapisie;
+// migracja v6→v7 stempluje note: null. Plan: docs/plan-checkin-notes.md
+// (roadmap mówił „v6" — zajęte przez IKE/IKZE → v7; grupa F42).
+
+test('F42a: applyCheckIn — trim, pusta → null, cięcie do 200, edycja odświeża', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  const e1 = E.applyCheckIn(st, { month: '2026-01', earned: 8000, spent: 5000, note: '  Premia  ' }, NOW);
+  assertEq(e1.note, 'Premia', 'trim z brzegów');
+  const e2 = E.applyCheckIn(st, { month: '2026-02', earned: 8000, spent: 5000, note: '   ' }, NOW);
+  assertEq(e2.note, null, 'sama biel → null');
+  const e3 = E.applyCheckIn(st, { month: '2026-03', earned: 8000, spent: 5000 }, NOW);
+  assertEq(e3.note, null, 'brak pola → null');
+  const e4 = E.applyCheckIn(st, { month: '2026-04', earned: 8000, spent: 5000, note: 'x'.repeat(250) }, NOW);
+  assertEq(e4.note.length, 200, 'twarde cięcie do 200 znaków');
+  // Edycja wpisu nadpisuje notatkę (także z powrotem na null).
+  const e5 = E.applyCheckIn(st, { month: '2026-01', earned: 8000, spent: 5000, note: 'Po edycji' }, NOW);
+  assertEq(e5.note, 'Po edycji', 'edycja odświeża notatkę');
+  const e6 = E.applyCheckIn(st, { month: '2026-01', earned: 8000, spent: 5000 }, NOW);
+  assertEq(e6.note, null, 'edycja bez notatki czyści ją');
+});
+
+test('F42b: notatka obojętna dla matematyki — derived bit-w-bit identyczne', () => {
+  const mk = note => {
+    const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 50000 } });
+    E.applyCheckIn(st, { month: '2026-01', earned: 9000, spent: 6000, note }, NOW);
+    E.applyCheckIn(st, { month: '2026-02', earned: 7000, spent: 8000, note }, NOW);
+    return JSON.stringify(st.derived);
+  };
+  assertEq(mk('Notatka <b>xss</b>; "cudzysłów"'), mk(null), 'derived identyczne z notatką i bez');
+});
+
+test('F42c: migracja v6→v7 stempluje note: null; walidacja odrzuca nie-string', () => {
+  const st = baseState();
+  const v6 = JSON.parse(JSON.stringify(st));
+  v6.version = 6;
+  v6.entries = [entry('2026-07', 8000, 5000), entry('2026-08', 8000, 5000, { note: 'zostaje' })];
+  const m = S.migrate(S.validateState(v6));
+  assertEq(m.version, S.SCHEMA_VERSION, 'v6 migruje do najnowszej');
+  assertEq(m.entries[0].note, null, 'brakujące pole dostemplowane jako null');
+  assertEq(m.entries[1].note, 'zostaje', 'jawna notatka nietknięta');
+  // validateState: note nie-string → odrzucona; null/string przechodzą.
+  const bad = baseState();
+  bad.entries.push(entry('2026-07', 8000, 5000, { note: 42 }));
+  assertThrows(() => S.validateState(bad), 'note liczbowa odrzucona');
+  const ok = baseState();
+  ok.entries.push(entry('2026-07', 8000, 5000, { note: null }));
+  ok.entries.push(entry('2026-08', 8000, 5000, { note: 'ok' }));
+  assertEq(S.validateState(ok).version, S.SCHEMA_VERSION, 'null i string przechodzą');
 });

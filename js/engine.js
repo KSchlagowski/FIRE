@@ -663,6 +663,11 @@ export function applyCheckIn(state, input, now = new Date()) {
     if (!f || f.balStart <= EPS) throw new Error('Nadpłata możliwa tylko przy aktywnym długu rodzinnym');
   }
 
+  // Notatka: przycięta z brzegów, pusta → null, twarde cięcie do 200 znaków
+  // (maxlength w UI to pierwsza linia obrony). Obojętna dla matematyki.
+  const noteRaw = input.note != null ? String(input.note).trim() : '';
+  const note = noteRaw ? noteRaw.slice(0, 200) : null;
+
   const plan = buildPlan(state);
   // Snapshot planu zamrożony przy tworzeniu; jawna edycja go odświeża.
   const plannedSavingsSnapshot = plannedSavingsFor(plan, month);
@@ -671,6 +676,7 @@ export function applyCheckIn(state, input, now = new Date()) {
     month, earned, spent, overpayment, familyOverpayment,
     cashOverride: input.cashOverride != null ? roundGrosze(Number(input.cashOverride)) : null,
     balanceOverride: input.balanceOverride != null ? roundGrosze(Number(input.balanceOverride)) : null,
+    note,
     plannedSavingsSnapshot,
     verdict: computeVerdict(net, plannedSavingsSnapshot),
     createdAt: existing ? existing.createdAt : now.toISOString(),
@@ -1844,7 +1850,7 @@ export function defaultAssumptions() {
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 6,
+    version: 7,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },

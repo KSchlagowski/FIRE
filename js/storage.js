@@ -1,7 +1,7 @@
 // storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
 // migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 export const KEY = 'fireApp';
 export const BAK = 'fireApp.bak';
 export const APP_TAG = 'fire-companion';
@@ -51,6 +51,9 @@ export function validateState(s) {
     for (const f of ['overpayment', 'familyOverpayment', 'cashOverride', 'balanceOverride']) {
       if (e[f] != null && !fin(e[f])) throw new Error('Uszkodzony wpis w historii');
     }
+    // Notatka (od v7): null albo string; długości nie egzekwujemy — starsza
+    // kopia z dłuższą notatką nie może zablokować importu (silnik tnie przy edycji).
+    if (e.note != null && typeof e.note !== 'string') throw new Error('Uszkodzony wpis w historii');
   }
   if (!s.housing) throw new Error('Brak sekcji mieszkaniowej');
   // Kształt planu domu, gdy włączony (pola, po których liczy replay/projekcja).
@@ -158,6 +161,13 @@ export function migrate(s) {
       cur.version = 6;
       // fall-through
     case 6:
+      // v6 → v7: opcjonalna notatka na wpisie, domyślnie brak.
+      for (const e of cur.entries || []) {
+        if (e.note === undefined) e.note = null;
+      }
+      cur.version = 7;
+      // fall-through
+    case 7:
       break;
     default:
       throw new Error(`Nieznana wersja schematu: ${cur.version}`);
@@ -256,7 +266,7 @@ export function entriesCSV(state, { verdictLabel = v => v } = {}) {
     'Nadpłata długu rodzinnego', 'Korekta gotówki', 'Korekta portfela',
     'Gotówka po miesiącu', 'Portfel po miesiącu', 'Faza',
     'Kredyt — saldo (nominalnie)', 'Dług rodzinny — saldo (nominalnie)',
-    'Utworzono', 'Zaktualizowano'];
+    'Utworzono', 'Zaktualizowano', 'Notatka'];
   const lines = [header.map(csvCell).join(';')];
   for (const e of [...state.entries].sort((x, y) => (x.month < y.month ? -1 : 1))) {
     const net = e.earned - e.spent;
@@ -271,6 +281,7 @@ export function entriesCSV(state, { verdictLabel = v => v } = {}) {
       bal ? csvNum(bal.cash) : '', bal ? csvNum(bal.portfolio) : '', bal ? csvCell(bal.phase) : '',
       debt ? csvNum(debt.balNominal) : '', fam ? csvNum(fam.balNominal) : '',
       csvCell(e.createdAt), csvCell(e.updatedAt),
+      csvCell(e.note),
     ].join(';'));
   }
   return '\uFEFF' + lines.join('\r\n');

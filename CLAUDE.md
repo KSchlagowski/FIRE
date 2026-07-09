@@ -135,7 +135,7 @@ and, if it's a top-level tab, the `#tabbar` list in `index.html`.
   debt:        { overrides, familyOverrides },   // real & family-loan corrections
   taxes:       { belkaEnabled,                   // Belka 19% toggle (default false)
                  ikeIkze: { enabled, employmentForm, pitRate, ikeStart, ikzeStart } },
-  entries:     [ … monthly check-ins … ],
+  entries:     [ … monthly check-ins (incl. an optional inert `note`, ≤200 chars) … ],
   ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt } }
 ```
 
@@ -336,7 +336,14 @@ dialect is the spec): byte-exact serialization (BOM + header + `;`-joined rows,
 CRLF, no trailing newline, `1234,56` numbers), RFC 4180 quoting of the injected
 verdict label, blank derived cells (no `state.derived`, pre-anchor months, no
 loan) vs a filled mortgage balance, ascending sort of an unsorted copy + state
-purity, the header-only empty export, and default-options fallbacks.
+purity, the header-only empty export, and default-options fallbacks (the trailing
+`Notatka` column — appended last so no existing column index moved — rides the
+same byte-exact and quoting assertions). F42 covers check-in notes (`entry.note`,
+schema v7): ingest normalization in `applyCheckIn` (trim, empty → `null`, hard
+slice to 200 chars, edit overwrites incl. back to `null`), the notes-are-inert
+guarantee (`state.derived` bit-identical with and without notes), the v6→v7
+migration stamping `note: null` on entries missing the field while an explicit
+note survives, and `validateState` rejecting a non-string non-null `note`.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

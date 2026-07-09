@@ -199,7 +199,7 @@ button:disabled { opacity: .5; cursor: default; }
   font-weight: 600;
   margin-bottom: .25rem;
 }
-input[type="text"], input[type="number"], input[type="date"], input[type="month"], select {
+input[type="text"], input[type="number"], input[type="date"], input[type="month"], select, textarea {
   width: 100%;
   min-height: 48px;
   padding: .5rem .75rem;
@@ -209,7 +209,8 @@ input[type="text"], input[type="number"], input[type="date"], input[type="month"
   background: var(--card2);
   color: var(--text);
 }
-input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+textarea { resize: vertical; font-family: inherit; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .hint { font-size: .78rem; color: var(--muted); margin-top: .2rem; }
 .field-error { color: var(--danger); font-size: .82rem; margin: .25rem 0; }
 
@@ -353,6 +354,7 @@ details.section summary { cursor: pointer; font-weight: 600; min-height: 40px; d
 }
 .hist-row .m { flex: 1; }
 .hist-row .m .muted { display: block; }
+.hist-note { overflow-wrap: anywhere; }
 .hist-row.gap { color: var(--muted); font-style: italic; }
 .hist-actions { display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem 0; }
 .hist-actions button { flex: 1; min-height: 44px; }
