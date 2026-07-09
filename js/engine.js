@@ -997,7 +997,6 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm, o
 // ── Faza emerytalna: opcje ──────────────────────────────────────────────
 // Jeden znormalizowany obiekt opcji fazy emerytalnej (wypłat). Domyślne wartości
 // z zapisanych założeń; `overrides` to what-ify z Symulacji (nic nie zapisują).
-// Kolejne pola (ZUS…) dojdą tu w przyszłych funkcjach.
 export function retirementOpts(state, overrides = {}) {
   const a = state.assumptions;
   return {
@@ -1006,7 +1005,45 @@ export function retirementOpts(state, overrides = {}) {
     freezeExpenses: overrides.freezeExpenses != null ? overrides.freezeExpenses
       : (a.freezeExpensesAtRetirement != null ? a.freezeExpensesAtRetirement : true),
     crash: overrides.crash || null, // { year, pct } — what-if Symulacji, nigdy nie zapisywane
+    // Emerytura ZUS (D6): kwota realna (indeksacja ≈ inflacja), płaska — nie
+    // rośnie z expenseGrowthReal. Wyjątek od idiomu `!= null`: null to znaczący
+    // override („wyłącz ZUS w tym what-ifie"), więc testujemy `!== undefined`.
+    pension: overrides.pension !== undefined
+      ? overrides.pension // null ⇒ ZUS wyłączony w tym what-ifie
+      : { monthly: a.pensionMonthly != null ? a.pensionMonthly : 0,
+          fromAge: a.pensionAge != null ? a.pensionAge : 65 },
   };
+}
+
+// ── Most ZUS: wypłata netto i PV fazy emerytalnej ───────────────────────
+// JEDYNE miejsce definicji w_n (D7/D8): brutto rok n = W₁·G^(n−1); emerytura
+// płynie w roku n, gdy wiek na starcie roku ≥ pension.fromAge (lata całkowite);
+// z portfela schodzi max(0, brutto − emerytura) — nadwyżka emerytury nad
+// wydatkami jest wydawana, nigdy re-inwestowana (D7). Barista dołoży tu kiedyś
+// drugi offset — nic więcej.
+function netWithdrawalYear(state, ro, startYm, W1, n) {
+  const a = state.assumptions;
+  const birth = state.profile.birthDate;
+  const g = ro.freezeExpenses ? 0 : a.expenseGrowthReal;
+  const gross = W1 * Math.pow(1 + g, n - 1);
+  const pensionOn = !!(ro.pension && ro.pension.monthly > 0 && birth);
+  const active = pensionOn
+    && ageAt(birth, addMonths(startYm, (n - 1) * 12)).years >= ro.pension.fromAge;
+  const pension = active ? 12 * ro.pension.monthly : 0;
+  return { gross, pension, net: Math.max(0, gross - pension) };
+}
+
+// PV fazy emerytalnej do dokładnej wartości końcowej — pętla wsteczna:
+// P = terminal; dla n = years..1: P = P/(1+r) + w_n. Dokładna (O(lat)),
+// obsługuje wzrost wydatków, offset emerytury i podłogę zera bez analizy
+// przypadków. JEDNA implementacja PV: cel „do zera" i cel mostu ZUS (a kiedyś
+// Barista) liczą się wyłącznie tędy — formy zamknięte żyją w testach jako spec.
+function pvOfRetirement(state, ro, startYm, years, W1, terminal) {
+  let P = terminal;
+  for (let n = years; n >= 1; n--) {
+    P = P / (1 + ro.postReturnReal) + netWithdrawalYear(state, ro, startYm, W1, n).net;
+  }
+  return P;
 }
 
 // Faza wypłat: rekurencja w REALNYCH zł, kolumny nominalne pochodne.
@@ -1089,17 +1126,22 @@ export function projectWithdrawal(state, opts = {}) {
       bT *= (1 - crash.pct); bIke *= (1 - crash.pct); bIkze *= (1 - crash.pct);
     }
     const startReal = bal;
-    const withdrawalReal = withdrawalRealYearly * Math.pow(wG, n - 1);
-    let endReal, taxReal = 0, grossReal = withdrawalReal;
+    // Most ZUS (D7): withdrawalReal to dalej wydatki BRUTTO; z portfela schodzi
+    // netto = max(0, brutto − emerytura). Jedna definicja w_n: netWithdrawalYear.
+    const wn = netWithdrawalYear(state, ro, startYm, withdrawalRealYearly, n);
+    const withdrawalReal = wn.gross;
+    const pensionReal = wn.pension;
+    const netWithdrawalReal = wn.net;
+    let endReal, taxReal = 0, grossReal = netWithdrawalReal;
     if (active.any) {
       // Wypłata brutto per kubełek, kolejność taxable → IKE → IKZE (D10) —
       // konta z ulgami pracują najdłużej. Każda noga powiększona tak, by
-      // NETTO pokryło wydatki: taxable 19% × udział zysku (gdy Belka), IKE
-      // 0% po 60 (wcześniej jak taxable), IKZE po 65 ryczałt 10%, wcześniej
-      // stawka PIT — od CAŁEJ kwoty, bez basisu (ułamki udziału zysku
-      // niezmiennicze względem epoki).
+      // NETTO pokryło wydatki (już po odjęciu emerytury ZUS): taxable 19% ×
+      // udział zysku (gdy Belka), IKE 0% po 60 (wcześniej jak taxable), IKZE
+      // po 65 ryczałt 10%, wcześniej stawka PIT — od CAŁEJ kwoty, bez basisu
+      // (ułamki udziału zysku niezmiennicze względem epoki).
       const age = birth ? ageAt(birth, ym).years : -1;
-      let need = withdrawalReal;
+      let need = netWithdrawalReal;
       let grossSum = 0;
       { // 1) konto zwykłe
         const g = gainShareOf(bT, basisT, anchor, ym, inflation);
@@ -1130,7 +1172,7 @@ export function projectWithdrawal(state, opts = {}) {
       }
       taxTotalReal += taxReal;
     } else {
-      endReal = (startReal - withdrawalReal) * (1 + realRate);
+      endReal = (startReal - netWithdrawalReal) * (1 + realRate);
       if (endReal <= EPS) { endReal = 0; depletedYear = n; }
     }
     const growthReal = endReal - (startReal - grossReal);
@@ -1138,12 +1180,15 @@ export function projectWithdrawal(state, opts = {}) {
     const pfN = Math.pow(1 + inflation, n);
     const startNominal = startReal * pf1;
     const withdrawalNominal = withdrawalReal * pf1;
+    const netWithdrawalNominal = netWithdrawalReal * pf1;
     const endNominal = endReal * pfN;
-    const growthNominal = endNominal - (startNominal - withdrawalNominal - (active.any ? taxReal * pf1 : 0));
+    const growthNominal = endNominal - (startNominal - netWithdrawalNominal - (active.any ? taxReal * pf1 : 0));
     rows.push({
       year: n, ym, age: birth ? ageAt(birth, ym).years : null, crashed,
       startReal, startNominal,
       withdrawalReal, withdrawalNominal,
+      pensionReal, pensionNominal: pensionReal * pf1,
+      netWithdrawalReal, netWithdrawalNominal,
       growthReal, growthNominal, endReal, endNominal,
       ...(active.any ? { taxReal, taxNominal: taxReal * pf1, grossReal } : {}),
     });
@@ -1190,10 +1235,14 @@ export function taxStats(state, balances, nowYm = todayYm()) {
 // (expenseGrowthReal działa tylko do daty FIRE, przez W₁). Gdy mrożenie jest
 // wyłączone (`ro.freezeExpenses === false`), wypłaty rosną o expenseGrowthReal
 // także po FIRE: W_n = W₁·G^(n−1), G = 1 + expenseGrowthReal. Portfel rośnie
-// realnie o r. Rozwiązanie P_N = 0 daje PV renty z podstawieniem q → G·q:
-// cel = W₁·(1−x^N)/(1−x), x = G/(1+r); dla x ≈ 1 → cel = N·W₁. Przy G = 1
-// odtwarza dawną formułę annuity-due 1:1. Portfel rośnie realnie o zwrot po
-// FIRE (obligacje) z `ro.postReturnReal`, nie o zwrot z fazy oszczędzania.
+// realnie o zwrot po FIRE (obligacje) z `ro.postReturnReal`, nie o zwrot z fazy
+// oszczędzania. Emerytura ZUS (`ro.pension`) pomniejsza wypłaty od wieku
+// emerytalnego: w_n = max(0, W_n − 12·pensionMonthly) (D7). Liczone pętlą
+// wsteczną pvOfRetirement — bez emerytury odtwarza algebraicznie dawne formy
+// zamknięte: cel = W₁·(1−x^N)/(1−x), x = G/(1+r) (x ≈ 1 → N·W₁); testy
+// F24/F28 pilnują parytetu pętla ≡ forma zamknięta. Skan „do zera" woła tę
+// funkcję per miesiąc — O(N) na wywołanie, ≤ 720 × ~110 iteracji, pomijalne
+// (precedens: wrażliwość to 13 × 720 pełnych prognoz).
 export function dieWithZeroTargetAt(state, ym, deathAge, ro = retirementOpts(state)) {
   const a = state.assumptions;
   const birth = state.profile.birthDate;
@@ -1201,13 +1250,66 @@ export function dieWithZeroTargetAt(state, ym, deathAge, ro = retirementOpts(sta
   const yearsN = deathAge - ageAt(birth, ym).years;
   if (!(yearsN >= 1)) return null;
   const withdrawalYear1 = fireTargetAt(state, ym) * a.withdrawalRate;
-  const r = ro.postReturnReal;
-  const g = ro.freezeExpenses ? 0 : a.expenseGrowthReal;
-  const x = (1 + g) / (1 + r);
-  const target = Math.abs(x - 1) < 1e-12
-    ? yearsN * withdrawalYear1
-    : withdrawalYear1 * (1 - Math.pow(x, yearsN)) / (1 - x);
+  const target = pvOfRetirement(state, ro, ym, yearsN, withdrawalYear1, 0);
   return { target, yearsN, withdrawalYear1 };
+}
+
+// Cel mostu ZUS (dwufazowy): od FIRE do wieku emerytalnego portfel dźwiga
+// pełne wydatki (most, B lat), potem wystarcza kapitał na różnicę
+// (wydatki − emerytura) / SWR. terminal = max(0, E_{B+1} − 12·pensionMonthly)
+// / withdrawalRate, E_{B+1} = W₁·G^B — przy wyłączonym mrożeniu resztówka
+// używa klasycznej renty wieczystej mimo dalszego wzrostu wydatków (zamknięte
+// przybliżenie, precedens D4: perpetuita SWR nie koduje wzrostu). Bez emerytury
+// B = 0 i cel degeneruje się dokładnie do fireTargetAt (F46a).
+export function bridgeTargetAt(state, ym, ro = retirementOpts(state)) {
+  const a = state.assumptions;
+  const birth = state.profile.birthDate;
+  if (!birth) return null;
+  const W1 = fireTargetAt(state, ym) * a.withdrawalRate;
+  const pensionOn = !!(ro.pension && ro.pension.monthly > 0);
+  const age0 = ageAt(birth, ym).years;
+  const bridgeYears = Math.max(0, pensionOn ? ro.pension.fromAge - age0 : 0);
+  const g = ro.freezeExpenses ? 0 : a.expenseGrowthReal;
+  const pensionYearly = pensionOn ? 12 * ro.pension.monthly : 0;
+  const grossAfterBridge = W1 * Math.pow(1 + g, bridgeYears); // E_{B+1}
+  const terminalTarget = Math.max(0, grossAfterBridge - pensionYearly) / a.withdrawalRate;
+  const target = pvOfRetirement(state, ro, ym, bridgeYears, W1, terminalTarget);
+  return {
+    target,
+    targetClassic: fireTargetAt(state, ym), // echo do porównania w UI (ten sam miesiąc)
+    bridgeYears, terminalTarget, withdrawalYear1: W1, pensionYearly,
+  };
+}
+
+// Wspólny skan „pierwszy miesiąc, w którym cel osiągnięty" po serii prognozy —
+// jedno miejsce dla „do zera" i mostu ZUS (na zawsze w rytmie): pomija miesiące
+// przed `now`, bramkę startową zobowiązań (przed wydatkiem na dom / startem
+// kredytu / startem długu rodzinnego salda są 0, bo zobowiązanie JESZCZE nie
+// istnieje — to nie jest „spłacone"; ta sama logika co houseSettled/famSettled
+// w projectFire), wymaga długu spłaconego i portfela ≥ target − EPS.
+// targetFn(ym) → { target, … } | null; stopFn(ym) → true przerywa skan.
+function scanFireBy(state, projection, now, targetFn, stopFn = null) {
+  const nowIdx = ymToIdx(now);
+  const hp = state.housing.housePlan;
+  const houseOn = !!(hp && hp.enabled);
+  const flOn = houseOn && hp.familyLoan && hp.familyLoan.enabled;
+  const gateIdx = Math.max(
+    houseOn ? ymToIdx((hp.houseSpend && hp.houseSpend.month) || hp.mortgage.startMonth) : -Infinity,
+    houseOn ? ymToIdx(hp.mortgage.startMonth) : -Infinity,
+    flOn ? ymToIdx(hp.familyLoan.startMonth) : -Infinity,
+  );
+  if (projection && projection.series) {
+    for (const r of projection.series) {
+      if (ymToIdx(r.ym) < nowIdx) continue;
+      if (ymToIdx(r.ym) < gateIdx) continue;
+      if (stopFn && stopFn(r.ym)) break;
+      const t = targetFn(r.ym);
+      if (!t) continue;
+      const settled = (r.debtReal || 0) <= EPS && (r.familyReal || 0) <= EPS;
+      if (settled && r.portfolio >= t.target - EPS) return { fireYm: r.ym, t };
+    }
+  }
+  return { fireYm: null, t: null };
 }
 
 // Faza wypłat „do zera": tabela roczna od dokładnie celu „do zera" do 0 w wieku
@@ -1222,43 +1324,18 @@ export function projectDieWithZero(state, opts = {}) {
   const deathAge = opts.deathAge != null ? opts.deathAge : 110;
   const proj = opts.projection || null;
   const now = todayYm(opts.now); // opts.now tylko dla determinizmu testów
-  const nowIdx = ymToIdx(now);
 
   // Klasyczna data FIRE (do porównania). Cel klasyczny liczony niżej, w TYM
   // SAMYM miesiącu co cel „do zera" (startYm) — porównanie z dwóch różnych dat
   // zawyżało „do zera" o wzrost wydatków między dziś a datą FIRE.
   const classicFireYm = proj && proj.reached ? proj.fireYm : null;
 
-  // Bramka startowa zobowiązań: przed wydatkiem na dom / startem kredytu /
-  // startem długu rodzinnego salda są 0, bo zobowiązanie JESZCZE nie istnieje —
-  // to nie jest „spłacone". Ta sama logika co houseSettled/famSettled w
-  // projectFire (idx ≥ hsMonth, debtStarted, famStarted).
-  const hp = state.housing.housePlan;
-  const houseOn = !!(hp && hp.enabled);
-  const flOn = houseOn && hp.familyLoan && hp.familyLoan.enabled;
-  const gateIdx = Math.max(
-    houseOn ? ymToIdx((hp.houseSpend && hp.houseSpend.month) || hp.mortgage.startMonth) : -Infinity,
-    houseOn ? ymToIdx(hp.mortgage.startMonth) : -Infinity,
-    flOn ? ymToIdx(hp.familyLoan.startMonth) : -Infinity,
-  );
-
   // Skan miesiąca osiągnięcia celu „do zera".
-  let fireYm = null, dz = null;
-  if (proj && proj.series) {
-    for (const r of proj.series) {
-      if (ymToIdx(r.ym) < nowIdx) continue;
-      if (ymToIdx(r.ym) < gateIdx) continue;
-      if (ageAt(birth, r.ym).years >= deathAge) break;
-      const t = dieWithZeroTargetAt(state, r.ym, deathAge, ro);
-      if (!t) continue;
-      const settled = (r.debtReal || 0) <= EPS && (r.familyReal || 0) <= EPS;
-      if (settled && r.portfolio >= t.target - EPS) {
-        fireYm = r.ym;
-        dz = t;
-        break;
-      }
-    }
-  }
+  const scan = scanFireBy(state, proj, now,
+    ym => dieWithZeroTargetAt(state, ym, deathAge, ro),
+    ym => ageAt(birth, ym).years >= deathAge);
+  const fireYm = scan.fireYm;
+  let dz = scan.t;
 
   const hypothetical = fireYm == null;
   const startYm = fireYm != null ? fireYm : now;
@@ -1289,20 +1366,29 @@ export function projectDieWithZero(state, opts = {}) {
   for (let n = 1; n <= yearsN; n++) {
     const ym = addMonths(startYm, (n - 1) * 12);
     const startReal = bal;
-    const withdrawalReal = W1 * Math.pow(wG, n - 1); // rośnie o G gdy mrożenie off (0 gdy stałe)
-    let endReal = (startReal - withdrawalReal) * (1 + r);
+    // Jedna definicja w_n (most ZUS): brutto rośnie o G gdy mrożenie off,
+    // z portfela schodzi netto = max(0, brutto − emerytura). Cel z pętli
+    // odwrotnej ⇒ tabela dalej kończy się dokładnie na 0 w roku N.
+    const wn = netWithdrawalYear(state, ro, startYm, W1, n);
+    const withdrawalReal = wn.gross;
+    const pensionReal = wn.pension;
+    const netWithdrawalReal = wn.net;
+    let endReal = (startReal - netWithdrawalReal) * (1 + r);
     if (Math.abs(endReal) <= EPS) endReal = 0;
-    const growthReal = endReal - (startReal - withdrawalReal);
+    const growthReal = endReal - (startReal - netWithdrawalReal);
     const pf1 = Math.pow(1 + inflation, n - 1);
     const pfN = Math.pow(1 + inflation, n);
     const startNominal = startReal * pf1;
     const withdrawalNominal = withdrawalReal * pf1;
+    const netWithdrawalNominal = netWithdrawalReal * pf1;
     const endNominal = endReal * pfN;
-    const growthNominal = endNominal - (startNominal - withdrawalNominal);
+    const growthNominal = endNominal - (startNominal - netWithdrawalNominal);
     rows.push({
       year: n, ym, age: ageAt(birth, ym).years,
       startReal, startNominal,
       withdrawalReal, withdrawalNominal,
+      pensionReal, pensionNominal: pensionReal * pf1,
+      netWithdrawalReal, netWithdrawalNominal,
       growthReal, growthNominal, endReal, endNominal,
     });
     bal = endReal;
@@ -1312,6 +1398,36 @@ export function projectDieWithZero(state, opts = {}) {
     deathAge, startYm, startAge, yearsN, target, targetClassic,
     fireYm, classicFireYm, hypothetical, realRate: r, inflation,
     nominalRate, withdrawalYear1: W1, withdrawalGrowthReal: wG - 1, rows, ro,
+  };
+}
+
+// Data FIRE z mostem ZUS: skan prognozy o pierwszy miesiąc, w którym dług
+// spłacony i portfel ≥ cel mostu (cel per-miesiąc — jak „do zera"). Warstwa
+// analizy (D3): pulpit, werdykty i projectFire zostają przy celu klasycznym.
+// Bez daty urodzenia emerytura jest nieobliczalna → null (jak projectDieWithZero).
+// Wszystkie cele echo'wane w startYm — reguła porównania z tego samego miesiąca
+// (precedens F24g).
+export function projectBridgeFire(state, opts = {}) {
+  const birth = state.profile.birthDate;
+  if (!birth) return null;
+  const ro = opts.ro || retirementOpts(state);
+  const proj = opts.projection || null;
+  const now = todayYm(opts.now); // opts.now tylko dla determinizmu testów
+  const classicFireYm = proj && proj.reached ? proj.fireYm : null;
+
+  const scan = scanFireBy(state, proj, now, ym => bridgeTargetAt(state, ym, ro));
+  const hypothetical = scan.fireYm == null;
+  const startYm = scan.fireYm != null ? scan.fireYm : now;
+  const bt = scan.t || bridgeTargetAt(state, startYm, ro);
+  return {
+    fireYm: scan.fireYm, classicFireYm, hypothetical, startYm,
+    startAge: ageAt(birth, startYm).years,
+    target: bt.target, targetClassic: bt.targetClassic,
+    bridgeYears: bt.bridgeYears, terminalTarget: bt.terminalTarget,
+    withdrawalYear1: bt.withdrawalYear1, pensionYearly: bt.pensionYearly,
+    pensionMonthly: ro.pension ? ro.pension.monthly : 0,
+    pensionAge: ro.pension ? ro.pension.fromAge : null,
+    ro,
   };
 }
 
@@ -1986,12 +2102,14 @@ export function defaultAssumptions() {
     inflationAnnual: 0.03,
     postRetirementReturnReal: 0.02, // realny zwrot po FIRE (marża EDO, przed podatkiem)
     freezeExpensesAtRetirement: true, // wydatki stałe realnie po FIRE (dzisiejsze zachowanie)
+    pensionMonthly: 1978.49, // D6 — emerytura minimalna od marca 2026 (placeholder do nadpisania kwotą z listu ZUS)
+    pensionAge: 65, // ustawowy wiek: 65 M / 60 K
   };
 }
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 8,
+    version: 9,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },

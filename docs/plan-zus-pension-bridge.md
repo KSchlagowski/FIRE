@@ -471,3 +471,27 @@ then push.
   "F28a/F28b" is delivered by those tests continuing to pass unchanged.
 - **Charts extraction** (`js/charts.js`, in flight, separate feature) is orthogonal;
   this plan adds no charts and anchors by artifact names, not line numbers.
+
+## Implementation notes (as shipped, v1.30.0)
+
+The tree moved substantially between writing and implementation (Belka v5,
+IKE/IKZE v6, notes v7, milestones v8, crash test, projection bands all shipped
+first). Adaptations, in the spirit of the "adjust if consumed" instructions:
+
+- **Schema**: v8 → **v9** (not v4 → v5); migration is `case 8`. Same backfill
+  semantics (`1978.49` / `65`, explicit values incl. `0` untouched).
+- **Version**: **v1.30.0** (not v1.16.0).
+- **Test letters**: F29/F30 were consumed by charts.js and Belka →
+  `bridgeTargetAt` = **F46**, `projectBridgeFire` = **F47** (a/b/c/d/g per the
+  original F29/F30 sub-letters). F27e, F27h and F28c landed as reserved.
+- **Taxes interplay** (didn't exist when this was written):
+  `projectWithdrawal`'s Belka/IKE-IKZE gross-up now runs on the **net** need
+  (`max(0, expenses − pension)`) — the pension arrives before taxes, since ZUS
+  is not paid out of the portfolio. `withdrawalReal` still means gross
+  expenses; `growthNominal` uses the net column. With pension 0 every tax-path
+  number is unchanged (F30/F31 suites pass untouched).
+- **Crash interplay**: orthogonal — the shock scales balances, the pension
+  offsets withdrawals; both ride through `ro` (F39 passes untouched).
+- The dz table rows also carry `pensionReal/pensionNominal/netWithdrawalReal/
+  netWithdrawalNominal`; the shared `withdrawalTable` helper in `analysis.js`
+  renders the conditional ZUS column for both tables.

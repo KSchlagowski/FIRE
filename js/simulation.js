@@ -299,7 +299,7 @@ export function returnCard({ value, min, max, baseReturn, resultHTML }) {
 
 // ── 6. Emerytura po FIRE: zwrot po FIRE (suwak) ──────────────────────────
 
-export function retirementResult({ ro, dz, dzBase, w, deathAge }) {
+export function retirementResult({ ro, dz, dzBase, w, pb, deathAge }) {
   if (dz == null) {
     return '<p class="muted">Uzupełnij datę urodzenia w Plan → Profil, aby policzyć fazę emerytalną.</p>';
   }
@@ -317,12 +317,17 @@ export function retirementResult({ ro, dz, dzBase, w, deathAge }) {
     kv(`Cel „do zera” (do wieku ${deathAge})`, money(dz.target)),
     kv('Zmiana vs Twoje ustawienie', signed(diff), diff <= 0 ? 'good' : 'warn-text'),
     kv('Data FIRE „do zera”', fireCell(dz.fireYm, dzBase.fireYm)),
+    kv('Data FIRE z mostem ZUS', fireCell(pb.fireYm, pb.classicFireYm)),
+    kv('Emerytura ZUS', ro.pension && ro.pension.monthly > 0
+      ? `${money(ro.pension.monthly)}/mies. od ${ro.pension.fromAge} r.ż.`
+      : 'nieuwzględniana'),
     kv('Wydatki po FIRE', ro.freezeExpenses ? 'stałe realnie'
       : 'rosną o ' + Fmt.formatPct(w.withdrawalGrowthReal) + ' realnie/rok'),
     longevity,
     metodologia([
       `Każde przesunięcie suwaka przelicza fazę wypłat od nowa: po FIRE portfel rośnie o wybrany ${gl('realnie', 'realny')} zwrot, a wypłaty pokrywają Twoje wydatki.`,
       `Odznaczenie „wydatki przestają rosnąć” podnosi wypłaty co roku o realny wzrost wydatków — ${gl('do-zera', 'cel „do zera”')} musi być większy albo portfel skończy się wcześniej.`,
+      'Od wieku emerytalnego ZUS pokrywa część wydatków — z portfela wypłacasz tylko resztę, dlatego cel z mostem bywa niższy, a FIRE wcześniej.',
       'Niczego nie zapisujemy — to podgląd; ustawienie na stałe jest w Plan → Profil i FIRE.',
     ]),
   ].join('');
@@ -361,10 +366,10 @@ export function crashCard({ pct, deathAge, resultHTML }) {
   </div>`;
 }
 
-export function retirementCard({ value, base, freeze, resultHTML }) {
+export function retirementCard({ value, base, freeze, pension, pensionAge, resultHTML }) {
   const v = value == null ? base : Number(value);
   return `<div class="card"><h2>Emerytura po FIRE 🏖️</h2>
-    <p class="muted small">Po przejściu na FIRE wiele osób przenosi pieniądze w bezpieczniejsze instrumenty, np. obligacje skarbowe — portfel rośnie wolniej, więc musi wystarczyć na dłużej. Przesuń suwak i sprawdź, co to zmienia. Możesz też sprawdzić, co się stanie, gdy wydatki będą rosły dalej także na emeryturze. Czysta symulacja — niczego nie zapisujemy.</p>
+    <p class="muted small">Po przejściu na FIRE wiele osób przenosi pieniądze w bezpieczniejsze instrumenty, np. obligacje skarbowe — portfel rośnie wolniej, więc musi wystarczyć na dłużej. Przesuń suwak i sprawdź, co to zmienia. Możesz też sprawdzić, co się stanie, gdy wydatki będą rosły dalej także na emeryturze. Możesz też doliczyć emeryturę z ZUS — od wieku emerytalnego portfel dźwiga tylko część wydatków. Czysta symulacja — niczego nie zapisujemy.</p>
     <label class="field"><span class="lbl">Realny zwrot po FIRE <b id="sym-ret-post-val">${esc(Fmt.formatPct(v))}</b></span>
       <input type="range" id="sym-ret-post" min="0" max="0.06" step="0.0025" value="${v}">
     </label>
@@ -372,6 +377,10 @@ export function retirementCard({ value, base, freeze, resultHTML }) {
     <label class="field"><span class="lbl">
       <input type="checkbox" id="sym-ret-freeze" ${freeze ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
       Wydatki przestają rosnąć po FIRE</span></label>
+    <label class="field"><span class="lbl">Emerytura z ZUS <span class="muted">(zł/mies.)</span></span>
+      <input type="text" id="sym-ret-pension" inputmode="decimal" value="${esc(pension)}" placeholder="0 = bez ZUS"></label>
+    <label class="field"><span class="lbl">Wiek emerytalny (ZUS)</span>
+      <input type="text" id="sym-ret-page" inputmode="numeric" value="${esc(pensionAge)}"></label>
     <div id="sym-ret-result">${resultHTML}</div>
   </div>`;
 }

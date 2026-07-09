@@ -223,27 +223,48 @@ export function projectionCard({ mode, blocks, series, excelRows, houseOn, selec
 
 // ── 4. Faza wypłat ──────────────────────────────────────────────────────
 
+// Tabela roczna fazy wypłat — współdzielona przez withdrawalCard i
+// dieWithZeroResult. Kolumna ZUS pojawia się tylko, gdy emerytura realnie
+// płynie w którymkolwiek wierszu; wtedy „Wypłata (nom.)" staje się
+// „Z portfela (nom.)" (netto po ZUS), a „Emerytura (nom.)" ląduje zaraz za nią.
+// Bez ZUS wyjście jest bajt-w-bajt jak przed tą funkcją.
+function withdrawalTable(rows, { taxed = false, rowClass = () => '' } = {}) {
+  const showPension = rows.some(r => (r.pensionReal || 0) > 0);
+  const headers = ['Rok', 'Wiek', 'Saldo pocz. (nom.)',
+    showPension ? 'Z portfela (nom.)' : 'Wypłata (nom.)',
+    ...(showPension ? ['Emerytura (nom.)'] : []),
+    ...(taxed ? ['Podatek (nom.)'] : []),
+    'Wzrost (nom.)', 'Saldo końc. (nom.)', 'Saldo końc. (realnie)'];
+  const body = rows.map(r => {
+    const cls = rowClass(r);
+    return `<tr${cls ? ` class="${cls}"` : ''}>
+    <td>${r.year} <span class="muted small">${r.ym.slice(0, 4)}</span></td>
+    <td>${r.age != null ? r.age : '—'}</td>
+    <td>${money(r.startNominal)}</td>
+    <td>${money(showPension ? r.netWithdrawalNominal : r.withdrawalNominal)}</td>
+    ${showPension ? `<td>${money(r.pensionNominal)}</td>` : ''}
+    ${taxed ? `<td>${money(r.taxNominal)}</td>` : ''}
+    <td>${money(r.growthNominal)}</td>
+    <td>${money(r.endNominal)}</td>
+    <td>${money(r.endReal)}</td>
+  </tr>`;
+  }).join('');
+  return { html: table(headers, body), showPension };
+}
+
 export function withdrawalCard({ w, chartHTML }) {
   const target = w.swr > 0 ? w.withdrawalRealYearly / w.swr : 0;
   const taxed = !!(w.taxesApplied && w.taxesApplied.any);
   const banner = w.hypothetical
     ? `<div class="banner info small">FIRE poza horyzontem prognozy — scenariusz modelowy od dzisiejszego celu (${money(target)}).</div>`
     : `<p class="muted small">Start: ${esc(Fmt.formatMonthName(w.startYm))}${w.startAge != null ? ` (wiek ${w.startAge})` : ''}, portfel ${money(w.rows.length ? w.rows[0].startReal : 0)}.</p>`;
-  const headers = ['Rok', 'Wiek', 'Saldo pocz. (nom.)', 'Wypłata (nom.)',
-    ...(taxed ? ['Podatek (nom.)'] : []),
-    'Wzrost (nom.)', 'Saldo końc. (nom.)', 'Saldo końc. (realnie)'];
-  const rows = w.rows.map(r => `<tr${w.depletedYear === r.year ? ' class="depleted"' : ''}>
-    <td>${r.year} <span class="muted small">${r.ym.slice(0, 4)}</span></td>
-    <td>${r.age != null ? r.age : '—'}</td>
-    <td>${money(r.startNominal)}</td>
-    <td>${money(r.withdrawalNominal)}</td>
-    ${taxed ? `<td>${money(r.taxNominal)}</td>` : ''}
-    <td>${money(r.growthNominal)}</td>
-    <td>${money(r.endNominal)}</td>
-    <td>${money(r.endReal)}</td>
-  </tr>`).join('');
+  const wt = withdrawalTable(w.rows, {
+    taxed,
+    rowClass: r => (w.depletedYear === r.year ? 'depleted' : ''),
+  });
+  const pens = wt.showPension && w.ro && w.ro.pension ? w.ro.pension : null;
   const depletionWarn = w.depletedYear
-    ? `<div class="banner danger small">⚠️ Portfel wyczerpuje się w ${w.depletedYear}. roku wypłat — rozważ niższą stopę wypłat lub większy portfel.</div>`
+    ? `<div class="banner danger small">⚠️ Portfel wyczerpuje się w ${w.depletedYear}. roku wypłat — rozważ niższą stopę wypłat lub większy portfel.${pens ? ' Emerytura z ZUS wypłacana jest dalej — kończy się tylko portfel.' : ''}</div>`
     : '';
   const postRateBanner = `<div class="banner info small">Po FIRE portfel pracuje na ${Fmt.formatPct(w.realRate)} realnie — tak, jakby pieniądze leżały w bezpieczniejszych instrumentach (np. obligacjach). Zmienisz to w Plan → Profil i FIRE.</div>`;
   return `<div class="card"><h2>Faza wypłat 🏖️</h2>
@@ -251,9 +272,10 @@ export function withdrawalCard({ w, chartHTML }) {
     ${banner}${postRateBanner}${depletionWarn}
     ${chartHTML ? `${chartHTML}${withdrawalLegend()}` : ''}
     ${taxed ? kv('Podatki w fazie wypłat łącznie (realnie)', money(w.taxTotalReal)) : ''}
-    ${table(headers, rows)}
+    ${wt.html}
     ${metodologia([
       `Pierwsza roczna wypłata to cel × ${gl('swr', 'stopa wypłat')}: ${money(target)} × ${Fmt.formatPct(w.swr)} = ${money(w.withdrawalRealYearly)}. W kolejnych latach rośnie z inflacją (${Fmt.formatPct(w.inflation)})${w.withdrawalGrowthReal > 0 ? ` i dodatkowo o ${Fmt.formatPct(w.withdrawalGrowthReal)} realnie — tak wybrano w Plan → Profil i FIRE` : ''}.`,
+      pens ? `Od wieku ${pens.fromAge} część wydatków pokrywa emerytura z ZUS (${money(pens.monthly)}/mies. w dzisiejszych złotówkach) — z portfela wypłacasz tylko resztę.` : null,
       `Co roku portfel najpierw oddaje wypłatę, a reszta pracuje na ${Fmt.formatPct(w.realRate)} ${gl('realnie', 'realnie')} — to zwrot „po FIRE”, niższy niż w fazie oszczędzania, bo na emeryturze zwykle inwestuje się bezpieczniej.`,
       taxed ? `Wypłatę powiększamy tak, aby po ${gl('belka', 'podatku Belki')} (19% od części, która jest zyskiem) zostało dokładnie tyle, ile potrzebujesz — kolumna „Podatek” pokazuje różnicę. Podatek rośnie z czasem, bo coraz większa część portfela to zysk${w.taxesApplied && w.taxesApplied.ikeIkze ? ', a maleje skokowo przy 60. urodzinach (IKE bez podatku) i 65. (IKZE: 10% ryczałtu)' : ''}.` : null,
       `Kolumny nominalne pokazują przyszłe złotówki: kwoty realne × (1+inflacja)^lata, w cenach z ${esc(Fmt.formatMonthGenitive(w.startYm))} — miesiąca przejścia na FIRE.`,
@@ -284,36 +306,64 @@ export function dieWithZeroResult({ z, deathAgeRaw }) {
     + kv('Lata wypłat (N)', String(z.yearsN))
     + kv('Wypłata (rok 1)', money(z.withdrawalYear1));
 
-  const headers = ['Rok', 'Wiek', 'Saldo pocz. (nom.)', 'Wypłata (nom.)', 'Wzrost (nom.)', 'Saldo końc. (nom.)', 'Saldo końc. (realnie)'];
-  const lastYear = z.rows.length ? z.rows[z.rows.length - 1].year : null;
-  const rows = z.rows.map(r => `<tr${r.year === lastYear ? ' class="reached"' : ''}>
-    <td>${r.year} <span class="muted small">${r.ym.slice(0, 4)}</span></td>
-    <td>${r.age != null ? r.age : '—'}</td>
-    <td>${money(r.startNominal)}</td>
-    <td>${money(r.withdrawalNominal)}</td>
-    <td>${money(r.growthNominal)}</td>
-    <td>${money(r.endNominal)}</td>
-    <td>${money(r.endReal)}</td>
-  </tr>`).join('');
+  const wt = withdrawalTable(z.rows, {
+    rowClass: r => (z.rows.length && r.year === z.rows[z.rows.length - 1].year ? 'reached' : ''),
+  });
 
   return `${banner}${summary}
-    ${table(headers, rows)}
+    ${wt.html}
     ${metodologia([
       `Zamiast portfela „na zawsze” liczymy taki, który wystarczy dokładnie do wieku ${z.deathAge} — czyli na ${z.yearsN} lat wypłat. ${gl('do-zera', 'Cel „do zera”')} to dzisiejsza wartość wszystkich tych wypłat razem.`,
       `Wypłata w pierwszym roku jest taka sama jak w klasycznej fazie wypłat: cel klasyczny × ${gl('swr', 'stopa wypłat')} = ${money(z.withdrawalYear1)}/rok${z.withdrawalGrowthReal > 0 ? `; rośnie o ${Fmt.formatPct(z.withdrawalGrowthReal)} realnie rocznie — dlatego cel „do zera” jest wyższy niż przy stałych wydatkach` : ', stała w dzisiejszych złotówkach (nominalnie rośnie z inflacją)'}.`,
+      wt.showPension ? 'Od wieku emerytalnego z portfela wypłacasz tylko wydatki minus emeryturę z ZUS — dlatego cel «do zera» jest niższy.' : null,
       `Między wypłatami portfel pracuje na ${Fmt.formatPct(z.realRate)} ${gl('realnie', 'realnie')} (realny zwrot po FIRE — ustawisz go w Plan → Profil i FIRE).`,
       `Tabela startuje od dokładnie celu „do zera” i kończy się na 0 zł. Cel klasyczny do porównania liczymy w tym samym miesiącu (${esc(Fmt.formatMonthGenitive(z.startYm))}) — oba cele rosną z wydatkami, więc porównanie z dwóch różnych dat byłoby mylące.`,
-    ], `cel = W₁·(1−qᴺ)/(1−q), q = 1/(1+r), N = ${z.yearsN}`)}`;
+    ], `cel = W₁·(1−qᴺ)/(1−q), q = 1/(1+r), N = ${z.yearsN}${wt.showPension ? ' (bez ZUS; z ZUS liczone rok po roku)' : ''}`)}`;
 }
 
-export function dieWithZeroCard({ resultHTML, deathAge }) {
+export function dieWithZeroCard({ resultHTML, deathAge, zusOn = false, pensionMonthly = 0, pensionAge = 65 }) {
+  const zus = pensionMonthly > 0
+    ? `<label class="field"><span class="lbl">
+        <input type="checkbox" id="an-dwz-zus" ${zusOn ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
+        Uwzględnij emeryturę ZUS (${money(pensionMonthly)}/mies. od ${pensionAge} r.ż.)</span></label>
+      <p class="muted small">Kwotę i wiek zmienisz w Plan → Profil i FIRE.</p>`
+    : '';
   return `<div class="card"><h2>Życie do zera ⏳</h2>
     <p class="muted small">Klasyczny cel (4%) ma starczyć na zawsze. Tu wydajesz portfel „do zera” w założonym wieku — potrzebny kapitał zwykle mniejszy, więc FIRE bywa wcześniej. Cena: pieniądze kończą się zgodnie z planem.</p>
     <div class="field">
       <label for="an-death-age">Dożywam do wieku <span class="muted small">(domyślnie 110)</span></label>
       <input id="an-death-age" type="number" inputmode="numeric" min="1" value="${deathAge}">
     </div>
+    ${zus}
     <div id="dwz-result">${resultHTML}</div>
+  </div>`;
+}
+
+// ── 4e. Most do emerytury ZUS ───────────────────────────────────────────
+// Statyczna karta sekcji „Prognoza" (bez zdarzeń). pb = projectBridgeFire
+// (nie-null: renderowana tylko przy pensionMonthly > 0 i dacie urodzenia).
+
+export function pensionBridgeCard({ pb }) {
+  const diff = pb.target - pb.targetClassic;
+  const banner = pb.hypothetical
+    ? '<div class="banner info small">FIRE poza horyzontem prognozy — scenariusz modelowy liczony od dziś.</div>'
+    : '';
+  return `<div class="card"><h2>Most do emerytury ZUS 🌉</h2>
+    <p class="muted small">Portfel nie musi wystarczyć na zawsze. Od wieku emerytalnego część wydatków pokryje ZUS — portfel dźwiga pełne wydatki tylko «na moście»: od FIRE do emerytury. Dlatego potrzebny kapitał jest mniejszy, a FIRE zwykle wypada wcześniej.</p>
+    ${banner}
+    ${kv('Cel z mostem ZUS', money(pb.target))}
+    ${kv('Cel klasyczny (ten sam miesiąc)', money(pb.targetClassic))}
+    ${kv('Różnica', signed(diff), diff <= 0 ? 'good' : 'warn-text')}
+    ${kv('Data FIRE z mostem', fireCell(pb.fireYm, pb.classicFireYm))}
+    ${kv('Data FIRE klasyczna', pb.classicFireYm ? esc(Fmt.formatMonthName(pb.classicFireYm)) : '<span class="warn-text">poza horyzontem</span>')}
+    ${kv('Lata mostu (FIRE → emerytura)', String(pb.bridgeYears))}
+    ${kv('Emerytura ZUS', `${money(pb.pensionYearly / 12)}/mies. <span class="muted small">od ${pb.pensionAge} r.ż.</span>`)}
+    ${kv('Cel po emeryturze', money(pb.terminalTarget))}
+    ${metodologia([
+      'Cel z mostem = pieniądze na pełne wydatki od FIRE do wieku emerytalnego + kapitał, który od emerytury pokryje już tylko różnicę (wydatki − ZUS) przy Twojej stopie wypłat.',
+      `Wszystko w dzisiejszych złotówkach; emerytura ZUS stała ${gl('realnie', 'realnie')} (rośnie z inflacją). Portfel na moście pracuje na realny zwrot po FIRE.`,
+      'To analiza — pulpit i werdykty dalej używają klasycznego celu.',
+    ], 'cel = Σ wydatki·qⁿ⁻¹ (lata mostu) + max(0, wydatki − ZUS)/SWR · qᴮ, q = 1/(1+r)')}
   </div>`;
 }
 

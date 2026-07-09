@@ -154,4 +154,9 @@ export const FIX = {
   // niezależną rekurencją). Plan: docs/plan-crash-stress-test.md (tam „F31" —
   // zajęte przez IKE/IKZE → F39).
   F39: { shockPct: 0.30, deathAge: 90, years: [1, 10], start: 1800000, wYear: 72000, startYm: '2026-07' },
+  // Most ZUS (dwufazowy cel + offset emerytury w fazie wypłat): wartości
+  // oczekiwane liczone w testach z form zamkniętych (zależą od wieków
+  // baseState). Plan: docs/plan-zus-pension-bridge.md (tam „F29/F30" — zajęte
+  // przez charts.js i Belkę → F46: bridgeTargetAt, F47: projectBridgeFire).
+  F46: { pension: { monthly: 2000, fromAge: 65 } },
 };

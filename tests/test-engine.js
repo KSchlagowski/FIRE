@@ -60,6 +60,8 @@ function baseState(partial = {}) {
       inflationAnnual: 0.03,
       postRetirementReturnReal: 0.05, // == realReturnAnnual → liczby F13/F24 bez zmian
       freezeExpensesAtRetirement: true, // legacy: wydatki stałe realnie po FIRE
+      pensionMonthly: 0, // ZUS wyłączony → cała matematyka legacy bajt-w-bajt
+      pensionAge: 65,
     },
     housing: { currentRentMonthly: 0 },
   }, partial), NOW);
@@ -569,6 +571,24 @@ test('F11: round-trip do najnowszej wersji; łańcuch migracji v1→…→SCHEMA
   assertEq(st.version, S.SCHEMA_VERSION, 'engine i storage zsynchronizowane');
   assertEq(S.migrate(S.validateState(JSON.parse(S.exportJSON(st)).state)).version, S.SCHEMA_VERSION);
   const defaultIkeIkze = JSON.stringify({ enabled: false, employmentForm: 'employee', pitRate: 0.12, ikeStart: 0, ikzeStart: 0 });
+  // v8 → v9: most ZUS — dokładane pola emerytury (celowo widoczny placeholder
+  // emerytury minimalnej; D6).
+  const v8 = JSON.parse(JSON.stringify(st));
+  v8.version = 8;
+  delete v8.assumptions.pensionMonthly;
+  delete v8.assumptions.pensionAge;
+  const m8 = S.migrate(S.validateState(v8));
+  assertEq(m8.version, S.SCHEMA_VERSION);
+  assertEq(m8.assumptions.pensionMonthly, 1978.49, 'placeholder emerytury minimalnej (marzec 2026)');
+  assertEq(m8.assumptions.pensionAge, 65, 'ustawowy wiek 65');
+  // Jawne wartości — w tym 0 = udokumentowany opt-out — przeżywają bez zmian.
+  const v8b = JSON.parse(JSON.stringify(st));
+  v8b.version = 8;
+  v8b.assumptions.pensionMonthly = 0;
+  v8b.assumptions.pensionAge = 60;
+  const m8b = S.migrate(S.validateState(v8b));
+  assertEq(m8b.assumptions.pensionMonthly, 0, 'jawne 0 (ZUS wyłączony) nietknięte');
+  assertEq(m8b.assumptions.pensionAge, 60, 'jawny wiek (60 K) nietknięty');
   // v6 → v7: notatka na wpisie — brakujące pole dostemplowane jako null.
   const v6 = JSON.parse(JSON.stringify(st));
   v6.version = 6;
@@ -642,6 +662,8 @@ test('F11: round-trip do najnowszej wersji; łańcuch migracji v1→…→SCHEMA
   delete v1.debt.familyOverrides;
   delete v1.assumptions.postRetirementReturnReal;
   delete v1.assumptions.freezeExpensesAtRetirement;
+  delete v1.assumptions.pensionMonthly;
+  delete v1.assumptions.pensionAge;
   delete v1.taxes;
   const migrated = S.migrate(S.validateState(v1));
   assertEq(migrated.version, S.SCHEMA_VERSION);
@@ -651,6 +673,8 @@ test('F11: round-trip do najnowszej wersji; łańcuch migracji v1→…→SCHEMA
   assertEq(migrated.assumptions.freezeExpensesAtRetirement, true, 'mrożenie dodane w łańcuchu');
   assertEq(migrated.taxes.belkaEnabled, false, 'podatki dodane w łańcuchu 1→…→7');
   assertTrue(migrated.taxes.ikeIkze && migrated.taxes.ikeIkze.enabled === false, 'ikeIkze dodane w łańcuchu 1→…→7');
+  assertEq(migrated.assumptions.pensionMonthly, 1978.49, 'emerytura dodana w łańcuchu 1→…→9');
+  assertEq(migrated.assumptions.pensionAge, 65, 'wiek emerytalny dodany w łańcuchu 1→…→9');
   assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: S.SCHEMA_VERSION + 1, state: {} })), 'wersja o 1 nowsza odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: S.APP_TAG, version: 99, state: {} })), 'v99 odrzucona');
   assertThrows(() => S.importPreview(JSON.stringify({ app: 'inna-apka', version: 1, state: {} })), 'obcy plik odrzucony');
@@ -1982,6 +2006,212 @@ test('F28f: projectDieWithZero — end-to-end z wyłączonym mrożeniem', () => 
   const idxOrInf = ym => ym == null ? Infinity : E.ymToIdx(ym);
   assertTrue(idxOrInf(zOff.fireYm) >= idxOrInf(zOn.fireYm), 'wyższy cel → data „do zera" nie wcześniejsza');
   assertEq(zOff.hypothetical, zOn.hypothetical, 'flaga hypothetical strukturalnie bez zmian');
+});
+
+// ── F27e/F27h/F28c + F46/F47: most ZUS (pensionMonthly/pensionAge) ────────
+// Emerytura państwowa jako offset fazy wypłat (D7: podłoga zera) i dwufazowy
+// cel FIRE (most → terminal). Formy zamknięte liczone w testach SĄ specyfikacją
+// (wzorzec F26/F27); silnik liczy pętlą wsteczną pvOfRetirement — parytet to
+// test. Litery wg rezerwacji planu obligacji (F27e/F28c) + F46/F47 (w planie
+// ZUS „F29/F30" — zajęte przez charts.js i Belkę).
+
+test('F27h: retirementOpts — pole pension (domyślna, założenia, override, null, czystość)', () => {
+  const st = E.createState();
+  assertEq(st.assumptions.pensionMonthly, 1978.49, 'placeholder: emerytura minimalna od marca 2026');
+  assertEq(JSON.stringify(E.retirementOpts(st).pension),
+    JSON.stringify({ monthly: 1978.49, fromAge: 65 }), 'nowy stan → placeholder D6');
+  // Założenia wygrywają nad domyślną.
+  const own = E.createState({ assumptions: { pensionMonthly: 3200, pensionAge: 60 } });
+  assertEq(E.retirementOpts(own).pension.monthly, 3200, 'kwota z założeń');
+  assertEq(E.retirementOpts(own).pension.fromAge, 60, 'wiek z założeń (60 K)');
+  // Override-obiekt wygrywa nad założeniami; null = ZUS wyłączony w what-ifie.
+  const o = E.retirementOpts(own, { pension: { monthly: 500, fromAge: 67 } });
+  assertEq(o.pension.monthly, 500, 'override kwoty wygrywa');
+  assertEq(o.pension.fromAge, 67, 'override wieku wygrywa');
+  assertEq(E.retirementOpts(own, { pension: null }).pension, null, 'null → ZUS wyłączony');
+  // Brak pól w założeniach → fallback { 0, 65 }.
+  const noField = E.createState();
+  delete noField.assumptions.pensionMonthly;
+  delete noField.assumptions.pensionAge;
+  assertEq(JSON.stringify(E.retirementOpts(noField).pension),
+    JSON.stringify({ monthly: 0, fromAge: 65 }), 'brak pól → { 0, 65 }');
+  // Czystość: stan nie mutowany.
+  const before = JSON.stringify(st);
+  E.retirementOpts(st, { pension: null });
+  assertEq(JSON.stringify(st), before, 'stan nietknięty');
+});
+
+test('F27e: projectWithdrawal — offset emerytury od wieku emerytalnego + podłoga zera', () => {
+  const f = FIX.F46.pension; // 2 000 zł/mies. od 65
+  const st = baseState({ assumptions: { pensionMonthly: f.monthly, pensionAge: f.fromAge } });
+  const w = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: 1800000, years: 45 });
+  const crossing = w.rows.find(r => r.age >= f.fromAge); // wiersz przekroczenia z ageAt, nie z ręki
+  assertTrue(!!crossing, 'horyzont 45 lat przecina wiek emerytalny');
+  for (const r of w.rows) {
+    if (r.age < f.fromAge) {
+      assertEq(r.pensionReal, 0, `bez emerytury przed ${f.fromAge} (rok ${r.year})`);
+      assertEq(r.netWithdrawalReal, r.withdrawalReal, 'netto = brutto przed emeryturą');
+    } else {
+      assertEq(r.pensionReal, 12 * f.monthly, `emerytura 24 000/rok od ${f.fromAge} (rok ${r.year})`);
+      assertClose(r.netWithdrawalReal, Math.max(0, r.withdrawalReal - 12 * f.monthly), 1e-9, 'netto = brutto − ZUS');
+    }
+  }
+  // withdrawalReal to dalej wydatki BRUTTO; rekurencja używa NETTO (jeden wiersz z ręki).
+  assertClose(crossing.withdrawalReal, 72000, 1e-9, 'brutto bez zmian po wieku emerytalnym');
+  assertClose(crossing.endReal, (crossing.startReal - crossing.netWithdrawalReal) * 1.05, 1e-6, 'rekurencja na netto');
+  assertClose(crossing.pensionNominal, crossing.pensionReal * Math.pow(1.03, crossing.year - 1), 1e-6, 'nominal: epoka startYm');
+  // Podłoga zera (D7): emerytura > wydatki → nic nie schodzi z portfela, portfel rośnie.
+  const rich = baseState({ assumptions: { pensionMonthly: 10000, pensionAge: f.fromAge } });
+  const wRich = E.projectWithdrawal(rich, { startYm: '2026-07', startPortfolioReal: 1800000, years: 45 });
+  for (const r of wRich.rows.filter(r => r.age >= f.fromAge)) {
+    assertEq(r.netWithdrawalReal, 0, `netto na podłodze 0 (rok ${r.year})`);
+    assertTrue(r.endReal > r.startReal, `portfel rośnie, gdy ZUS pokrywa całość (rok ${r.year})`);
+  }
+  // Brak daty urodzenia → emerytura nieobliczalna, wiersze z pensionReal 0.
+  const nb = baseState({ assumptions: { pensionMonthly: f.monthly, pensionAge: f.fromAge } });
+  nb.profile.birthDate = null;
+  const wNb = E.projectWithdrawal(nb, { startYm: '2026-07', startPortfolioReal: 1800000, years: 45 });
+  assertTrue(wNb.rows.every(r => r.pensionReal === 0), 'bez birthDate → pensionReal 0 wszędzie');
+});
+
+test('F28c: cel „do zera" z emeryturą — arytmetyka całkowita przy r = 0 i krawędzie', () => {
+  // Przykład Planu A: N = 10, B = 4, W₁ = 72 000, ZUS 24 000/rok →
+  // cel = 4·72000 + 6·(72000 − 24000) = 576 000. B z ageAt: wiek 26 w 2026-07,
+  // wiek emerytalny 30 → emerytura płynie od 5. roku wypłat.
+  const st = baseState({ assumptions: { postRetirementReturnReal: 0, pensionMonthly: 2000, pensionAge: 30 } });
+  const t = E.dieWithZeroTargetAt(st, '2026-07', 36);
+  assertEq(t.yearsN, 10);
+  assertClose(t.target, 4 * 72000 + 6 * (72000 - 24000), 1e-6, 'B·W₁ + (N−B)·(W₁−ZUS) = 576 000');
+  // Emerytura ≥ W₁ od wieku startowego → podłoga zera w każdym roku → cel 0.
+  const full = baseState({ assumptions: { postRetirementReturnReal: 0, pensionMonthly: 6000, pensionAge: 26 } });
+  assertEq(E.dieWithZeroTargetAt(full, '2026-07', 36).target, 0, 'ZUS pokrywa całość → cel 0 (podłoga)');
+  // Wiek emerytalny za horyzontem dożycia → cel DOKŁADNIE jak bez emerytury.
+  const late = baseState({ assumptions: { postRetirementReturnReal: 0, pensionMonthly: 2000, pensionAge: 40 } });
+  const none = baseState({ assumptions: { postRetirementReturnReal: 0 } });
+  assertEq(E.dieWithZeroTargetAt(late, '2026-07', 36).target,
+    E.dieWithZeroTargetAt(none, '2026-07', 36).target, 'pensionAge > deathAge → bez wpływu');
+});
+
+test('F46a: bridgeTargetAt — bez emerytury cel ≡ fireTargetAt (B = 0)', () => {
+  const st = baseState(); // pensionMonthly 0
+  const bt = E.bridgeTargetAt(st, '2026-07');
+  assertEq(bt.bridgeYears, 0, 'monthly 0 → most zerowy');
+  assertClose(bt.target, E.fireTargetAt(st, '2026-07'), 1e-6, 'cel degeneruje się do klasycznego');
+  assertEq(bt.pensionYearly, 0);
+  // Druga droga wyłączenia: override pension: null.
+  const on = baseState({ assumptions: { pensionMonthly: 2000 } });
+  const btNull = E.bridgeTargetAt(on, '2026-07', E.retirementOpts(on, { pension: null }));
+  assertEq(btNull.bridgeYears, 0);
+  assertClose(btNull.target, E.fireTargetAt(on, '2026-07'), 1e-6, 'pension: null → cel klasyczny');
+});
+
+test('F46b: bridgeTargetAt — formy zamknięte (r = 0 całkowite; r = 5% vs Σ w·qⁿ⁻¹ + terminal·qᴮ)', () => {
+  const f = FIX.F46.pension;
+  // r = 0: cel = B·W₁ + (W₁ − pensY)/wr; B z ageAt (wiek 26 w 2026-07 → 39).
+  const st0 = baseState({ assumptions: { postRetirementReturnReal: 0, pensionMonthly: f.monthly, pensionAge: f.fromAge } });
+  const B = f.fromAge - E.ageAt(st0.profile.birthDate, '2026-07').years;
+  const bt0 = E.bridgeTargetAt(st0, '2026-07');
+  assertEq(bt0.bridgeYears, B);
+  assertEq(bt0.pensionYearly, 12 * f.monthly);
+  assertClose(bt0.terminalTarget, (72000 - 24000) / 0.04, 1e-6, 'terminal = resztówka / SWR');
+  assertClose(bt0.target, B * 72000 + (72000 - 24000) / 0.04, 1e-6, 'r=0: most + terminal');
+  // r = 5%: pętla ≡ forma zamknięta PV (g = 0, mrożenie on).
+  const st5 = baseState({ assumptions: { pensionMonthly: f.monthly, pensionAge: f.fromAge } });
+  const bt5 = E.bridgeTargetAt(st5, '2026-07');
+  const q = 1 / 1.05;
+  const expected = 72000 * (1 - Math.pow(q, B)) / (1 - q) + ((72000 - 24000) / 0.04) * Math.pow(q, B);
+  assertClose(bt5.target, expected, 1e-6, 'r=5%: Σ w_n·qⁿ⁻¹ + terminal·qᴮ');
+  assertClose(bt5.targetClassic, 1800000, 1e-9, 'echo celu klasycznego (ten sam miesiąc)');
+  assertTrue(bt5.target < bt5.targetClassic, 'most ZUS obniża cel');
+  assertClose(bt5.withdrawalYear1, 72000, 1e-9);
+});
+
+test('F46c: bridgeTargetAt — emerytura ≥ wydatki → terminal 0, cel = sam most', () => {
+  const st = baseState({ assumptions: { postRetirementReturnReal: 0, pensionMonthly: 7000, pensionAge: 65 } });
+  const B = 65 - E.ageAt(st.profile.birthDate, '2026-07').years;
+  const bt = E.bridgeTargetAt(st, '2026-07');
+  assertEq(bt.terminalTarget, 0, 'podłoga zera na terminalu (84 000 > 72 000)');
+  assertClose(bt.target, B * 72000, 1e-6, 'cel = PV samego mostu (r = 0)');
+});
+
+test('F46d: bridgeTargetAt — wiek ≥ emerytalny → B = 0, cel = terminal', () => {
+  const st = baseState({ assumptions: { pensionMonthly: 2000, pensionAge: 65 } });
+  const ym = '2065-07'; // urodzony 2000-01 → wiek 65
+  assertEq(E.ageAt(st.profile.birthDate, ym).years, 65, 'kontrola wieku');
+  const bt = E.bridgeTargetAt(st, ym);
+  assertEq(bt.bridgeYears, 0, 'most nie może być ujemny');
+  assertEq(bt.target, bt.terminalTarget, 'PV nad 0 lat = terminal (dokładnie)');
+});
+
+test('F46g: bridgeTargetAt — strażnicy, czystość, mrożenie wydatków', () => {
+  const nb = baseState({ assumptions: { pensionMonthly: 2000 } });
+  nb.profile.birthDate = null;
+  assertEq(E.bridgeTargetAt(nb, '2026-07'), null, 'brak birthDate → null');
+  const st = baseState({ assumptions: { pensionMonthly: 2000, expenseGrowthReal: 0.01 } });
+  const before = JSON.stringify(st);
+  const tOn = E.bridgeTargetAt(st, '2026-07', E.retirementOpts(st, { freezeExpenses: true })).target;
+  const tOff = E.bridgeTargetAt(st, '2026-07', E.retirementOpts(st, { freezeExpenses: false })).target;
+  assertEq(JSON.stringify(st), before, 'stan nietknięty');
+  assertTrue(tOff > tOn, 'wzrost wydatków podnosi obie fazy → cel większy');
+});
+
+test('F47a: projectBridgeFire — emerytura 0 → data ≡ klasyczna (cel ≡ cel co miesiąc)', () => {
+  const st = baseState({ assumptions: { portfolioStart: 10000, cashStart: 6000 } }); // ZUS 0
+  E.recomputeDerived(st, NOW);
+  const proj = st.derived.projection;
+  assertTrue(proj.reached, 'stan osiąga klasyczne FIRE');
+  const pb = E.projectBridgeFire(st, { projection: proj, now: NOW });
+  assertEq(pb.fireYm, proj.fireYm, 'skan mostu ≡ klasyczny przy ZUS 0');
+  assertEq(pb.hypothetical, false);
+  assertEq(pb.bridgeYears, 0);
+});
+
+test('F47b: projectBridgeFire — ZUS przesuwa FIRE wcześniej; cel < klasycznego', () => {
+  const f = FIX.F46.pension;
+  const st = baseState({ assumptions: {
+    portfolioStart: 10000, cashStart: 6000,
+    pensionMonthly: f.monthly, pensionAge: f.fromAge,
+  } });
+  E.recomputeDerived(st, NOW);
+  const proj = st.derived.projection;
+  const pb = E.projectBridgeFire(st, { projection: proj, now: NOW });
+  assertEq(pb.hypothetical, false);
+  assertTrue(proj.reached && E.ymToIdx(pb.fireYm) < E.ymToIdx(pb.classicFireYm), 'FIRE z mostem ściśle wcześniej');
+  assertTrue(pb.target < pb.targetClassic, 'cel z mostem niższy (ten sam miesiąc)');
+  assertEq(pb.pensionMonthly, f.monthly, 'kwota echo dla czystych builderów');
+  assertEq(pb.pensionAge, f.fromAge, 'wiek echo dla czystych builderów');
+  assertTrue(pb.bridgeYears > 0, 'przed wiekiem emerytalnym most > 0 lat');
+});
+
+test('F47c: projectBridgeFire — hipotetyczny start dziś; brak birthDate → null', () => {
+  const st = baseState({ assumptions: { monthlyIncome: 6000, pensionMonthly: 2000 } });
+  E.recomputeDerived(st, NOW);
+  const pb = E.projectBridgeFire(st, { projection: st.derived.projection, now: NOW });
+  assertEq(pb.hypothetical, true, 'dochód = wydatki → poza horyzontem');
+  assertEq(pb.fireYm, null);
+  assertEq(pb.startYm, E.todayYm(NOW), 'scenariusz modelowy od dziś');
+  assertEq(pb.startAge, 26);
+  const nb = baseState({ assumptions: { pensionMonthly: 2000 } });
+  nb.profile.birthDate = null;
+  assertEq(E.projectBridgeFire(nb, { now: NOW }), null, 'brak birthDate → null');
+});
+
+test('F47d: projectBridgeFire — cel klasyczny echo z TEGO SAMEGO miesiąca (startYm)', () => {
+  const f = FIX.F46.pension;
+  const st = baseState({ assumptions: {
+    portfolioStart: 10000, cashStart: 6000, expenseGrowthReal: 0.01,
+    pensionMonthly: f.monthly, pensionAge: f.fromAge,
+  } });
+  E.recomputeDerived(st, NOW);
+  const pb = E.projectBridgeFire(st, { projection: st.derived.projection, now: NOW });
+  assertEq(pb.hypothetical, false);
+  assertClose(pb.targetClassic, E.fireTargetAt(st, pb.startYm), 1e-9, 'klasyczny liczony w startYm');
+  assertTrue(pb.targetClassic > E.fireTargetAt(st, E.todayYm(NOW)), 'w startYm wydatki już urosły (g>0)');
+  // Ta sama tożsamość w scenariuszu hipotetycznym (startYm = dziś).
+  const hyp = baseState({ assumptions: { monthlyIncome: 6000, expenseGrowthReal: 0.01, pensionMonthly: f.monthly } });
+  E.recomputeDerived(hyp, NOW);
+  const ph = E.projectBridgeFire(hyp, { projection: hyp.derived.projection, now: NOW });
+  assertClose(ph.targetClassic, E.fireTargetAt(hyp, ph.startYm), 1e-9, 'hipotetycznie również');
 });
 
 // ── F29: charts.js — buildery SVG (opcje width/maxPoints/detail) ─────────

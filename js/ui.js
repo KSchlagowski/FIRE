@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage, milestoneMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.29.0';
+export const APP_VERSION = '1.30.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1298,6 +1298,7 @@ let anMode = 'yearly';
 let anYear = 1;
 let anSection = 'przeglad';   // sekcja Analizy: przeglad | prognoza | dozera | kredyty
 let anDeathAge = 110;         // „Do zera": wiek dożycia (efemeryczny, domyślnie 110)
+let anDzZus = true;           // „Do zera": uwzględniaj emeryturę ZUS (efemeryczny)
 
 function renderAnaliza() {
   if (!state.derived) E.recomputeDerived(state);
@@ -1370,6 +1371,12 @@ function renderAnaliza() {
       ], o), { legendHTML: An.withdrawalLegend() })
       : '';
 
+    // Most ZUS: karta statyczna, tylko przy włączonej emeryturze i dacie
+    // urodzenia (bez niej wiek emerytalny jest nieobliczalny → null).
+    const bridgeCard = a.pensionMonthly > 0 && state.profile.birthDate
+      ? An.pensionBridgeCard({ pb: E.projectBridgeFire(state, { projection: proj }) })
+      : '';
+
     body = goalSavingsHTML(E.requiredSavingsForGoal(state))
       + An.projectionCard({
         mode: anMode, blocks, series: proj.series, excelRows, houseOn,
@@ -1379,18 +1386,13 @@ function renderAnaliza() {
         hasFamily: !!fa,
       })
       + An.withdrawalCard({ w, chartHTML: wChart })
+      + bridgeCard
       + An.sensitivityCard({ baseFireYm, returnRows, savingsRows, swrRows });
   } else if (anSection === 'dozera') {
-    const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj });
-    const zChart = z && z.rows.length > 1
-      ? zoomable('an-dozera', 'Do zera: saldo portfela', o => chartSVG(z.rows, [
-        { get: r => r.endNominal, cls: 'line-proj', label: 'nominalnie' },
-        { get: r => r.endReal, cls: 'line-port', label: 'realnie' },
-      ], o), { legendHTML: An.withdrawalLegend() })
-      : '';
     body = An.dieWithZeroCard({
-      resultHTML: An.dieWithZeroResult({ z }) + zChart,
+      resultHTML: dwzResultHTML(proj),
       deathAge: anDeathAge,
+      zusOn: anDzZus, pensionMonthly: a.pensionMonthly, pensionAge: a.pensionAge,
     });
   } else if (anSection === 'podatki') {
     // Najwyżej dwa dodatkowe pełne przebiegi prognozy (bez Belki / bez
@@ -1497,20 +1499,35 @@ function renderAnaliza() {
     anYear = Number(yearSel.value) || 1;
     renderAnaliza();
   });
+  // „Do zera": oba handlery (wiek, checkbox ZUS) podmieniają tylko #dwz-result
+  // przez wspólne dwzResultHTML — pola i fokus przeżywają zmianę.
+  const dwzSwap = () => { const dz = $('#dwz-result'); if (dz) dz.innerHTML = dwzResultHTML(proj); };
   const da = $('#an-death-age');
   if (da) da.addEventListener('input', () => {
     const v = Math.floor(Number(da.value));
     anDeathAge = Number.isFinite(v) && v > 0 ? v : 110;
-    const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj });
-    const zChart = z && z.rows.length > 1
-      ? zoomable('an-dozera', 'Do zera: saldo portfela', o => chartSVG(z.rows, [
-        { get: r => r.endNominal, cls: 'line-proj', label: 'nominalnie' },
-        { get: r => r.endReal, cls: 'line-port', label: 'realnie' },
-      ], o), { legendHTML: An.withdrawalLegend() })
-      : '';
-    const dz = $('#dwz-result');
-    if (dz) dz.innerHTML = An.dieWithZeroResult({ z }) + zChart;
+    dwzSwap();
   });
+  const dzZus = $('#an-dwz-zus');
+  if (dzZus) dzZus.addEventListener('change', () => {
+    anDzZus = dzZus.checked;
+    dwzSwap();
+  });
+}
+
+// „Do zera": wynik + wykres — współdzielone przez pierwszy render i oba
+// handlery (wiek dożycia, checkbox ZUS). Checkbox wyłącza emeryturę przez
+// override `pension: null` w retirementOpts — nic nie zapisujemy.
+function dwzResultHTML(proj) {
+  const ro = E.retirementOpts(state, anDzZus ? {} : { pension: null });
+  const z = E.projectDieWithZero(state, { deathAge: anDeathAge, projection: proj, ro });
+  const zChart = z && z.rows.length > 1
+    ? zoomable('an-dozera', 'Do zera: saldo portfela', o => chartSVG(z.rows, [
+      { get: r => r.endNominal, cls: 'line-proj', label: 'nominalnie' },
+      { get: r => r.endReal, cls: 'line-port', label: 'realnie' },
+    ], o), { legendHTML: An.withdrawalLegend() })
+    : '';
+  return An.dieWithZeroResult({ z }) + zChart;
 }
 
 // ── Symulacja (#/symulacja — hub, #/symulacja/:calc — kalkulator) ───────
@@ -1533,6 +1550,8 @@ let symLoanT = null;   // Kalkulator kredytu: okres w latach (null = seed)
 let symLoanOp = 0;     // Kalkulator kredytu: nadpłata zł/mies.
 let symRetPost = null; // Emerytura: zwrot po FIRE (ułamek; null = z ustawień)
 let symRetFreeze = null; // Emerytura: mrożenie wydatków po FIRE (null = z ustawień)
+let symRetPension = null; // Emerytura: ZUS zł/mies. (string; null = z ustawień)
+let symRetPage = null;    // Emerytura: wiek emerytalny (string; null = z ustawień)
 let symCrashPct = '30'; // Krach: % spadku portfela
 let symCrashAge = '90'; // Krach: dożywam do wieku
 
@@ -1552,7 +1571,7 @@ const SYM_CALCS = [
   ['latte', '☕', 'Efekt małych wydatków', 'co daje obcięcie drobnych stałych wydatków'],
   ['wiecej', '💪', 'Oszczędzaj więcej', 'o ile wcześniej osiągniesz FIRE'],
   ['zwrot', '📊', 'Wpływ zwrotu', 'jak inny zwrot z inwestycji przesuwa FIRE'],
-  ['emerytura', '🏖️', 'Emerytura po FIRE', 'zwrot po FIRE i mrożenie wydatków'],
+  ['emerytura', '🏖️', 'Emerytura po FIRE', 'zwrot po FIRE, mrożenie wydatków i emerytura ZUS'],
   ['krach', '📉', 'Test krachu', 'co krach rynkowy zrobi z Twoją emeryturą'],
   ['kredyt', '🧮', 'Kalkulator kredytu', 'rata, odsetki i efekt nadpłat dowolnego kredytu'],
   ['nadplata', '💸', 'Nadpłata kredytu', 'ile oszczędzasz, nadpłacając swój kredyt'],
@@ -1728,11 +1747,28 @@ function renderSymulacja(calc) {
     const overrides = {};
     if (symRetPost != null) overrides.postReturnReal = Number(symRetPost);
     if (symRetFreeze != null) overrides.freezeExpenses = symRetFreeze;
+    // ZUS: puste pole = wartość z ustawień; zawsze przekazujemy efektywny
+    // obiekt (symetria baza/override — równy ustawieniom, gdy nietknięte).
+    let pMonthly = a.pensionMonthly, pAge = a.pensionAge;
+    const rawPension = symRetPension == null ? '' : String(symRetPension).trim();
+    if (rawPension !== '') {
+      const v = Fmt.parsePLN(rawPension);
+      if (v == null || v < 0) return '<div class="field-error">Podaj emeryturę z ZUS: 0 lub więcej.</div>';
+      pMonthly = v;
+    }
+    const rawPage = symRetPage == null ? '' : String(symRetPage).trim();
+    if (rawPage !== '') {
+      const v = Fmt.parsePLN(rawPage);
+      if (v == null || v < 1 || v > 100) return '<div class="field-error">Podaj realny wiek emerytalny (1–100).</div>';
+      pAge = Math.round(v);
+    }
+    overrides.pension = { monthly: pMonthly, fromAge: pAge };
     const ro = E.retirementOpts(state, overrides);
     const dz = E.projectDieWithZero(state, { deathAge: 90, projection: proj, ro });
     const dzBase = E.projectDieWithZero(state, { deathAge: 90, projection: proj });
     const w = E.projectWithdrawal(state, { projection: proj, ro });
-    return Sim.retirementResult({ ro, dz, dzBase, w, deathAge: 90 });
+    const pb = E.projectBridgeFire(state, { projection: proj, ro });
+    return Sim.retirementResult({ ro, dz, dzBase, w, pb, deathAge: 90 });
   };
 
   const crashResult = () => {
@@ -1763,6 +1799,8 @@ function renderSymulacja(calc) {
       value: symRetPost == null ? a.postRetirementReturnReal : Number(symRetPost),
       base: a.postRetirementReturnReal,
       freeze: symRetFreeze == null ? a.freezeExpensesAtRetirement : symRetFreeze,
+      pension: symRetPension == null ? moneyVal(a.pensionMonthly) : symRetPension,
+      pensionAge: symRetPage == null ? String(a.pensionAge) : symRetPage,
       resultHTML: retirementResult(),
     });
   } else if (calc === 'krach') {
@@ -1832,6 +1870,16 @@ function renderSymulacja(calc) {
     const freezeEl = $('#sym-ret-freeze');
     if (freezeEl) freezeEl.addEventListener('change', () => {
       symRetFreeze = freezeEl.checked;
+      $('#sym-ret-result').innerHTML = retirementResult();
+    });
+    const pensEl = $('#sym-ret-pension');
+    if (pensEl) pensEl.addEventListener('input', () => {
+      symRetPension = pensEl.value;
+      $('#sym-ret-result').innerHTML = retirementResult();
+    });
+    const pageEl = $('#sym-ret-page');
+    if (pageEl) pageEl.addEventListener('input', () => {
+      symRetPage = pageEl.value;
       $('#sym-ret-result').innerHTML = retirementResult();
     });
   } else if (calc === 'krach') {
@@ -1925,6 +1973,12 @@ function renderPlanFire() {
     <label class="field"><span class="lbl">
       <input type="checkbox" id="pl-freeze" ${a.freezeExpensesAtRetirement ? 'checked' : ''} style="width:20px;height:20px;min-height:0">
       Wydatki przestają rosnąć po FIRE${tip('Zaznaczone: po przejściu na FIRE Twoje wydatki są stałe w dzisiejszych złotówkach — rosną już tylko z inflacją. Odznaczone: zakładasz, że styl życia drożeje dalej (o „realny wzrost wydatków”) także na emeryturze — to ostrożniejsze założenie, portfel musi być większy.')}</span></label>
+    ${field({ id: 'pl-pension', label: 'Prognozowana emerytura z ZUS', suffix: 'zł/mies.',
+      value: moneyVal(a.pensionMonthly),
+      tipText: 'Kwota w dzisiejszych złotówkach. ZUS co roku wysyła „Informację o stanie konta” z prognozą Twojej hipotetycznej emerytury — przepisz ją tutaj. Domyślnie wpisana jest emerytura minimalna (1978,49 zł od marca 2026). Od wieku emerytalnego ZUS pokryje część Twoich wydatków, więc portfel musi udźwignąć mniej.',
+      hint: 'Wpisz 0, aby nie uwzględniać ZUS.' })}
+    ${field({ id: 'pl-page', label: 'Wiek emerytalny (ZUS)', value: moneyVal(a.pensionAge), mode: 'numeric',
+      tipText: 'Ustawowy wiek emerytalny: 65 lat dla mężczyzn, 60 dla kobiet. Od tego wieku emerytura z ZUS zaczyna dopłacać do Twoich wydatków.' })}
   </div>
   <button id="pl-save" class="primary wide">Zapisz</button>
   ${planBack}`;
@@ -1942,17 +1996,21 @@ function renderPlanFire() {
       ['ginc', () => parsePct('pl-ginc')],
       ['cashret', () => parsePct('pl-cashret')],
       ['postret', () => parsePct('pl-postret')],
+      ['pension', () => parseMoney('pl-pension')],
+      ['page', () => parseMoney('pl-page')],
     ];
     const vals = {};
     for (const [k, get] of specs) { const r = get(); if (r.error) return planFail(`Popraw pola formularza: ${r.error}`); vals[k] = r.value; }
     const age = E.ageAt(birth, E.todayYm()).years;
     if (vals.fireage <= age) return planFail(`Docelowy wiek FIRE musi być większy niż obecny wiek (${age}).`);
+    if (vals.page < 1 || vals.page > 100) return planFail('Podaj realny wiek emerytalny (1–100).');
     state.profile.birthDate = birth;
     Object.assign(state.assumptions, {
       targetFireAge: vals.fireage, withdrawalRate: vals.wr, realReturnAnnual: vals.ret,
       inflationAnnual: vals.infl, expenseGrowthReal: vals.gexp, incomeGrowthReal: vals.ginc,
       cashReturnReal: vals.cashret, postRetirementReturnReal: vals.postret,
       freezeExpensesAtRetirement: $('#pl-freeze').checked,
+      pensionMonthly: vals.pension, pensionAge: Math.round(vals.page),
     });
     try { E.recomputeDerived(state); } catch (err) { return planFail('Błąd przeliczania: ' + err.message); }
     persist();

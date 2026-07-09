@@ -1,7 +1,7 @@
 // storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
 // migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 export const KEY = 'fireApp';
 export const BAK = 'fireApp.bak';
 export const APP_TAG = 'fire-companion';
@@ -176,7 +176,17 @@ export function migrate(s) {
       cur.version = 8;
     }
     // fall-through
-    case 8:
+    case 8: {
+      // v8 → v9: most ZUS — prognozowana emerytura (dziś: minimalna, celowo
+      // widoczny placeholder do nadpisania kwotą z listu ZUS; 0 = wyłącz)
+      // i wiek emerytalny (65 M / 60 K).
+      const a = cur.assumptions || (cur.assumptions = {});
+      if (typeof a.pensionMonthly !== 'number') a.pensionMonthly = 1978.49;
+      if (typeof a.pensionAge !== 'number') a.pensionAge = 65;
+      cur.version = 9;
+    }
+    // fall-through
+    case 9:
       break;
     default:
       throw new Error(`Nieznana wersja schematu: ${cur.version}`);
