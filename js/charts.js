@@ -2,6 +2,8 @@
 // (liść L0 w diagramie warstw). Przeniesione z ui.js, by dało się je testować
 // w Node. Opcje `width`/`maxPoints`/`detail` obsługują widok pełnoekranowy;
 // przy wartościach domyślnych wynik jest bajt-w-bajt identyczny jak wcześniej.
+// chartSVG zna domenę ujemną (min < 0): skala sięga poniżej zera i oś Y dostaje
+// dodatkową linię/etykietę minimum; dla danych ≥ 0 wyjście bez zmian (bajt-w-bajt).
 // Tap-to-inspect: def/segment z polem `label` włącza payload `data-tip` na
 // korzeniu <svg> (surowe liczby + geometria pola rysunku) — ui.js czyta go
 // dotykiem i formatuje przez format.js; `tipHit` to czysty hit-test do testów.
@@ -20,7 +22,9 @@ function formatShort(x) {
 
 // Oś Y: domyślnie 3 linie/etykiety (0 / ½ / max); `detail` dokłada ¼ i ¾ (5).
 // Zwraca gotowe do wklejenia stringi — kolejność bez detail = jak w oryginale.
-function yAxisSvg(y, max, padL, padR, W, detail) {
+// `min < 0` (domena ujemna, np. miesiące budowy) DOKŁADA na końcu linię i
+// etykietę minimum — prefiks stringu przy min = 0 pozostaje bajt-w-bajt.
+function yAxisSvg(y, max, padL, padR, W, detail, min = 0) {
   const y0 = y(0), yM = y(max), yH = y(max / 2), yQ = y(max / 4), yT = y(max * 3 / 4);
   const lines = [
     `<line class="axis" x1="${padL}" y1="${y0}" x2="${W - padR}" y2="${y0}"/>`,
@@ -36,6 +40,10 @@ function yAxisSvg(y, max, padL, padR, W, detail) {
     ...(detail ? [`<text x="${padL - 4}" y="${yT + 3}" text-anchor="end">${formatShort(max * 3 / 4)}</text>`] : []),
     `<text x="${padL - 4}" y="${yM + 3}" text-anchor="end">${formatShort(max)}</text>`,
   ];
+  if (min < 0) {
+    lines.push(`<line class="axis" x1="${padL}" y1="${y(min)}" x2="${W - padR}" y2="${y(min)}" opacity=".4"/>`);
+    labels.push(`<text x="${padL - 4}" y="${y(min) + 3}" text-anchor="end">${formatShort(min)}</text>`);
+  }
   return { axisSvg: lines.join('\n    '), yLabelSvg: labels.join('\n    ') };
 }
 
@@ -75,13 +83,20 @@ export function chartSVG(rows, defs, { height = 170, width = 440, maxPoints = 12
   const W = width, H = height, padL = 48, padR = 8, padT = 10, padB = 20;
   // Skala z PEŁNEJ serii (przed decymacją), by szczyt poza krokiem próbkowania
   // nadal wyznaczał max (D7). Dla serii monotonicznych/≤maxPoints identyczna z pts.
-  let max = 0;
-  for (const r of rows) for (const d of defs) max = Math.max(max, (d.band ? d.hi(r) : d.get(r)) || 0);
-  if (max <= 0) max = 1;
+  // Domena ujemna: min < 0 (miesiące budowy / deficyty) rozszerza skalę w dół,
+  // a solidna oś 0 unosi się nad dołem pola. Przy min = 0 wszystko poniżej
+  // redukuje się bajt-w-bajt do dotychczasowego mapowania (strażnik F29g/F34c).
+  let max = 0, min = 0;
+  for (const r of rows) for (const d of defs) {
+    const hi = (d.band ? d.hi(r) : d.get(r)) || 0;
+    const lo = (d.band ? d.lo(r) : d.get(r)) || 0;
+    if (hi > max) max = hi;
+    if (lo < min) min = lo;
+  }
+  if (max <= min) max = min + 1;
   const x = i => padL + i * (W - padL - padR) / Math.max(1, pts.length - 1);
-  // Zacisk do [0, max]: ujemne lądują w dolnym paśmie, nie poza viewBox (D7).
-  // Dla v ≥ 0 (domyślna ścieżka) wynik bajt-w-bajt jak dotąd.
-  const y = v => padT + (1 - Math.max(0, Math.min(v, max)) / max) * (H - padT - padB);
+  // Zacisk do [min, max]: nic nie ląduje poza viewBox (D7).
+  const y = v => padT + (1 - (Math.min(Math.max(v, min), max) - min) / (max - min)) * (H - padT - padB);
   const lines = [];
   for (const d of defs) {
     if (d.band) {
@@ -113,7 +128,7 @@ export function chartSVG(rows, defs, { height = 170, width = 440, maxPoints = 12
       lines.push(`<polyline class="${d.cls}" points="${p.join(' ')}"/>`);
     }
   }
-  const { axisSvg, yLabelSvg } = yAxisSvg(y, max, padL, padR, W, detail);
+  const { axisSvg, yLabelSvg } = yAxisSvg(y, max, padL, padR, W, detail, min);
   const first = pts[0].ym.slice(0, 4), last = pts[pts.length - 1].ym.slice(0, 4);
   // Oś X: domyślnie tylko pierwszy/ostatni rok. `detail` dokłada pośrednie
   // etykiety (cel ~ width/110), pomijając powtórzony rok; krańce zachowują

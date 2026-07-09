@@ -634,6 +634,43 @@ export function computeStreak(entries) {
   return { current: run, best };
 }
 
+// ── Kamienie milowe ─────────────────────────────────────────────────────
+// Celebracja tylko przy PRZEKROCZENIU (false→true między snapshotami wokół
+// zapisu check-inu) i tylko raz w życiu (state.ui.milestonesSeen). Majątek,
+// który próg spełniał już wcześniej (onboarding, edycja założeń), milczy.
+
+// Kolejność priorytetu — pierwszy przekroczony klucz zostaje nagłówkiem
+// modala, reszta idzie w linii „A do tego…". Klucze są utrwalane w
+// state.ui.milestonesSeen — NIGDY ich nie zmieniaj (to schemat).
+export const MILESTONES_ORDER = [
+  'fi100', 'mortgageDone', 'familyDone', 'fi75', 'fi50',
+  'mortgageHalf', 'fi25', 'port100k', 'fi10',
+];
+
+// Status logiczny każdego kamienia z wyników potoku pochodnych. Czysty
+// czytelnik (styl fiStats): nic nie liczy od nowa, nic nie cache'uje.
+// fi100 to kamień PORTFELA (lustro FI%), celowo bez bramki długów — pełny
+// warunek FIRE (cel + kredyt 0 + rodzinny 0) należy wyłącznie do projectFire.
+export function milestoneStatus(state, balances, debt, family, uptoYm) {
+  const target = fireTargetAt(state, uptoYm);
+  const p = balances.portfolio;
+  const pct = q => target > 0 && p >= q * target - EPS;
+  return {
+    fi10: pct(0.10), fi25: pct(0.25), fi50: pct(0.50), fi75: pct(0.75), fi100: pct(1.0),
+    port100k: p >= 100000 - EPS,
+    mortgageHalf: debt.started && debt.paidPct >= 0.5,
+    mortgageDone: debt.started && debt.balanceNominal <= EPS,
+    familyDone: family.started && family.balanceNominal <= EPS,
+  };
+}
+
+// Przekroczenie = false→true między dwoma statusami, minus już obejrzane.
+// Zwraca klucze w kolejności MILESTONES_ORDER; toleruje seen == null/nie-tablicę.
+export function newMilestones(before, after, seen = []) {
+  const s = Array.isArray(seen) ? seen : [];
+  return MILESTONES_ORDER.filter(k => after[k] && !before[k] && !s.includes(k));
+}
+
 // ── Check-in ────────────────────────────────────────────────────────────
 
 export function applyCheckIn(state, input, now = new Date()) {
@@ -663,6 +700,11 @@ export function applyCheckIn(state, input, now = new Date()) {
     if (!f || f.balStart <= EPS) throw new Error('Nadpłata możliwa tylko przy aktywnym długu rodzinnym');
   }
 
+  // Notatka: przycięta z brzegów, pusta → null, twarde cięcie do 200 znaków
+  // (maxlength w UI to pierwsza linia obrony). Obojętna dla matematyki.
+  const noteRaw = input.note != null ? String(input.note).trim() : '';
+  const note = noteRaw ? noteRaw.slice(0, 200) : null;
+
   const plan = buildPlan(state);
   // Snapshot planu zamrożony przy tworzeniu; jawna edycja go odświeża.
   const plannedSavingsSnapshot = plannedSavingsFor(plan, month);
@@ -671,6 +713,7 @@ export function applyCheckIn(state, input, now = new Date()) {
     month, earned, spent, overpayment, familyOverpayment,
     cashOverride: input.cashOverride != null ? roundGrosze(Number(input.cashOverride)) : null,
     balanceOverride: input.balanceOverride != null ? roundGrosze(Number(input.balanceOverride)) : null,
+    note,
     plannedSavingsSnapshot,
     verdict: computeVerdict(net, plannedSavingsSnapshot),
     createdAt: existing ? existing.createdAt : now.toISOString(),
@@ -1594,6 +1637,26 @@ export function planVsActualStats(entries) {
   return { n: sorted.length, cumNet, cumPlanned, cumDelta: cumNet - cumPlanned, verdicts, cumRows, best, worst };
 }
 
+// Historia oszczędzania miesiąc po miesiącu — realnie odłożone vs zamrożony plan.
+// Czysta funkcja wpisów: [{ ym, net, planned, delta, rate, verdict }] rosnąco po ym.
+// planned = plannedSavingsSnapshot (niezmiennik: zmiana założeń nie przepisuje
+// przeszłości). Miesiące bez wpisu są pomijane — jak w computeStreak/cumRows.
+export function monthlySavingsHistory(entries) {
+  return [...entries]
+    .sort((x, y) => (x.month < y.month ? -1 : 1))
+    .map(e => {
+      const net = roundGrosze(e.earned - e.spent);
+      return {
+        ym: e.month,
+        net,
+        planned: e.plannedSavingsSnapshot,
+        delta: roundGrosze(net - e.plannedSavingsSnapshot),
+        rate: e.earned > 0 ? net / e.earned : null,
+        verdict: e.verdict,
+      };
+    });
+}
+
 // Harmonogram "sama rata" od zadanego salda (cap 1200 kroków).
 export function remainingSchedule(balNominal, j, payment, extraMonthly = 0) {
   const rows = [];
@@ -1806,6 +1869,90 @@ export function fireJourneyProgress(state, plan, projection, uptoYm) {
   return { pct, savedValue: saved, totalValue: total, reached, monthlySaveNow };
 }
 
+// ── Raport roczny ───────────────────────────────────────────────────────
+// Retrospektywa „Twój rok FIRE" (#/raport/:year): wszystko czytane z historii
+// wpisów (wzorzec replay), nic nie jest utrwalane — zero zmian schematu.
+
+// Pełny potok na kopii stanu z wpisami obciętymi do uptoYm i „zegarem"
+// zamrożonym na uptoYm. Czysty (płytka kopia — wzorzec projectionWith).
+// Obcięcie wpisów jest konieczne: assumedDelta patrzy na OSTATNIE ≤6 wpisów,
+// a byPlanOnly na ich liczbę — bez obcięcia prognoza „sprzed roku"
+// widziałaby przyszłość.
+export function projectionAsOf(state, uptoYm) {
+  const cut = ymToIdx(uptoYm);
+  const st = { ...state, entries: state.entries.filter(e => ymToIdx(e.month) <= cut) };
+  const plan = buildPlan(st);
+  const debt = replayDebt(st, uptoYm);
+  const family = replayFamilyLoan(st, uptoYm);
+  const balances = replayBalances(st, uptoYm, debt, family);
+  return projectFire(st, plan, balances, debt, family, uptoYm);
+}
+
+// Lata z co najmniej jednym wpisem, malejąco (punkt wejścia w Historii).
+export function reportYears(state) {
+  return [...new Set(state.entries.map(e => Number(e.month.slice(0, 4))))].sort((a, b) => b - a);
+}
+
+// Podsumowanie roku kalendarzowego `year`. null, gdy rok nie przecina się
+// z planem (from > to). Wszystko realnie; assumptions są DZISIEJSZE dla obu
+// prognoz — porównanie izoluje efekt wpisów z roku, nie zmian założeń.
+// fireShiftMonths > 0 = FIRE WCZEŚNIEJ (konwencja renderCheckinResult).
+export function annualReport(state, year, now = new Date()) {
+  const fromIdx = Math.max(ymToIdx(`${year}-01`), ymToIdx(state.anchorMonth));
+  const toIdx = Math.min(ymToIdx(`${year}-12`), ymToIdx(lastCompleteMonth(now)));
+  if (fromIdx > toIdx) return null;
+  const from = idxToYm(fromIdx), to = idxToYm(toIdx);
+  const inYear = state.entries
+    .filter(e => ymToIdx(e.month) >= fromIdx && ymToIdx(e.month) <= toIdx)
+    .sort((x, y) => (x.month < y.month ? -1 : 1));
+
+  // Sumy odłożone/plan + werdykty + najlepszy/najsłabszy miesiąc.
+  let totalSaved = 0, totalPlanned = 0, best = null, worst = null;
+  const verdicts = { crushed: 0, on_plan: 0, behind: 0, hard: 0 };
+  for (const e of inYear) {
+    const net = roundGrosze(e.earned - e.spent);
+    totalSaved += net; totalPlanned += e.plannedSavingsSnapshot;
+    if (verdicts[e.verdict] != null) verdicts[e.verdict]++;
+    if (!best || net > best.net) best = { month: e.month, net };
+    if (!worst || net < worst.net) worst = { month: e.month, net };
+  }
+  const goodMonths = inYear.filter(e => isGoodVerdict(e.verdict)).length;
+  const bestRun = computeStreak(inYear).best;   // najdłuższa seria W ROKU
+
+  // FI% na początek i koniec roku — definicja jak fiStats.fiPct (sam portfel).
+  // replayBalances czyta wpisy tylko ≤ upto, więc obcięcie nie jest potrzebne;
+  // prevEndYm sprzed kotwicy legalnie zwraca salda startowe (pusta pętla).
+  const prevEndYm = `${year - 1}-12`;
+  const balPrev = replayBalances(state, prevEndYm);
+  const balEnd = replayBalances(state, to);
+  const tPrev = fireTargetAt(state, prevEndYm), tEnd = fireTargetAt(state, to);
+  const fiPctStart = tPrev > 0 ? balPrev.portfolio / tPrev : null;
+  const fiPctEnd = tEnd > 0 ? balEnd.portfolio / tEnd : null;
+
+  // Przesunięcie prognozy FIRE: „tylko wpisy do grudnia zeszłego roku"
+  // vs „wpisy do końca raportowanego okresu". Dodatnie = FIRE WCZEŚNIEJ.
+  const projPrev = projectionAsOf(state, prevEndYm);
+  const projNow = projectionAsOf(state, to);
+  const fireShiftMonths = (projPrev.reached && projNow.reached)
+    ? monthsBetween(projNow.fireYm, projPrev.fireYm) : null;
+
+  return {
+    year, from, to,
+    entriesCount: inYear.length,
+    monthsInPlan: toIdx - fromIdx + 1,
+    totalSaved: roundGrosze(totalSaved), totalPlanned,
+    delta: roundGrosze(totalSaved - totalPlanned),
+    verdicts, goodMonths, bestRun, best, worst,
+    fiPctStart, fiPctEnd,
+    fiPctDelta: (fiPctStart != null && fiPctEnd != null) ? fiPctEnd - fiPctStart : null,
+    reachedPrev: projPrev.reached, reachedNow: projNow.reached,
+    fireYmPrev: projPrev.reached ? projPrev.fireYm : null,
+    fireYmNow: projNow.reached ? projNow.fireYm : null,
+    fireShiftMonths,
+    notes: inYear.filter(e => e.note).map(e => ({ ym: e.month, note: e.note })),
+  };
+}
+
 // ── Jeden potok po każdej mutacji ───────────────────────────────────────
 // Pochodne trzymane na state.derived — nigdy nie utrwalane jako prawda.
 
@@ -1844,7 +1991,7 @@ export function defaultAssumptions() {
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 6,
+    version: 8,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },
@@ -1867,7 +2014,7 @@ export function createState(partial = {}, now = new Date()) {
       ikeIkze: { enabled: false, employmentForm: 'employee', pitRate: 0.12, ikeStart: 0, ikzeStart: 0 },
     },
     entries: [],
-    ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null },
+    ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null, milestonesSeen: [] },
   };
   deepMerge(state, partial);
   return state;

@@ -7,10 +7,10 @@ import * as Sim from './simulation.js';
 import * as Mot from './motivation.js';
 import { chartSVG, stackedBarSVG, tipHit } from './charts.js';
 import { glossaryScreen } from './glossary.js';
-import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
+import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage, milestoneMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.25.0';
+export const APP_VERSION = '1.29.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -391,6 +391,7 @@ function route() {
   else if (hash === '#/slowniczek') renderGlossary(null);
   else if (hash.startsWith('#/slowniczek/')) renderGlossary(hash.split('/')[2]);
   else if (hash === '#/backup') renderBackup();
+  else if (hash.startsWith('#/raport/')) renderRaport(hash.split('/')[2]);
   else renderDashboard();
 }
 
@@ -401,6 +402,7 @@ function activeRoute(hash) {
   if (hash.startsWith('#/checkin')) return '#/';
   if (hash === '#/backup') return '#/plan';
   if (hash.startsWith('#/slowniczek')) return '#/plan';
+  if (hash.startsWith('#/raport')) return '#/history'; // raport roczny żyje pod Historią
   return hash.split('/').slice(0, 2).join('/');
 }
 
@@ -772,6 +774,19 @@ function renderDashboard() {
   if (due) {
     html += `<div class="banner warn">📝 Czeka Cię check-in za <b>${Fmt.formatMonthName(lastOk)}</b> — domknij miesiąc, zanim ucieknie.</div>`;
   }
+  // Karta sezonowa raportu rocznego: grudzień → bieżący rok (rok w toku),
+  // styczeń → miniony (grudniowy check-in wpada 1 stycznia). Nic ciężkiego
+  // nie liczymy — annualReport (2 pełne prognozy) działa dopiero na #/raport.
+  {
+    const nowMonth = Number(nowYm.slice(5));
+    const reportYear = nowMonth === 12 ? Number(nowYm.slice(0, 4))
+      : nowMonth === 1 ? Number(nowYm.slice(0, 4)) - 1 : null;
+    if (reportYear != null && E.reportYears(state).includes(reportYear)) {
+      html += `<div class="banner info">🎁 <b>Twój rok FIRE ${reportYear}</b> — zobacz podsumowanie:
+        ile odłożone, jaka seria, o ile przybliżyło się FIRE.
+        <div class="btn-row"><a class="btn primary" href="#/raport/${reportYear}">Pokaż raport</a></div></div>`;
+    }
+  }
   if (deferredPrompt && !state.ui.installTipDismissed) {
     html += `<div class="banner info">📲 Zainstaluj aplikację na ekranie głównym — działa w pełni offline.
       <div class="btn-row"><button id="btn-install" class="primary">Zainstaluj</button><button id="btn-install-no" class="ghost">Ukryj</button></div></div>`;
@@ -1012,6 +1027,10 @@ function renderCheckin(month) {
     ${field({ id: 'ci-spent', label: 'Wydane', suffix: 'zł', value: existing ? moneyVal(existing.spent) : '', hint: 'Razem z czynszem i ratą kredytu.' })}
     ${debtActive ? field({ id: 'ci-overpay', label: 'Nadpłata kredytu', suffix: 'zł', value: existing ? moneyVal(existing.overpayment) : '', placeholder: '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług.', tipText: 'Kwota wpłacona na kredyt PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
     ${familyActive ? field({ id: 'ci-fl-overpay', label: 'Nadpłata długu rodzinnego', suffix: 'zł', value: existing ? moneyVal(existing.familyOverpayment) : '', placeholder: '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług rodzinny.', tipText: 'Kwota wpłacona na dług rodzinny PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
+    <label class="field"><span class="lbl">Notatka <span class="muted">(opcjonalnie)</span></span>
+      <textarea id="ci-note" maxlength="200" rows="2" placeholder="np. premia, urlop, naprawa auta…">${existing && existing.note ? esc(existing.note) : ''}</textarea>
+      <div class="hint">Krótka historia miesiąca (do 200 znaków) — zobaczysz ją w Historii. Na liczby nie wpływa.</div>
+    </label>
     <details class="section"><summary>Popraw salda (opcjonalnie)</summary>
       <p class="muted small">Jeśli rzeczywiste saldo na koniec miesiąca różni się od wyliczonego — wpisz je tutaj. Puste = bez korekty.</p>
       ${field({ id: 'ci-cash-ov', label: 'Rzeczywista gotówka', suffix: 'zł', value: existing && existing.cashOverride != null ? moneyVal(existing.cashOverride) : '' })}
@@ -1057,6 +1076,10 @@ function renderCheckin(month) {
     const prevFireYm = state.derived.projection.reached ? state.derived.projection.fireYm : null;
     const wasFirst = state.entries.length === 0;
     const prevEntry = [...state.entries].filter(e => e.month < m).sort((a, b) => (a.month < b.month ? 1 : -1))[0];
+    // Kamienie milowe: snapshot statusu PRZED mutacją, diff PO niej — celebrują
+    // tylko przekroczenia z tego zapisu; obejrzane klucze jadą tym samym persist().
+    const d0 = state.derived;
+    const msBefore = E.milestoneStatus(state, d0.balances, d0.debt, d0.family, d0.uptoYm);
     let entry;
     try {
       entry = E.applyCheckIn(state, {
@@ -1064,16 +1087,27 @@ function renderCheckin(month) {
         overpayment: over.value || 0,
         familyOverpayment: flOver.value || 0,
         cashOverride: cashOv.value, balanceOverride: portOv.value,
+        note: $('#ci-note').value,
       });
     } catch (err) {
       errBox.innerHTML = `<div class="field-error">${esc(err.message)}</div>`;
       return;
     }
+    const d1 = state.derived; // applyCheckIn przeliczył pochodne
+    const msAfter = E.milestoneStatus(state, d1.balances, d1.debt, d1.family, d1.uptoYm);
+    const crossed = E.newMilestones(msBefore, msAfter, state.ui.milestonesSeen);
+    if (crossed.length) {
+      const seen = Array.isArray(state.ui.milestonesSeen) ? state.ui.milestonesSeen : [];
+      state.ui.milestonesSeen = [...seen, ...crossed];
+    }
     persist();
     renderCheckinResult(entry, { prevFireYm, wasFirst, prevEntry });
+    const seed = Math.floor(Math.random() * 1e6);
+    const ms = crossed.length ? milestoneMessage(crossed[0], seed) : null;
     showModal(Mot.checkinModal({
       verdict: entry.verdict,
-      message: checkinCelebration(entry.verdict, Math.floor(Math.random() * 1e6)),
+      message: checkinCelebration(entry.verdict, seed),
+      milestone: ms ? { ...ms, extraTitles: crossed.slice(1).map(k => milestoneMessage(k, seed).title) } : null,
     }));
   });
 }
@@ -1161,7 +1195,8 @@ function renderHistory() {
     const delta = net - e.plannedSavingsSnapshot;
     rows.push(`<div class="hist-row" data-m="${ym}">
       <div class="m"><b>${esc(Fmt.formatMonthName(ym))}</b>
-        <span class="muted small">odłożone ${Fmt.formatPLN(net)} · ${delta >= 0 ? '+' : ''}${Fmt.formatPLN(delta)} vs plan</span></div>
+        <span class="muted small">odłożone ${Fmt.formatPLN(net)} · ${delta >= 0 ? '+' : ''}${Fmt.formatPLN(delta)} vs plan</span>
+        ${e.note ? `<span class="muted small hist-note">📝 ${esc(e.note)}</span>` : ''}</div>
       <span class="badge v-${e.verdict}">${verdictEmoji(e.verdict)}</span>
     </div>
     ${histExpanded === ym ? `<div class="hist-actions">
@@ -1174,11 +1209,25 @@ function renderHistory() {
   const addEarlier = `<button class="btn ghost wide hist-add" id="hist-add-earlier">➕ Dodaj wcześniejszy miesiąc</button>
     <p class="muted small">Cofa start planu o miesiąc, aby uzupełnić wcześniejsze check-iny.</p>`;
 
-  view().innerHTML = `<div class="card">
+  // Wykres „odłożone vs plan" nad listą — te same dane, ten sam ekran.
+  // Bez strażnika ≥ 0: chartSVG zna domenę ujemną (miesiące budowy/deficyty).
+  const hist = E.monthlySavingsHistory(state.entries);
+  const chartCard = hist.length > 1
+    ? An.savingsHistoryCard({
+      chartHTML: zoomable('hist-plan', 'Miesiąc po miesiącu: odłożone vs plan',
+        o => chartSVG(hist, [
+          { get: r => r.planned, cls: 'line-target', label: 'plan' },
+          { get: r => r.net, cls: 'line-port', label: 'odłożone' },
+        ], o), { legendHTML: An.cumLegend() }),
+    })
+    : '';
+
+  view().innerHTML = `${chartCard}<div class="card">
     <h2>Historia check-inów</h2>
     ${rows.length ? rows.join('') : '<p class="muted">Jeszcze pusto — pierwszy check-in przed Tobą.</p>'}
     ${addEarlier}
     ${state.derived.streak.best > 0 ? `<p class="muted small" style="margin-top:.75rem">Najdłuższa seria: 🔥 ${state.derived.streak.best}</p>` : ''}
+    ${E.reportYears(state).length ? `<p class="muted small">Raporty roczne: ${E.reportYears(state).map(y => `<a href="#/raport/${y}">${y}</a>`).join(' · ')}</p>` : ''}
   </div>`;
 
   $$('.hist-row[data-gap]').forEach(el => el.addEventListener('click', () => {
@@ -1229,6 +1278,17 @@ function renderHistory() {
     if (hasEntry) confirmModal(`Usunąć miesiąc ${Fmt.formatMonthName(ym)} wraz z jego check-inem i przesunąć start planu? Salda i prognoza zostaną przeliczone.`, doRemove, { yesLabel: 'Usuń' });
     else doRemove();
   }));
+}
+
+// ── Raport roczny (#/raport/:year) ──────────────────────────────────────
+// Tylko odczyt — markup w analysis.js; zły/pusty rok wraca do Historii.
+
+function renderRaport(yearStr) {
+  const year = Number(yearStr);
+  const rep = Number.isSafeInteger(year) && year >= 1900 && year <= 2200
+    ? E.annualReport(state, year) : null;
+  if (!rep) { location.hash = '#/history'; return; }
+  view().innerHTML = An.annualReportScreen({ rep, years: E.reportYears(state) });
 }
 
 // ── Analiza ─────────────────────────────────────────────────────────────

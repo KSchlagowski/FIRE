@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (141 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (217 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -47,12 +47,16 @@ bundler — the browser loads the modules directly.
 - **`charts.js`** — pure SVG chart builders (`chartSVG`/`stackedBarSVG` + private
   `formatShort`), **zero imports** (L0 leaf), local `esc()`. `width`/`maxPoints`/
   `detail` options drive the fullscreen-landscape overlay; at defaults the output
-  is byte-identical to before the split (guarded by F29). Defs/segments accept an
+  is byte-identical to before the split (guarded by F29). `chartSVG` supports a
+  negative domain (`min < 0`, e.g. build months): the scale extends below zero
+  and the Y axis gains a min gridline/label — for all-≥0 data the output stays
+  byte-identical (guarded by F29f–g). Defs/segments accept an
   optional `label` (Polish series name): any labeled chart embeds a `data-tip`
   JSON payload (raw grosze-rounded values + plot-area geometry) on the `<svg>`
   root, hit-tested by the pure `tipHit(tip, vx)` export; label-less output is
   unchanged (guarded by F37).
-- **`analysis.js`** — pure HTML builders for the **Analiza** screen (`#/analiza`).
+- **`analysis.js`** — pure HTML builders for the **Analiza** screen (`#/analiza`)
+  plus the shared Historia chart card (`savingsHistoryCard`).
   Zero DOM, zero module state: engine results + pre-rendered SVG charts come in as
   params, an HTML string comes out. Has a local `esc()` for user-derived text.
 - **`simulation.js`** — pure HTML builders for the **Symulacja** screen
@@ -118,9 +122,10 @@ and receives data as params. A 5-tab bottom nav (`#tabbar` in `index.html`) maps
 | `#/symulacja` | Symulacja | `renderSymulacja` → `simulation.js` |
 | `#/plan`, `#/plan/:section` | Plan hub + sub-pages | `renderPlanHub` / `renderPlanSection` |
 | `#/backup` | Kopia zapasowa | `renderBackup` |
+| `#/raport/:year` | raport roczny „Twój rok FIRE" | `renderRaport` → `analysis.js` |
 
 `activeRoute()` decides tab highlighting: check-in counts as **Pulpit**; `#/backup`
-and every `#/plan/*` sub-page count as **Plan**. Add a route by extending `route()`
+and every `#/plan/*` sub-page count as **Plan**; `#/raport/*` counts as **Historia**. Add a route by extending `route()`
 and, if it's a top-level tab, the `#tabbar` list in `index.html`.
 
 ### Persisted state shape (see `createState`)
@@ -135,8 +140,9 @@ and, if it's a top-level tab, the `#tabbar` list in `index.html`.
   debt:        { overrides, familyOverrides },   // real & family-loan corrections
   taxes:       { belkaEnabled,                   // Belka 19% toggle (default false)
                  ikeIkze: { enabled, employmentForm, pitRate, ikeStart, ikzeStart } },
-  entries:     [ … monthly check-ins … ],
-  ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt } }
+  entries:     [ … monthly check-ins (incl. an optional inert `note`, ≤200 chars) … ],
+  ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt,
+                 milestonesSeen } }   // celebrated milestone keys — once ever
 ```
 
 `state.derived` is attached at runtime by `recomputeDerived` and **stripped before
@@ -336,7 +342,39 @@ dialect is the spec): byte-exact serialization (BOM + header + `;`-joined rows,
 CRLF, no trailing newline, `1234,56` numbers), RFC 4180 quoting of the injected
 verdict label, blank derived cells (no `state.derived`, pre-anchor months, no
 loan) vs a filled mortgage balance, ascending sort of an unsorted copy + state
-purity, the header-only empty export, and default-options fallbacks.
+purity, the header-only empty export, and default-options fallbacks (the trailing
+`Notatka` column — appended last so no existing column index moved — rides the
+same byte-exact and quoting assertions). F42 covers check-in notes (`entry.note`,
+schema v7): ingest normalization in `applyCheckIn` (trim, empty → `null`, hard
+slice to 200 chars, edit overwrites incl. back to `null`), the notes-are-inert
+guarantee (`state.derived` bit-identical with and without notes), the v6→v7
+migration stamping `note: null` on entries missing the field while an explicit
+note survives, and `validateState` rejecting a non-string non-null `note`.
+F43 covers the Historia savings chart (`monthlySavingsHistory`): ascending
+mapping with exact `net`/`delta` and `planned`/`verdict` passthrough, `rate`
+null on zero income, a build-month row with a negative frozen snapshot AND a
+negative net (the row the negative chart domain exists for), purity, and the
+frozen-snapshot invariant (assumption edits don't rewrite the chart); F29f–g
+pin the `chartSVG` negative domain (4 axis lines + min label, 0-axis at the
+plot midpoint for symmetric data) and the min = 0 byte-parity guard. F44 covers
+milestones (`MILESTONES_ORDER`/`milestoneStatus`/`newMilestones`, schema v8):
+FI% thresholds with the EPS tolerance and the target-0 degenerate case,
+crossing semantics (false→true only, `seen` filtering, priority order,
+null/non-array `seen` safe), the loan milestones via real replays
+(`paidPct ≥ 0.5`, zero balance, family `endMonth`; `EMPTY_LOAN` never fires),
+the check-in integration diff (a seen key stays silent), the
+`milestoneMessage` selector (2 unique variants per key, seed modulo, unknown
+key → null), and the v7→v8 migration (missing/non-array `milestonesSeen` →
+`[]`, explicit list untouched, v1 chain). F45 covers the annual report
+(`projectionAsOf`/`reportYears`/`annualReport`, `#/raport/:year`): year sums,
+verdict mix and in-year best streak on a clamped period, the r=0 FI% identity
+(pre-anchor `prevEndYm` legally returns start balances), the FIRE-date shift
+(above-plan > 0, below-plan < 0, out-of-horizon → null; both projections use
+TODAY's assumptions and differ only in the entry cutoff), `projectionAsOf`
+truncation ≡ a state without the later entries plus byte-exact state purity,
+the edge years (fully before the anchor / after the last complete month →
+null; a plan-intersecting empty year still reports), surfaced notes, and
+descending `reportYears`.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.
