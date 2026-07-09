@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.23.0';
+export const APP_VERSION = '1.24.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -63,6 +63,18 @@ function closeModal() {
   m.innerHTML = '';
   m.onclick = null;
   if (modalKeyHandler) { document.removeEventListener('keydown', modalKeyHandler); modalKeyHandler = null; }
+}
+
+// Potwierdzenie w stylu aplikacji zamiast natywnego confirm(). Escape i tło
+// zamykają jak każdy modal (= anuluj); fokus startuje na „Anuluj" (showModal
+// fokusuje [data-close-modal]) — bezpieczny domyślny wybór przy usuwaniu.
+function confirmModal(text, onYes, { yesLabel = 'Tak' } = {}) {
+  showModal(`<div class="modal-msg">${esc(text)}</div>
+    <div class="btn-row">
+      <button type="button" data-close-modal>Anuluj</button>
+      <button type="button" class="danger" data-confirm-yes>${esc(yesLabel)}</button>
+    </div>`);
+  $('[data-confirm-yes]').addEventListener('click', () => { closeModal(); onYes(); });
 }
 
 export function setDeferredPrompt(e) {
@@ -349,14 +361,20 @@ function route() {
     return;
   }
   tabbar.hidden = false;
-  $$('#tabbar a').forEach(a => a.classList.toggle('active', a.dataset.route === activeRoute(hash)));
+  $$('#tabbar a').forEach(a => {
+    const on = a.dataset.route === activeRoute(hash);
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
   window.scrollTo(0, 0);
   if (hash.startsWith('#/checkin')) {
     const m = hash.split('/')[2];
     renderCheckin(m && E.isValidYm(m) ? m : null);
   } else if (hash === '#/history') renderHistory();
   else if (hash === '#/analiza') renderAnaliza();
-  else if (hash === '#/symulacja') renderSymulacja();
+  else if (hash === '#/symulacja') renderSymulacjaHub();
+  else if (hash.startsWith('#/symulacja/')) renderSymulacja(hash.split('/')[2]);
   else if (hash === '#/plan') renderPlanHub();
   else if (hash.startsWith('#/plan/')) renderPlanSection(hash.split('/')[2]);
   else if (hash === '#/slowniczek') renderGlossary(null);
@@ -542,13 +560,14 @@ function renderOnboarding() {
     ob.error = validateObStep(s);
     if (!ob.error) ob.step++;
     renderOnboarding();
+    if (ob.error) window.scrollTo(0, 0);   // komunikat błędu jest na górze karty
   });
 
   const finish = $('[data-finish]');
   if (finish) finish.addEventListener('click', () => {
     grab();
     ob.error = validateObStep(4);
-    if (ob.error) { renderOnboarding(); return; }
+    if (ob.error) { renderOnboarding(); window.scrollTo(0, 0); return; }
     finishOnboarding();
   });
 }
@@ -980,8 +999,8 @@ function renderCheckin(month) {
     <div id="ci-error"></div>
     ${field({ id: 'ci-earned', label: 'Zarobione', suffix: 'zł', value: existing ? moneyVal(existing.earned) : '', tipText: 'Wszystkie dochody netto w tym miesiącu.' })}
     ${field({ id: 'ci-spent', label: 'Wydane', suffix: 'zł', value: existing ? moneyVal(existing.spent) : '', hint: 'Razem z czynszem i ratą kredytu.' })}
-    ${debtActive ? field({ id: 'ci-overpay', label: 'Nadpłata kredytu', suffix: 'zł', value: existing ? moneyVal(existing.overpayment) : '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług.', tipText: 'Kwota wpłacona na kredyt PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
-    ${familyActive ? field({ id: 'ci-fl-overpay', label: 'Nadpłata długu rodzinnego', suffix: 'zł', value: existing ? moneyVal(existing.familyOverpayment) : '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług rodzinny.', tipText: 'Kwota wpłacona na dług rodzinny PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
+    ${debtActive ? field({ id: 'ci-overpay', label: 'Nadpłata kredytu', suffix: 'zł', value: existing ? moneyVal(existing.overpayment) : '', placeholder: '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług.', tipText: 'Kwota wpłacona na kredyt PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
+    ${familyActive ? field({ id: 'ci-fl-overpay', label: 'Nadpłata długu rodzinnego', suffix: 'zł', value: existing ? moneyVal(existing.familyOverpayment) : '', placeholder: '0', hint: 'Nadpłata liczy się jako oszczędzanie — zmniejsza dług rodzinny.', tipText: 'Kwota wpłacona na dług rodzinny PONAD ratę. Nie wliczaj jej do „Wydane”.' }) : ''}
     <details class="section"><summary>Popraw salda (opcjonalnie)</summary>
       <p class="muted small">Jeśli rzeczywiste saldo na koniec miesiąca różni się od wyliczonego — wpisz je tutaj. Puste = bez korekty.</p>
       ${field({ id: 'ci-cash-ov', label: 'Rzeczywista gotówka', suffix: 'zł', value: existing && existing.cashOverride != null ? moneyVal(existing.cashOverride) : '' })}
@@ -1005,12 +1024,12 @@ function renderCheckin(month) {
 
   const del = $('#ci-delete');
   if (del) del.addEventListener('click', () => {
-    if (confirm(`Usunąć wpis za ${Fmt.formatMonthName(m)}? Salda i prognoza zostaną przeliczone.`)) {
+    confirmModal(`Usunąć wpis za ${Fmt.formatMonthName(m)}? Salda i prognoza zostaną przeliczone.`, () => {
       E.deleteEntry(state, m);
       persist();
       toast('Wpis usunięty.');
       location.hash = '#/history';
-    }
+    }, { yesLabel: 'Usuń' });
   });
 
   $('#ci-save').addEventListener('click', () => {
@@ -1109,18 +1128,22 @@ function renderHistory() {
   for (let i = endIdx; i >= startIdx; i--) allMonths.add(E.idxToYm(i));
   const months = [...allMonths].sort((a, b) => (a < b ? 1 : -1));
 
+  // Usunięcie najwcześniejszego miesiąca: pełny, opisany przycisk (nie samotny ✕)
+  // — dla wpisu w pasku akcji rozwiniętego wiersza, dla pustego miesiąca od razu
+  // pod wierszem (pusty wiersz nie rozwija się — dotknięcie prowadzi do check-inu).
   const canRemove = E.ymToIdx(E.addMonths(state.anchorMonth, 1)) <= E.ymToIdx(E.todayYm());
-  const removeBtn = ym => (ym === state.anchorMonth && canRemove)
-    ? `<button class="hist-x" data-remove-earliest="${ym}" aria-label="Usuń miesiąc i przesuń start planu">✕</button>`
+  const removeBar = ym => (ym === state.anchorMonth && canRemove)
+    ? `<button class="danger hist-remove" data-remove-earliest="${ym}">🗑️ Usuń miesiąc i cofnij start planu</button>`
     : '';
 
   for (const ym of months) {
     const e = byMonth.get(ym);
     if (!e) {
+      const bar = removeBar(ym);
       rows.push(`<div class="hist-row gap" data-m="${ym}" data-gap>
         <div class="m">${esc(Fmt.formatMonthName(ym))}<span class="muted small">brak wpisu — dotknij, aby uzupełnić</span></div>
-        ${removeBtn(ym)}
-      </div>`);
+      </div>
+      ${bar ? `<div class="hist-actions">${bar}</div>` : ''}`);
       continue;
     }
     const net = Math.round((e.earned - e.spent) * 100) / 100;
@@ -1129,11 +1152,11 @@ function renderHistory() {
       <div class="m"><b>${esc(Fmt.formatMonthName(ym))}</b>
         <span class="muted small">odłożone ${Fmt.formatPLN(net)} · ${delta >= 0 ? '+' : ''}${Fmt.formatPLN(delta)} vs plan</span></div>
       <span class="badge v-${e.verdict}">${verdictEmoji(e.verdict)}</span>
-      ${removeBtn(ym)}
     </div>
     ${histExpanded === ym ? `<div class="hist-actions">
       <button data-edit="${ym}">✏️ Edytuj</button>
       <button class="danger" data-del="${ym}">🗑️ Usuń</button>
+      ${removeBar(ym)}
     </div>` : ''}`);
   }
 
@@ -1161,13 +1184,13 @@ function renderHistory() {
   $$('[data-del]').forEach(el => el.addEventListener('click', ev => {
     ev.stopPropagation();
     const ym = el.dataset.del;
-    if (confirm(`Usunąć wpis za ${Fmt.formatMonthName(ym)}? Salda i prognoza zostaną przeliczone.`)) {
+    confirmModal(`Usunąć wpis za ${Fmt.formatMonthName(ym)}? Salda i prognoza zostaną przeliczone.`, () => {
       E.deleteEntry(state, ym);
       persist();
       histExpanded = null;
       renderHistory();
       toast('Wpis usunięty, wszystko przeliczone.');
-    }
+    }, { yesLabel: 'Usuń' });
   }));
   const addBtn = document.getElementById('hist-add-earlier');
   if (addBtn) addBtn.addEventListener('click', () => {
@@ -1181,16 +1204,19 @@ function renderHistory() {
     ev.stopPropagation();
     const ym = el.dataset.removeEarliest;
     const hasEntry = byMonth.has(ym);
-    if (hasEntry && !confirm(`Usunąć miesiąc ${Fmt.formatMonthName(ym)} wraz z jego check-inem i przesunąć start planu? Salda i prognoza zostaną przeliczone.`)) return;
-    try {
-      E.removeEarliestMonth(state);
-      persist();
-      histExpanded = null;
-      renderHistory();
-      toast(hasEntry ? 'Miesiąc usunięty, start planu przesunięty.' : 'Usunięto pusty najwcześniejszy miesiąc.');
-    } catch (err) {
-      toast(err.message, 6000);
-    }
+    const doRemove = () => {
+      try {
+        E.removeEarliestMonth(state);
+        persist();
+        histExpanded = null;
+        renderHistory();
+        toast(hasEntry ? 'Miesiąc usunięty, start planu przesunięty.' : 'Usunięto pusty najwcześniejszy miesiąc.');
+      } catch (err) {
+        toast(err.message, 6000);
+      }
+    };
+    if (hasEntry) confirmModal(`Usunąć miesiąc ${Fmt.formatMonthName(ym)} wraz z jego check-inem i przesunąć start planu? Salda i prognoza zostaną przeliczone.`, doRemove, { yesLabel: 'Usuń' });
+    else doRemove();
   }));
 }
 
@@ -1416,11 +1442,11 @@ function renderAnaliza() {
   });
 }
 
-// ── Symulacja (#/symulacja) ─────────────────────────────────────────────
-// Pięć kalkulatorów motywacyjnych. Wejścia przeżywają pełne re-rendery ekranu
-// (stan modułu); wyniki podmieniane w #…-result, by nie gubić fokusu/uchwytu.
+// ── Symulacja (#/symulacja — hub, #/symulacja/:calc — kalkulator) ───────
+// Kalkulatory motywacyjne: hub-lista (wzorzec Planu) + osobna pod-strona na
+// każdy kalkulator. Wejścia przeżywają nawigację (stan modułu); wyniki
+// podmieniane w #…-result, by nie gubić fokusu/uchwytu.
 
-let symTab = 'cojesli';
 let simMonth = '';        // Co jeśli?: miesiąc
 let simAmount = '';       // Co jeśli?: kwota
 let simRecurring = false; // Co jeśli?: jednorazowo/co miesiąc
@@ -1441,8 +1467,51 @@ let symCrashAge = '90'; // Krach: dożywam do wieku
 
 const SYM_CAP = 100000;   // górny limit dopłaty w „Cel: wiek FIRE"
 
-function renderSymulacja() {
+// Nadpłata ma sens tylko przy aktywnym (saldo > 0) kredycie lub długu rodzinnym
+// — wspólna decyzja huba (czy pokazać pozycję) i routera (czy wpuścić na stronę).
+function symNadplataAvailable() {
+  const d = state.derived;
+  const houseOn = !!(state.housing.housePlan && state.housing.housePlan.enabled);
+  return houseOn && !!((d.debt && d.debt.active) || (d.family && d.family.active));
+}
+
+const SYM_CALCS = [
+  ['cojesli', '🧪', 'Co jeśli?', 'wpływ jednorazowej lub comiesięcznej dopłaty na datę FIRE'],
+  ['wiek', '🎯', 'Cel: wiek FIRE', 'ile odkładać, by zdążyć na wybrany wiek'],
+  ['latte', '☕', 'Efekt małych wydatków', 'co daje obcięcie drobnych stałych wydatków'],
+  ['wiecej', '💪', 'Oszczędzaj więcej', 'o ile wcześniej osiągniesz FIRE'],
+  ['zwrot', '📊', 'Wpływ zwrotu', 'jak inny zwrot z inwestycji przesuwa FIRE'],
+  ['emerytura', '🏖️', 'Emerytura po FIRE', 'zwrot po FIRE i mrożenie wydatków'],
+  ['krach', '📉', 'Test krachu', 'co krach rynkowy zrobi z Twoją emeryturą'],
+  ['kredyt', '🧮', 'Kalkulator kredytu', 'rata, odsetki i efekt nadpłat dowolnego kredytu'],
+  ['nadplata', '💸', 'Nadpłata kredytu', 'ile oszczędzasz, nadpłacając swój kredyt'],
+];
+
+function renderSymulacjaHub() {
   if (!state.derived) E.recomputeDerived(state);
+  const showNadplata = symNadplataAvailable();
+  const items = SYM_CALCS.filter(([k]) => k !== 'nadplata' || showNadplata);
+  view().innerHTML = `<div class="card"><h2>Symulacja 🔮</h2>
+    <p class="muted small">Kalkulatory „co by było, gdyby” — niczego nie zapisują i nie zmieniają planu.</p>
+    <div class="hub">${items.map(([k, ic, t, s]) =>
+      `<button type="button" class="hub-item" data-go="#/symulacja/${k}">
+        <span class="hub-ic">${ic}</span>
+        <span class="hub-txt"><b>${esc(t)}</b><small>${esc(s)}</small></span>
+        <span class="hub-arr">›</span>
+      </button>`).join('')}</div>
+  </div>`;
+  $$('[data-go]').forEach(el => el.addEventListener('click', () => { location.hash = el.dataset.go; }));
+}
+
+const symBack = '<a class="btn ghost wide" href="#/symulacja">← Symulacja</a>';
+
+function renderSymulacja(calc) {
+  if (!state.derived) E.recomputeDerived(state);
+  // Nieznany kalkulator lub „Nadpłata" bez aktywnego długu → wróć na hub.
+  if (!SYM_CALCS.some(([k]) => k === calc) || (calc === 'nadplata' && !symNadplataAvailable())) {
+    location.hash = '#/symulacja';
+    return;
+  }
   const d = state.derived;
   const a = state.assumptions;
   const nowYm = E.todayYm();
@@ -1497,8 +1566,6 @@ function renderSymulacja() {
   const houseOn = !!(hp && hp.enabled);
   const opMa = houseOn && d.debt.active ? E.mortgageAnalytics(state, d.debt, proj) : null;
   const opFa = houseOn && d.family && d.family.active ? E.familyLoanAnalytics(state, d.family, proj) : null;
-  const showNadplata = !!(opMa || opFa);
-  if (symTab === 'nadplata' && !showNadplata) symTab = 'cojesli';
   const opLoans = [
     ...(opMa ? [{ key: 'mortgage', label: 'Kredyt 🏠' }] : []),
     ...(opFa ? [{ key: 'family', label: 'Dług rodzinny 👨‍👩‍👧' }] : []),
@@ -1607,59 +1674,40 @@ function renderSymulacja() {
     return Sim.crashResult({ st });
   };
 
-  const tabs = [
-    ['cojesli', 'Co jeśli?'],
-    ['wiek', 'Cel: wiek'],
-    ['latte', 'Małe wydatki'],
-    ['wiecej', 'Więcej'],
-    ['zwrot', 'Zwrot'],
-    ['emerytura', 'Emerytura'],
-    ['krach', 'Krach'],
-    ['kredyt', 'Kredyt'],
-    ...(showNadplata ? [['nadplata', 'Nadpłata']] : []),
-  ];
-  const seg = `<div class="seg seg-scroll" role="tablist">${tabs.map(([k, l]) =>
-    `<button type="button" data-symtab="${k}" class="${symTab === k ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`;
-
   let body = '';
-  if (symTab === 'cojesli') {
+  if (calc === 'cojesli') {
     body = Sim.whatIfCard({ nowYm, month: simMonth || nowYm, amount: simAmount, recurring: simRecurring, resultHTML: whatIfResult() });
-  } else if (symTab === 'wiek') {
+  } else if (calc === 'wiek') {
     body = Sim.targetAgeCard({ ageValue: symAge, defaultAge: a.targetFireAge, resultHTML: targetAgeResult() });
-  } else if (symTab === 'latte') {
+  } else if (calc === 'latte') {
     body = Sim.latteCard({ amountValue: symLatte, resultHTML: latteResult() });
-  } else if (symTab === 'wiecej') {
+  } else if (calc === 'wiecej') {
     body = Sim.moreSavingsCard({ value: symMore, max: moreMax, resultHTML: moreResult() });
-  } else if (symTab === 'kredyt') {
+  } else if (calc === 'kredyt') {
     body = Sim.loanCalcCard({ principal: loanP, rate: loanR, term: loanT, amount: symLoanOp, resultHTML: loanCalcResult() });
-  } else if (symTab === 'nadplata') {
+  } else if (calc === 'nadplata') {
     body = Sim.overpaymentCard({ loans: opLoans, activeLoan: symOverpayLoan, amount: symOverpay, resultHTML: overpayResult() });
-  } else if (symTab === 'emerytura') {
+  } else if (calc === 'emerytura') {
     body = Sim.retirementCard({
       value: symRetPost == null ? a.postRetirementReturnReal : Number(symRetPost),
       base: a.postRetirementReturnReal,
       freeze: symRetFreeze == null ? a.freezeExpensesAtRetirement : symRetFreeze,
       resultHTML: retirementResult(),
     });
-  } else if (symTab === 'krach') {
+  } else if (calc === 'krach') {
     body = Sim.crashCard({ pct: symCrashPct, deathAge: symCrashAge, resultHTML: crashResult() });
   } else {
     body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
   }
 
-  // Zakładki dokładające kwotę do planu — przypomnij, że liczy się sama nadwyżka.
-  // Nie dotyczy „Zwrotu", „Nadpłaty", „Kredytu", „Emerytury" ani „Krachu"
-  // (czyste podglądy — nic nie dokładają do planu).
-  const note = symTab === 'zwrot' || symTab === 'nadplata' || symTab === 'kredyt' || symTab === 'emerytura' || symTab === 'krach' ? '' : Sim.nadwyzkaNote();
+  // Kalkulatory dokładające kwotę do planu — przypomnij, że liczy się sama
+  // nadwyżka. Nie dotyczy „Zwrotu", „Nadpłaty", „Kredytu", „Emerytury" ani
+  // „Krachu" (czyste podglądy — nic nie dokładają do planu).
+  const note = calc === 'zwrot' || calc === 'nadplata' || calc === 'kredyt' || calc === 'emerytura' || calc === 'krach' ? '' : Sim.nadwyzkaNote();
 
-  view().innerHTML = seg + body + note;
+  view().innerHTML = symBack + body + note + symBack;
 
-  $$('[data-symtab]').forEach(el => el.addEventListener('click', () => {
-    symTab = el.dataset.symtab;
-    renderSymulacja();
-  }));
-
-  if (symTab === 'cojesli') {
+  if (calc === 'cojesli') {
     const refresh = () => { const r = $('#sim-result'); if (r) r.innerHTML = whatIfResult(); };
     const simM = $('#sim-month');
     if (simM) simM.addEventListener('change', () => { simMonth = simM.value; refresh(); });
@@ -1670,20 +1718,20 @@ function renderSymulacja() {
       $$('[data-simmode]').forEach(b => b.classList.toggle('on', b === el));
       refresh();
     }));
-  } else if (symTab === 'wiek') {
+  } else if (calc === 'wiek') {
     const ageEl = $('#sym-age');
     if (ageEl) ageEl.addEventListener('input', () => { symAge = ageEl.value; $('#sym-age-result').innerHTML = targetAgeResult(); });
-  } else if (symTab === 'latte') {
+  } else if (calc === 'latte') {
     const latteEl = $('#sym-latte');
     if (latteEl) latteEl.addEventListener('input', () => { symLatte = latteEl.value; $('#sym-latte-result').innerHTML = latteResult(); });
-  } else if (symTab === 'wiecej') {
+  } else if (calc === 'wiecej') {
     const moreEl = $('#sym-more');
     if (moreEl) moreEl.addEventListener('input', () => {
       symMore = moreEl.value;
       $('#sym-more-val').textContent = Fmt.formatPLN(Number(symMore));
       $('#sym-more-result').innerHTML = moreResult();
     });
-  } else if (symTab === 'kredyt') {
+  } else if (calc === 'kredyt') {
     const refresh = () => { const r = $('#sym-loan-result'); if (r) r.innerHTML = loanCalcResult(); };
     const pEl = $('#sym-loan-principal'); if (pEl) pEl.addEventListener('input', () => { symLoanP = pEl.value; refresh(); });
     const rEl = $('#sym-loan-rate'); if (rEl) rEl.addEventListener('input', () => { symLoanR = rEl.value; refresh(); });
@@ -1693,7 +1741,7 @@ function renderSymulacja() {
       symLoanOp = opEl.value;
       $('#sym-loan-result').innerHTML = loanCalcResult();
     });
-  } else if (symTab === 'nadplata') {
+  } else if (calc === 'nadplata') {
     const opEl = $('#sym-overpay');
     if (opEl) opEl.addEventListener('input', () => {
       symOverpay = opEl.value;
@@ -1701,9 +1749,9 @@ function renderSymulacja() {
     });
     $$('[data-oploan]').forEach(el => el.addEventListener('click', () => {
       symOverpayLoan = el.dataset.oploan;
-      renderSymulacja();
+      renderSymulacja('nadplata');
     }));
-  } else if (symTab === 'emerytura') {
+  } else if (calc === 'emerytura') {
     const postEl = $('#sym-ret-post');
     if (postEl) postEl.addEventListener('input', () => {
       symRetPost = postEl.value;
@@ -1715,7 +1763,7 @@ function renderSymulacja() {
       symRetFreeze = freezeEl.checked;
       $('#sym-ret-result').innerHTML = retirementResult();
     });
-  } else if (symTab === 'krach') {
+  } else if (calc === 'krach') {
     const refresh = () => { const r = $('#sym-crash-result'); if (r) r.innerHTML = crashResult(); };
     const pEl = $('#sym-crash-pct'); if (pEl) pEl.addEventListener('input', () => { symCrashPct = pEl.value; refresh(); });
     const aEl = $('#sym-crash-age'); if (aEl) aEl.addEventListener('input', () => { symCrashAge = aEl.value; refresh(); });
@@ -2130,16 +2178,16 @@ function renderPlanAplikacja() {
         <option value="light" ${state.ui.theme === 'light' ? 'selected' : ''}>jasny</option>
         <option value="dark" ${state.ui.theme === 'dark' ? 'selected' : ''}>ciemny</option>
       </select>
+      <div class="hint">Zmiana działa od razu — bez zapisywania.</div>
     </label>
   </div>
-  <button id="pl-save" class="primary wide">Zapisz</button>
   ${planBack}`;
-  $('#pl-save').addEventListener('click', () => {
+  // Motyw stosuje się natychmiast przy wyborze — bez osobnego „Zapisz".
+  $('#pl-theme').addEventListener('change', () => {
     state.ui.theme = $('#pl-theme').value;
     applyTheme();
     persist();
-    toast('Zapisano ustawienia aplikacji.');
-    location.hash = '#/plan';
+    toast('Motyw zapisany.');
   });
 }
 
@@ -2326,14 +2374,15 @@ function renderBackup() {
       </table>
       <button id="bk-import-go" class="danger wide" style="margin-top:.5rem">Zastąp obecne dane tym plikiem</button>`;
       $('#bk-import-go').addEventListener('click', () => {
-        if (!confirm('Na pewno? Obecne dane zostaną bezpowrotnie zastąpione danymi z pliku.')) return;
-        state = importCandidate.state;
-        importCandidate = null;
-        E.recomputeDerived(state);
-        persist();
-        applyTheme();
-        toast('Dane zaimportowane.');
-        location.hash = '#/';
+        confirmModal('Na pewno? Obecne dane zostaną bezpowrotnie zastąpione danymi z pliku.', () => {
+          state = importCandidate.state;
+          importCandidate = null;
+          E.recomputeDerived(state);
+          persist();
+          applyTheme();
+          toast('Dane zaimportowane.');
+          location.hash = '#/';
+        }, { yesLabel: 'Zastąp' });
       });
     };
     reader.readAsText(file);
@@ -2392,9 +2441,10 @@ export function renderCorrupt(errorMsg) {
     reader.readAsText(file);
   });
   $('#cr-reset').addEventListener('click', () => {
-    if (!confirm('Na pewno usunąć uszkodzone dane i zacząć od nowa?')) return;
-    storage.reset();
-    state = null;
-    route();
+    confirmModal('Na pewno usunąć uszkodzone dane i zacząć od nowa?', () => {
+      storage.reset();
+      state = null;
+      route();
+    }, { yesLabel: 'Usuń' });
   });
 }

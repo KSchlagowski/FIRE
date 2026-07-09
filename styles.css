@@ -213,20 +213,26 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .hint { font-size: .78rem; color: var(--muted); margin-top: .2rem; }
 .field-error { color: var(--danger); font-size: .82rem; margin: .25rem 0; }
 
-/* Tooltipy przyjazne dotykowi */
+/* Tooltipy przyjazne dotykowi: cel dotyku 44px (padding + ujemny margines —
+   układ bez zmian), widoczna kropka wciąż 20px dzięki background-clip. */
 details.tip { display: inline; }
 details.tip summary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-sizing: content-box;
   width: 20px; height: 20px;
+  padding: 12px;
+  margin: -12px;
   border-radius: 50%;
   background: var(--line);
+  background-clip: content-box;
   color: var(--muted);
-  font-size: .72rem;
+  font-size: .78rem;
   cursor: pointer;
   list-style: none;
   user-select: none;
+  position: relative;    /* nad sąsiadami — dotyk w strefie 44px trafia w kropkę */
 }
 details.tip summary::-webkit-details-marker { display: none; }
 details.tip[open] p {
@@ -348,14 +354,9 @@ details.section summary { cursor: pointer; font-weight: 600; min-height: 40px; d
 .hist-row .m { flex: 1; }
 .hist-row .m .muted { display: block; }
 .hist-row.gap { color: var(--muted); font-style: italic; }
-.hist-actions { display: flex; gap: .5rem; padding: .5rem 0; }
+.hist-actions { display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem 0; }
 .hist-actions button { flex: 1; min-height: 44px; }
-.hist-x {
-  min-width: 44px; min-height: 44px;      /* dotyk ≥44px */
-  padding: 0; border: none; background: transparent;
-  color: var(--muted); font-size: 1.05rem; line-height: 1; flex: 0 0 auto;
-}
-.hist-x:hover { color: var(--danger); }
+.hist-actions .hist-remove { flex-basis: 100%; }   /* długa etykieta = własny wiersz */
 .hist-add { margin-top: .75rem; }
 
 /* ── Toast ── */
@@ -465,9 +466,6 @@ table.data tr.depleted td { color: var(--danger); }
 .seg { display: flex; gap: .25rem; background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: .2rem; margin: .5rem 0; }
 .seg button { flex: 1; min-height: 40px; border: none; background: transparent; border-radius: 8px; color: var(--muted); font-size: .85rem; }
 .seg button.on { background: var(--card); color: var(--text); font-weight: 600; }
-/* Segment przewijany poziomo (Symulacja ma 5 zakładek) */
-.seg.seg-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.seg.seg-scroll button { flex: 0 0 auto; min-width: 4.4rem; padding: 0 .5rem; }
 
 /* Suwaki (input[type=range]) */
 input[type="range"] {

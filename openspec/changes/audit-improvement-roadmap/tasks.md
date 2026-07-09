@@ -29,23 +29,25 @@
 
 ## 2. Phase 2 — UX restructure (~v1.19.0)
 
-- [ ] 2.1 Convert Symulacja to a hub: `#/symulacja` menu list (reuse `.hub`), `#/symulacja/
+- [x] 2.1 Convert Symulacja to a hub: `#/symulacja` menu list (reuse `.hub`), `#/symulacja/
   :calc` single calculator with `← Symulacja` back button; retain module-scope input state;
   keep „Nadpłata" conditional; add the `route()` branch
-- [ ] 2.2 Remove `symTab` and the `.seg-scroll` strip; delete the now-unused `.seg-scroll`
+- [x] 2.2 Remove `symTab` and the `.seg-scroll` strip; delete the now-unused `.seg-scroll`
   CSS if nothing else uses it
-- [ ] 2.3 Enlarge `details.tip summary` hit area to ≥44px (padding + negative margin, keep
+- [x] 2.3 Enlarge `details.tip summary` hit area to ≥44px (padding + negative margin, keep
   the 20px dot) and nudge the font size up
-- [ ] 2.4 Add `confirmModal(text, onYes)` on top of `showModal()`; replace all 5 native
+- [x] 2.4 Add `confirmModal(text, onYes)` on top of `showModal()`; replace all 5 native
   `confirm()` sites (delete entry ×2, remove earliest month, import replace, corrupt reset)
-- [ ] 2.5 Make theme apply instantly on the Aplikacja page: `change` → `applyTheme()` +
+- [x] 2.5 Make theme apply instantly on the Aplikacja page: `change` → `applyTheme()` +
   `persist()` + toast; remove the theme Save button
-- [ ] 2.6 Micro-fixes: overpayment fields default empty with `0` placeholder;
+- [x] 2.6 Micro-fixes: overpayment fields default empty with `0` placeholder;
   `window.scrollTo(0,0)` on onboarding validation failure; labeled anchor-month remove button
   („Usuń miesiąc i cofnij start planu") in the expanded row's action bar; `role="status"` on
   `#toast`; `aria-current="page"` on the active tab
-- [ ] 2.7 Bump version (3 places); verify: tests green, per-screen click-through dark+light,
-  `/FIRE/` subpath rehearsal
+- [x] 2.7 Bump version (3 places); verify: tests green, per-screen click-through dark+light,
+  `/FIRE/` subpath rehearsal (shipped as **v1.24.0**; 195/195 in Node and in the browser
+  runner under `/FIRE/`, headless click-through incl. an active-mortgage scenario for the
+  conditional „Nadpłata" hub item and the empty-with-placeholder overpayment fields)
 
 ## 3. Phase 3 — Hardening (~v1.19.x)
 
@@ -102,7 +104,8 @@
 
 ## 6. Per-phase verification (repeat for every release)
 
-Done for the four Phase 5 releases (v1.20.0–v1.23.0); repeat when Phases 2–4 ship.
+Done for the four Phase 5 releases (v1.20.0–v1.23.0) and for Phase 2 (v1.24.0 — no new
+app files, PRECACHE unchanged, CACHE bumped); repeat when Phases 3–4 ship.
 
 - [x] 6.1 `node tests/run-tests.js` → exit 0 (extend fixtures when engine/storage behavior
   changes; copy-only phases need none) — 195/195 after F37–F40
