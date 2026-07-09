@@ -377,6 +377,11 @@ export function baristaResult({ pb, pbBase, amount, untilAge }) {
   }
   const pensionOn = !!(pb.ro.pension && pb.ro.pension.monthly > 0);
   const diff = pb.target - pbBase.target;
+  // Nasycenie: dorabianie pokrywa całe wydatki → w latach dorabiania nie ruszasz
+  // portfela, a nadwyżka ponad wydatki NIE jest doliczana (D7 — traktowana jako
+  // wydana). Więcej dorabiania nie obniży już celu; to bezpieczne minimum. Bez
+  // sygnału użytkownik widzi ten sam wynik dla 6 000 i 10 000 i nie wie dlaczego.
+  const covers = pb.baristaYearly > 0 && pb.baristaYearly >= pb.withdrawalYear1;
   const rows = [
     pb.hypothetical ? '<div class="banner info small">FIRE poza horyzontem prognozy — scenariusz modelowy liczony od dziś.</div>' : '',
     kv('Potrzebny portfel (Barista)', money(pb.target)),
@@ -386,6 +391,9 @@ export function baristaResult({ pb, pbBase, amount, untilAge }) {
     gainLine(pb.fireYm, pbBase.fireYm),
     amount > 0 && pb.baristaYearly === 0
       ? `<p class="muted small">W miesiącu startu wypłat masz już ${pb.startAge} lat — dorabianie do wieku ${esc(untilAge)} nie obejmuje ani roku po FIRE. Podaj późniejszy wiek.</p>`
+      : '',
+    covers
+      ? `<div class="banner info small">Dorabiasz co najmniej tyle, ile wydajesz — w latach dorabiania <b>w ogóle nie ruszasz portfela</b>. To już bezpieczne minimum: wyższe dorabianie nie obniży celu, bo nadwyżki ponad wydatki tu nie doliczamy (w modelu jest wydana). Chcesz zobaczyć, o ile szybciej FIRE dowozi <i>odkładanie</i> tej nadwyżki? Policz to w <a href="#/symulacja/wiecej">„Oszczędzaj więcej”</a> lub sprawdź ${gl('coast-fire', 'Coast FIRE')} w <a href="#/analiza">Analizie</a>.</div>`
       : '',
     metodologia([
       'Dorobione pieniądze zmniejszają wypłaty z portfela, dopóki dorabiasz; od podanego wieku portfel przejmuje pełne wydatki (klasyczna stopa wypłat). Ten sam rachunek co przy moście ZUS — najpierw lżejsze lata, potem pełny cel.',
