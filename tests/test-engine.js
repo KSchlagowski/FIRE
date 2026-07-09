@@ -3366,3 +3366,114 @@ test('F44f: migracja v7→v8 — milestonesSeen dokładane/normalizowane/nietyka
   assertEq(m1.version, S.SCHEMA_VERSION, 'łańcuch 1→…→8');
   assertEq(JSON.stringify(m1.ui.milestonesSeen), '[]', 'pole dołożone w łańcuchu');
 });
+
+// ── F45: raport roczny „Twój rok FIRE" (projectionAsOf/reportYears/annualReport) ─
+// Wszystko czytane z historii wpisów, nic nie utrwalane (zero zmian schematu).
+// Plan: docs/plan-annual-report.md (tam „F30" — zajęte przez Belkę → F45).
+
+const NOW2 = new Date(2027, 0, 15); // 15 stycznia 2027 → ostatni pełny miesiąc: 2026-12
+
+// r = 0 wszędzie → arytmetyka całkowita; plan płaski 4 000 zł/mies. (10k − 6k).
+function raportState(over = {}) {
+  return baseState(deep({
+    assumptions: { realReturnAnnual: 0, cashReturnReal: 0, postRetirementReturnReal: 0, portfolioStart: 100000 },
+  }, over));
+}
+function raportEntries(st, net, note = null) {
+  for (let i = 0; i < 6; i++) {
+    const month = E.idxToYm(E.ymToIdx('2026-07') + i);
+    E.applyCheckIn(st, { month, earned: 6000 + net, spent: 6000, note }, NOW2);
+  }
+}
+
+test('F45a: sumy, werdykty i seria roku (okres obcięty do kotwicy)', () => {
+  const st = raportState();
+  raportEntries(st, 5000); // +1000 vs plan 4000 → crushed ×6
+  const rep = E.annualReport(st, 2026, NOW2);
+  assertEq(rep.from, '2026-07'); assertEq(rep.to, '2026-12');
+  assertEq(rep.entriesCount, 6); assertEq(rep.monthsInPlan, 6);
+  assertClose(rep.totalSaved, 30000, 0.005); assertClose(rep.totalPlanned, 24000, 0.005);
+  assertClose(rep.delta, 6000, 0.005);
+  assertEq(rep.verdicts.crushed, 6); assertEq(rep.goodMonths, 6); assertEq(rep.bestRun, 6);
+  assertClose(rep.best.net, 5000, 0.005, 'równe wpisy: best = worst');
+  assertClose(rep.worst.net, 5000, 0.005);
+});
+
+test('F45b: FI% start/koniec przy r = 0 — tożsamość zamyka się co do grosza', () => {
+  const st = raportState();
+  raportEntries(st, 5000);
+  const rep = E.annualReport(st, 2026, NOW2);
+  const target = E.fireTargetAt(st, '2026-12'); // wzrost wydatków 0 → cel stały
+  assertClose(rep.fiPctStart, 100000 / target, 1e-9, 'start = salda startowe (2025-12 przed kotwicą)');
+  assertClose(rep.fiPctEnd, 130000 / target, 1e-9, 'koniec = start + 30 000 (bez domu → portfel)');
+  assertClose(rep.fiPctDelta, 30000 / target, 1e-9, 'delta domyka tożsamość');
+});
+
+test('F45c: przesunięcie daty FIRE — dodatnie/ujemne/null poza horyzontem', () => {
+  // Ponad plan (r = 5%): wpisy przyspieszają FIRE → shift > 0.
+  const up = baseState({ assumptions: { portfolioStart: 100000 } });
+  for (let i = 0; i < 6; i++) {
+    E.applyCheckIn(up, { month: E.idxToYm(E.ymToIdx('2026-07') + i), earned: 11000, spent: 6000 }, NOW2);
+  }
+  const repUp = E.annualReport(up, 2026, NOW2);
+  assertTrue(repUp.reachedPrev && repUp.reachedNow, 'obie prognozy sięgają FIRE');
+  assertTrue(repUp.fireShiftMonths > 0, `ponad plan → wcześniej (${repUp.fireShiftMonths})`);
+  // Poniżej planu: delta z wpisów ujemna → FIRE później → shift < 0.
+  const down = baseState({ assumptions: { portfolioStart: 100000 } });
+  for (let i = 0; i < 6; i++) {
+    E.applyCheckIn(down, { month: E.idxToYm(E.ymToIdx('2026-07') + i), earned: 8000, spent: 6000 }, NOW2);
+  }
+  const repDown = E.annualReport(down, 2026, NOW2);
+  assertTrue(repDown.fireShiftMonths < 0, `poniżej planu → później (${repDown.fireShiftMonths})`);
+  // r = 0 i wysokie wydatki: cel 2,85 mln przy 1 500 zł/mies. oszczędności
+  // (≤ 1,08 mln w horyzoncie) → obie prognozy poza horyzontem → gałąź null.
+  const flat = raportState({ assumptions: { monthlyLivingExpenses: 9500 } });
+  for (let i = 0; i < 6; i++) {
+    E.applyCheckIn(flat, { month: E.idxToYm(E.ymToIdx('2026-07') + i), earned: 11000, spent: 9500 }, NOW2);
+  }
+  const repFlat = E.annualReport(flat, 2026, NOW2);
+  assertEq(repFlat.reachedNow, false, 'cel poza horyzontem');
+  assertEq(repFlat.fireShiftMonths, null, 'brak daty → shift null');
+});
+
+test('F45d: projectionAsOf — obcięcie wpisów i czystość stanu', () => {
+  const full = baseState({ assumptions: { portfolioStart: 100000 } });
+  for (let i = 0; i < 6; i++) {
+    E.applyCheckIn(full, { month: E.idxToYm(E.ymToIdx('2026-07') + i), earned: 11000, spent: 6000 }, NOW2);
+  }
+  const partial = baseState({ assumptions: { portfolioStart: 100000 } });
+  for (let i = 0; i < 3; i++) { // tylko lip–wrz
+    E.applyCheckIn(partial, { month: E.idxToYm(E.ymToIdx('2026-07') + i), earned: 11000, spent: 6000 }, NOW2);
+  }
+  const a = E.projectionAsOf(full, '2026-09');
+  const b = E.projectionAsOf(partial, '2026-09');
+  assertEq(a.fireYm, b.fireYm, 'obcięcie ≡ stan bez późniejszych wpisów (fireYm)');
+  assertClose(a.delta, b.delta, 1e-9, 'obcięcie ≡ stan bez późniejszych wpisów (delta)');
+  const before = JSON.stringify(full);
+  E.projectionAsOf(full, '2026-09');
+  E.annualReport(full, 2026, NOW2);
+  assertEq(JSON.stringify(full), before, 'czystość: stan bajt-w-bajt nietknięty');
+});
+
+test('F45e: krawędzie — lata poza planem, rok bieżący, pusty rok, reportYears', () => {
+  const st = raportState();
+  raportEntries(st, 5000, 'notatka roku');
+  assertEq(E.annualReport(st, 2025, NOW2), null, 'rok w całości przed kotwicą → null');
+  assertEq(E.annualReport(st, 2027, NOW2), null, 'rok w całości po ostatnim pełnym miesiącu → null');
+  // Rok bieżący obcinany do ostatniego pełnego miesiąca (kotwica cofnięta do 2026-01).
+  const cur = raportState({ anchorMonth: '2026-01' });
+  const repCur = E.annualReport(cur, 2026, NOW); // NOW = 15 lipca 2026
+  assertEq(repCur.to, '2026-06', 'to = ostatni pełny miesiąc');
+  assertEq(repCur.from, '2026-01');
+  assertEq(repCur.entriesCount, 0, 'rok bez wpisów nadal raportowany');
+  assertEq(repCur.best, null, 'brak wpisów → brak najlepszego miesiąca');
+  // Notatki roku lądują w raporcie (dla karty „Notatki z roku").
+  const rep = E.annualReport(st, 2026, NOW2);
+  assertEq(rep.notes.length, 6, 'notatki z wpisów w raporcie');
+  assertEq(rep.notes[0].ym, '2026-07');
+  assertEq(rep.notes[0].note, 'notatka roku');
+  // reportYears: malejąco; pusta historia → [].
+  st.entries.push(entry('2027-01', 1000, 500));
+  assertEq(E.reportYears(st).join(','), '2027,2026', 'lata malejąco');
+  assertEq(E.reportYears(baseState()).length, 0, 'brak wpisów → []');
+});

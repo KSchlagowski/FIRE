@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (141 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (217 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -122,9 +122,10 @@ and receives data as params. A 5-tab bottom nav (`#tabbar` in `index.html`) maps
 | `#/symulacja` | Symulacja | `renderSymulacja` → `simulation.js` |
 | `#/plan`, `#/plan/:section` | Plan hub + sub-pages | `renderPlanHub` / `renderPlanSection` |
 | `#/backup` | Kopia zapasowa | `renderBackup` |
+| `#/raport/:year` | raport roczny „Twój rok FIRE" | `renderRaport` → `analysis.js` |
 
 `activeRoute()` decides tab highlighting: check-in counts as **Pulpit**; `#/backup`
-and every `#/plan/*` sub-page count as **Plan**. Add a route by extending `route()`
+and every `#/plan/*` sub-page count as **Plan**; `#/raport/*` counts as **Historia**. Add a route by extending `route()`
 and, if it's a top-level tab, the `#tabbar` list in `index.html`.
 
 ### Persisted state shape (see `createState`)
@@ -364,7 +365,16 @@ null/non-array `seen` safe), the loan milestones via real replays
 the check-in integration diff (a seen key stays silent), the
 `milestoneMessage` selector (2 unique variants per key, seed modulo, unknown
 key → null), and the v7→v8 migration (missing/non-array `milestonesSeen` →
-`[]`, explicit list untouched, v1 chain).
+`[]`, explicit list untouched, v1 chain). F45 covers the annual report
+(`projectionAsOf`/`reportYears`/`annualReport`, `#/raport/:year`): year sums,
+verdict mix and in-year best streak on a clamped period, the r=0 FI% identity
+(pre-anchor `prevEndYm` legally returns start balances), the FIRE-date shift
+(above-plan > 0, below-plan < 0, out-of-horizon → null; both projections use
+TODAY's assumptions and differ only in the entry cutoff), `projectionAsOf`
+truncation ≡ a state without the later entries plus byte-exact state purity,
+the edge years (fully before the anchor / after the last complete month →
+null; a plan-intersecting empty year still reports), surfaced notes, and
+descending `reportYears`.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

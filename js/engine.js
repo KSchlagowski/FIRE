@@ -1869,6 +1869,90 @@ export function fireJourneyProgress(state, plan, projection, uptoYm) {
   return { pct, savedValue: saved, totalValue: total, reached, monthlySaveNow };
 }
 
+// ── Raport roczny ───────────────────────────────────────────────────────
+// Retrospektywa „Twój rok FIRE" (#/raport/:year): wszystko czytane z historii
+// wpisów (wzorzec replay), nic nie jest utrwalane — zero zmian schematu.
+
+// Pełny potok na kopii stanu z wpisami obciętymi do uptoYm i „zegarem"
+// zamrożonym na uptoYm. Czysty (płytka kopia — wzorzec projectionWith).
+// Obcięcie wpisów jest konieczne: assumedDelta patrzy na OSTATNIE ≤6 wpisów,
+// a byPlanOnly na ich liczbę — bez obcięcia prognoza „sprzed roku"
+// widziałaby przyszłość.
+export function projectionAsOf(state, uptoYm) {
+  const cut = ymToIdx(uptoYm);
+  const st = { ...state, entries: state.entries.filter(e => ymToIdx(e.month) <= cut) };
+  const plan = buildPlan(st);
+  const debt = replayDebt(st, uptoYm);
+  const family = replayFamilyLoan(st, uptoYm);
+  const balances = replayBalances(st, uptoYm, debt, family);
+  return projectFire(st, plan, balances, debt, family, uptoYm);
+}
+
+// Lata z co najmniej jednym wpisem, malejąco (punkt wejścia w Historii).
+export function reportYears(state) {
+  return [...new Set(state.entries.map(e => Number(e.month.slice(0, 4))))].sort((a, b) => b - a);
+}
+
+// Podsumowanie roku kalendarzowego `year`. null, gdy rok nie przecina się
+// z planem (from > to). Wszystko realnie; assumptions są DZISIEJSZE dla obu
+// prognoz — porównanie izoluje efekt wpisów z roku, nie zmian założeń.
+// fireShiftMonths > 0 = FIRE WCZEŚNIEJ (konwencja renderCheckinResult).
+export function annualReport(state, year, now = new Date()) {
+  const fromIdx = Math.max(ymToIdx(`${year}-01`), ymToIdx(state.anchorMonth));
+  const toIdx = Math.min(ymToIdx(`${year}-12`), ymToIdx(lastCompleteMonth(now)));
+  if (fromIdx > toIdx) return null;
+  const from = idxToYm(fromIdx), to = idxToYm(toIdx);
+  const inYear = state.entries
+    .filter(e => ymToIdx(e.month) >= fromIdx && ymToIdx(e.month) <= toIdx)
+    .sort((x, y) => (x.month < y.month ? -1 : 1));
+
+  // Sumy odłożone/plan + werdykty + najlepszy/najsłabszy miesiąc.
+  let totalSaved = 0, totalPlanned = 0, best = null, worst = null;
+  const verdicts = { crushed: 0, on_plan: 0, behind: 0, hard: 0 };
+  for (const e of inYear) {
+    const net = roundGrosze(e.earned - e.spent);
+    totalSaved += net; totalPlanned += e.plannedSavingsSnapshot;
+    if (verdicts[e.verdict] != null) verdicts[e.verdict]++;
+    if (!best || net > best.net) best = { month: e.month, net };
+    if (!worst || net < worst.net) worst = { month: e.month, net };
+  }
+  const goodMonths = inYear.filter(e => isGoodVerdict(e.verdict)).length;
+  const bestRun = computeStreak(inYear).best;   // najdłuższa seria W ROKU
+
+  // FI% na początek i koniec roku — definicja jak fiStats.fiPct (sam portfel).
+  // replayBalances czyta wpisy tylko ≤ upto, więc obcięcie nie jest potrzebne;
+  // prevEndYm sprzed kotwicy legalnie zwraca salda startowe (pusta pętla).
+  const prevEndYm = `${year - 1}-12`;
+  const balPrev = replayBalances(state, prevEndYm);
+  const balEnd = replayBalances(state, to);
+  const tPrev = fireTargetAt(state, prevEndYm), tEnd = fireTargetAt(state, to);
+  const fiPctStart = tPrev > 0 ? balPrev.portfolio / tPrev : null;
+  const fiPctEnd = tEnd > 0 ? balEnd.portfolio / tEnd : null;
+
+  // Przesunięcie prognozy FIRE: „tylko wpisy do grudnia zeszłego roku"
+  // vs „wpisy do końca raportowanego okresu". Dodatnie = FIRE WCZEŚNIEJ.
+  const projPrev = projectionAsOf(state, prevEndYm);
+  const projNow = projectionAsOf(state, to);
+  const fireShiftMonths = (projPrev.reached && projNow.reached)
+    ? monthsBetween(projNow.fireYm, projPrev.fireYm) : null;
+
+  return {
+    year, from, to,
+    entriesCount: inYear.length,
+    monthsInPlan: toIdx - fromIdx + 1,
+    totalSaved: roundGrosze(totalSaved), totalPlanned,
+    delta: roundGrosze(totalSaved - totalPlanned),
+    verdicts, goodMonths, bestRun, best, worst,
+    fiPctStart, fiPctEnd,
+    fiPctDelta: (fiPctStart != null && fiPctEnd != null) ? fiPctEnd - fiPctStart : null,
+    reachedPrev: projPrev.reached, reachedNow: projNow.reached,
+    fireYmPrev: projPrev.reached ? projPrev.fireYm : null,
+    fireYmNow: projNow.reached ? projNow.fireYm : null,
+    fireShiftMonths,
+    notes: inYear.filter(e => e.note).map(e => ({ ym: e.month, note: e.note })),
+  };
+}
+
 // ── Jeden potok po każdej mutacji ───────────────────────────────────────
 // Pochodne trzymane na state.derived — nigdy nie utrwalane jako prawda.
 

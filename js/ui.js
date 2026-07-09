@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage, milestoneMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.28.0';
+export const APP_VERSION = '1.29.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -391,6 +391,7 @@ function route() {
   else if (hash === '#/slowniczek') renderGlossary(null);
   else if (hash.startsWith('#/slowniczek/')) renderGlossary(hash.split('/')[2]);
   else if (hash === '#/backup') renderBackup();
+  else if (hash.startsWith('#/raport/')) renderRaport(hash.split('/')[2]);
   else renderDashboard();
 }
 
@@ -401,6 +402,7 @@ function activeRoute(hash) {
   if (hash.startsWith('#/checkin')) return '#/';
   if (hash === '#/backup') return '#/plan';
   if (hash.startsWith('#/slowniczek')) return '#/plan';
+  if (hash.startsWith('#/raport')) return '#/history'; // raport roczny żyje pod Historią
   return hash.split('/').slice(0, 2).join('/');
 }
 
@@ -771,6 +773,19 @@ function renderDashboard() {
 
   if (due) {
     html += `<div class="banner warn">📝 Czeka Cię check-in za <b>${Fmt.formatMonthName(lastOk)}</b> — domknij miesiąc, zanim ucieknie.</div>`;
+  }
+  // Karta sezonowa raportu rocznego: grudzień → bieżący rok (rok w toku),
+  // styczeń → miniony (grudniowy check-in wpada 1 stycznia). Nic ciężkiego
+  // nie liczymy — annualReport (2 pełne prognozy) działa dopiero na #/raport.
+  {
+    const nowMonth = Number(nowYm.slice(5));
+    const reportYear = nowMonth === 12 ? Number(nowYm.slice(0, 4))
+      : nowMonth === 1 ? Number(nowYm.slice(0, 4)) - 1 : null;
+    if (reportYear != null && E.reportYears(state).includes(reportYear)) {
+      html += `<div class="banner info">🎁 <b>Twój rok FIRE ${reportYear}</b> — zobacz podsumowanie:
+        ile odłożone, jaka seria, o ile przybliżyło się FIRE.
+        <div class="btn-row"><a class="btn primary" href="#/raport/${reportYear}">Pokaż raport</a></div></div>`;
+    }
   }
   if (deferredPrompt && !state.ui.installTipDismissed) {
     html += `<div class="banner info">📲 Zainstaluj aplikację na ekranie głównym — działa w pełni offline.
@@ -1212,6 +1227,7 @@ function renderHistory() {
     ${rows.length ? rows.join('') : '<p class="muted">Jeszcze pusto — pierwszy check-in przed Tobą.</p>'}
     ${addEarlier}
     ${state.derived.streak.best > 0 ? `<p class="muted small" style="margin-top:.75rem">Najdłuższa seria: 🔥 ${state.derived.streak.best}</p>` : ''}
+    ${E.reportYears(state).length ? `<p class="muted small">Raporty roczne: ${E.reportYears(state).map(y => `<a href="#/raport/${y}">${y}</a>`).join(' · ')}</p>` : ''}
   </div>`;
 
   $$('.hist-row[data-gap]').forEach(el => el.addEventListener('click', () => {
@@ -1262,6 +1278,17 @@ function renderHistory() {
     if (hasEntry) confirmModal(`Usunąć miesiąc ${Fmt.formatMonthName(ym)} wraz z jego check-inem i przesunąć start planu? Salda i prognoza zostaną przeliczone.`, doRemove, { yesLabel: 'Usuń' });
     else doRemove();
   }));
+}
+
+// ── Raport roczny (#/raport/:year) ──────────────────────────────────────
+// Tylko odczyt — markup w analysis.js; zły/pusty rok wraca do Historii.
+
+function renderRaport(yearStr) {
+  const year = Number(yearStr);
+  const rep = Number.isSafeInteger(year) && year >= 1900 && year <= 2200
+    ? E.annualReport(state, year) : null;
+  if (!rep) { location.hash = '#/history'; return; }
+  view().innerHTML = An.annualReportScreen({ rep, years: E.reportYears(state) });
 }
 
 // ── Analiza ─────────────────────────────────────────────────────────────

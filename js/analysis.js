@@ -485,3 +485,90 @@ export function familyLoanCard({ fa, chartHTML, barHTML, remainingBarHTML }) {
     ])}
   </div>`;
 }
+
+// ── 7. Raport roczny „Twój rok FIRE" (#/raport/:year) ────────────────────
+// rep = wynik engine.annualReport (nie-null); years = engine.reportYears(state).
+// Tylko odczyt: żadnych pól, żadnych zapisów — nawigacja to zwykłe hash-linki.
+
+export function annualReportScreen({ rep, years }) {
+  const clamped = rep.from !== `${rep.year}-01` || rep.to !== `${rep.year}-12`;
+  const header = `<div class="card center">
+    <h2>Twój rok FIRE ${rep.year} 🔥</h2>
+    ${clamped ? `<p class="muted small">Raport obejmuje ${ymShort(rep.from)} – ${ymShort(rep.to)} (część roku w planie).</p>` : ''}
+  </div>`;
+
+  // Nawigacja: sąsiednie lata z wpisami + powrót do Historii.
+  const prevY = years.includes(rep.year - 1) ? `<a class="btn" href="#/raport/${rep.year - 1}">← ${rep.year - 1}</a>` : '';
+  const nextY = years.includes(rep.year + 1) ? `<a class="btn" href="#/raport/${rep.year + 1}">${rep.year + 1} →</a>` : '';
+  const nav = `${prevY || nextY ? `<div class="btn-row">${prevY}${nextY}</div>` : ''}
+    <a class="btn ghost wide" href="#/history">← Historia</a>`;
+
+  if (rep.entriesCount === 0) {
+    return `${header}<div class="card"><p class="muted">Brak wpisów w tym roku.</p></div>${nav}`;
+  }
+
+  // 2. Odłożone w roku.
+  const savedSummary = rep.delta >= 0
+    ? 'Rok na plus względem planu. Tę nadwyżkę procent składany będzie powtarzał Ci przez dekady.'
+    : 'Rok poniżej planu — ale zmierzony, a co mierzysz, tym zarządzasz. Wybierz jedną rzecz do poprawy na nowy rok.';
+  const saved = `<div class="card"><h2>Odłożone w roku 💰</h2>
+    ${kv('Odłożone razem', money(rep.totalSaved))}
+    ${kv('Plan na ten okres', money(rep.totalPlanned))}
+    ${kv('Różnica', signed(rep.delta), rep.delta >= 0 ? 'good' : 'warn-text')}
+    ${rep.best ? kv('Najlepszy miesiąc', `${esc(Fmt.formatMonthName(rep.best.month))} (${money(rep.best.net)})`) : ''}
+    ${rep.worst ? kv('Najsłabszy miesiąc', `${esc(Fmt.formatMonthName(rep.worst.month))} (${money(rep.worst.net)})`) : ''}
+    <p class="muted small">${savedSummary}</p>
+  </div>`;
+
+  // 3. Seria i werdykty (wiersze zerowe pomijane).
+  const verdictRows = ['crushed', 'on_plan', 'behind', 'hard']
+    .filter(v => rep.verdicts[v] > 0)
+    .map(v => kv(`${verdictEmoji(v)} ${esc(verdictLabel(v))}`, String(rep.verdicts[v])))
+    .join('');
+  const streak = `<div class="card"><h2>Seria i werdykty 🎖️</h2>
+    ${kv('Dobre miesiące', `${rep.goodMonths} z ${rep.entriesCount} wpisów`)}
+    ${kv('Najdłuższa seria w roku', `🔥 ${rep.bestRun}`)}
+    ${verdictRows}
+  </div>`;
+
+  // 4. Postęp do celu (FI%).
+  const pct = v => Fmt.formatPct(v, 1);
+  const progress = (rep.fiPctStart != null && rep.fiPctEnd != null)
+    ? `<div class="card"><h2>Postęp do celu 🎯</h2>
+      ${kv('FI% na początku roku', pct(rep.fiPctStart))}
+      ${kv('FI% na końcu roku', pct(rep.fiPctEnd))}
+      ${kv('Zmiana', `${rep.fiPctDelta >= 0 ? '+' : ''}${pct(rep.fiPctDelta)}`, rep.fiPctDelta >= 0 ? 'good' : 'warn-text')}
+    </div>` : '';
+
+  // 5. Data FIRE — jedno zdanie wg przypadku.
+  const shift = rep.fireShiftMonths;
+  let fireLine;
+  if (shift != null && shift > 0) {
+    fireLine = `Prognoza FIRE przyspieszyła w tym roku o ${Fmt.formatYearsMonths(shift)} — z ${esc(Fmt.formatMonthName(rep.fireYmPrev))} na ${esc(Fmt.formatMonthName(rep.fireYmNow))}. Tak wygląda kupowanie sobie czasu.`;
+  } else if (shift != null && shift < 0) {
+    fireLine = `Prognoza FIRE przesunęła się o ${Fmt.formatYearsMonths(-shift)} dalej — z ${esc(Fmt.formatMonthName(rep.fireYmPrev))} na ${esc(Fmt.formatMonthName(rep.fireYmNow))}. Jeden rok nie przekreśla planu: wnioski są w liczbach wyżej.`;
+  } else if (shift === 0) {
+    fireLine = `Prognoza FIRE bez zmian: ${esc(Fmt.formatMonthName(rep.fireYmNow))}. Stabilnie — dokładnie tak buduje się wolność.`;
+  } else if (!rep.reachedPrev && rep.reachedNow) {
+    fireLine = `Rok temu prognoza nie domykała się w horyzoncie — dziś FIRE ma datę: ${esc(Fmt.formatMonthName(rep.fireYmNow))}. To zasługa tego roku.`;
+  } else if (rep.reachedPrev && !rep.reachedNow) {
+    fireLine = 'Prognoza wypadła poza horyzont — zajrzyj do założeń i wpisów, liczby wyżej pokażą, co się zmieniło.';
+  } else {
+    fireLine = 'Prognoza FIRE jest poza 60-letnim horyzontem — raport pokazuje, co realnie udało się odłożyć.';
+  }
+  const fire = `<div class="card"><h2>Data FIRE 📅</h2>
+    <p>${fireLine}</p>
+    ${metodologia([
+      `Obie prognozy liczone dzisiejszymi założeniami — porównujemy tylko wpisy: stan na koniec ${rep.year - 1} vs stan na ${ymShort(rep.to)}.`,
+      'FI% = portfel ÷ cel FIRE w danym miesiącu (cel jest ruchomy); zmiana podana w punktach procentowych.',
+    ])}
+  </div>`;
+
+  // 6. Notatki z roku (jeśli są) — historia miesięcy własnymi słowami.
+  const notes = rep.notes && rep.notes.length
+    ? `<div class="card"><h2>Notatki z roku 📝</h2>
+      ${rep.notes.map(n => kv(esc(Fmt.formatMonthName(n.ym)), esc(n.note))).join('')}
+    </div>` : '';
+
+  return `${header}${saved}${streak}${progress}${fire}${notes}${nav}`;
+}
