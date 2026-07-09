@@ -24,16 +24,62 @@ export function validateState(s) {
     throw new Error(`Dane z nowszej wersji aplikacji (v${s.version}) — zaktualizuj aplikację`);
   }
   if (!/^\d{4}-\d{2}$/.test(s.anchorMonth || '')) throw new Error('Nieprawidłowy anchorMonth');
+  if (!s.profile || typeof s.profile !== 'object') throw new Error('Brak profilu');
   if (!s.assumptions || typeof s.assumptions.withdrawalRate !== 'number') {
     throw new Error('Brak założeń');
   }
+  // Głęboka walidacja (Faza 3): typeof 'number' przepuszcza NaN/Infinity, które
+  // po cichu zatruwają każdą wartość pochodną — wymagamy skończonych liczb.
+  // Pola dokładane migracją (postRetirementReturnReal od v3) sprawdzane tylko,
+  // gdy obecne, żeby stare kopie v1/v2 nadal przechodziły.
+  const fin = Number.isFinite;
+  for (const f of ['monthlyIncome', 'monthlyLivingExpenses', 'cashStart', 'portfolioStart',
+    'cashReturnReal', 'targetFireAge', 'withdrawalRate', 'realReturnAnnual',
+    'expenseGrowthReal', 'incomeGrowthReal', 'inflationAnnual']) {
+    if (!fin(s.assumptions[f])) throw new Error(`Założenie ${f} nie jest liczbą`);
+  }
+  if (s.assumptions.postRetirementReturnReal !== undefined && !fin(s.assumptions.postRetirementReturnReal)) {
+    throw new Error('Założenie postRetirementReturnReal nie jest liczbą');
+  }
   if (!Array.isArray(s.entries)) throw new Error('Brak listy wpisów');
   for (const e of s.entries) {
-    if (!/^\d{4}-\d{2}$/.test(e.month) || typeof e.earned !== 'number' || typeof e.spent !== 'number') {
+    if (!e || typeof e !== 'object' || !/^\d{4}-\d{2}$/.test(e.month)
+      || !fin(e.earned) || !fin(e.spent)) {
       throw new Error('Uszkodzony wpis w historii');
+    }
+    // Nadpłaty: brak/null traktowane jak 0 w replayu; korekty sald: null = brak.
+    for (const f of ['overpayment', 'familyOverpayment', 'cashOverride', 'balanceOverride']) {
+      if (e[f] != null && !fin(e[f])) throw new Error('Uszkodzony wpis w historii');
     }
   }
   if (!s.housing) throw new Error('Brak sekcji mieszkaniowej');
+  // Kształt planu domu, gdy włączony (pola, po których liczy replay/projekcja).
+  {
+    const hp = s.housing.housePlan;
+    const ymOrNull = v => v == null || /^\d{4}-\d{2}$/.test(v);
+    if (hp && hp.enabled) {
+      const m = hp.mortgage;
+      if (!m || typeof m !== 'object' || !fin(m.principal) || !fin(m.rateNominal)
+        || !fin(m.termYears) || !ymOrNull(m.startMonth)) {
+        throw new Error('Uszkodzony plan kredytu');
+      }
+    }
+    const fl = hp && hp.familyLoan;
+    if (fl && fl.enabled) {
+      if (!fin(fl.principal) || !fin(fl.rateNominal)
+        || !ymOrNull(fl.startMonth) || !ymOrNull(fl.endMonth)) {
+        throw new Error('Uszkodzony plan długu rodzinnego');
+      }
+    }
+  }
+  // Sekcja podatków istnieje od v5 (Belka), ikeIkze od v6 — bramkowane wersją,
+  // żeby stare kopie przeszły (migracja dołoży brakujące sekcje).
+  if (s.version >= 5 && (!s.taxes || typeof s.taxes.belkaEnabled !== 'boolean')) {
+    throw new Error('Uszkodzona sekcja podatków');
+  }
+  if (s.version >= 6 && (!s.taxes.ikeIkze || typeof s.taxes.ikeIkze !== 'object')) {
+    throw new Error('Uszkodzona sekcja IKE/IKZE');
+  }
 
   // Zakresy stóp (D6): ścieżka importu musi egzekwować to, co UI już wymusza.
   // Stopa ≤ −100% pcha monthlyRate/toReal w NaN/Infinity i po cichu zatruwa

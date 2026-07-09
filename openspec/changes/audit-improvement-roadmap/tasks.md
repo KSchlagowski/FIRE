@@ -47,26 +47,32 @@
 - [ ] 2.7 Bump version (3 places); verify: tests green, per-screen click-through dark+light,
   `/FIRE/` subpath rehearsal
 
-## 3. Phase 3 — Hardening (~v1.19.x)
+## 3. Phase 3 — Hardening (~v1.19.x — shipped as **v1.24.0**, Phase 5 released first)
 
-- [ ] 3.1 Deepen `validateState` in `storage.js`: finite `assumptions`; entries'
+- [x] 3.1 Deepen `validateState` in `storage.js`: finite `assumptions`; entries'
   `earned/spent/overpayment/familyOverpayment` finite and overrides `null|finite`; `profile`
   object; `housing.housePlan.mortgage/familyLoan` shape when enabled; `taxes.belkaEnabled`
-  boolean — reject with the existing Polish error
-- [ ] 3.2 Add storage fixtures: NaN income, string `earned`, missing `profile` → all
-  rejected; valid v1–v5 states still migrate (extend the migration test group)
-- [ ] 3.3 Wrap import-apply (`ui.js`) in try/catch: on throw keep prior state, show Polish
-  error toast, abort import
-- [ ] 3.4 Wrap boot `recomputeDerived` (`ui.js`) in try/catch: on throw fall through to
+  boolean — reject with the existing Polish error (taxes checks gated on `version ≥ 5/6` so
+  pre-Belka backups still validate before migration)
+- [x] 3.2 Add storage fixtures: NaN income, string `earned`, missing `profile` → all
+  rejected; valid v1–v5 states still migrate (fixture group **F41**; the F11 v1–v5
+  migration chain now runs through the deep validation and stays green)
+- [x] 3.3 Wrap import-apply (`ui.js`) in try/catch: on throw keep prior state, show Polish
+  error toast, abort import (also `renderCorrupt` recovery assigns `state` only after a
+  successful recompute)
+- [x] 3.4 Wrap boot `recomputeDerived` (`ui.js`) in try/catch: on throw fall through to
   `renderCorrupt`
-- [ ] 3.5 Add CSP `<meta>` to `index.html`: `default-src 'self'; script-src 'self';
+- [x] 3.5 Add CSP `<meta>` to `index.html`: `default-src 'self'; script-src 'self';
   style-src 'self' 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; connect-src
   'self'`; verify SW/manifest/icons/charts load locally and under `/FIRE/`
-- [ ] 3.6 Add offline probe to „Wymuś aktualizację": `fetch('./manifest.webmanifest',
+- [x] 3.6 Add offline probe to „Wymuś aktualizację": `fetch('./manifest.webmanifest',
   {cache:'no-store'})` before clearing caches; on failure toast „Jesteś offline — spróbuj z
-  internetem" and abort
-- [ ] 3.7 Bump version (3 places); verify: `node tests/run-tests.js` green, malformed-JSON
-  import rejected with Polish error, offline force-update aborts cleanly, `/FIRE/` rehearsal
+  internetem" and abort (probe carries a unique `?sonda=` query — the SW's cache-first
+  exact-match would otherwise satisfy the bare URL from Cache Storage even offline)
+- [x] 3.7 Bump version (3 places, v1.24.0); verify: `node tests/run-tests.js` green
+  (196/196), malformed-JSON import rejected with Polish error, offline force-update aborts
+  cleanly (toast + caches intact), `/FIRE/` rehearsal — headless Chromium pass, all screens
+  dark+light, zero console errors under CSP, browser runner 196/196 with SW registered
 
 ## 4. Phase 4 — Habit & motivation features (one release each)
 
@@ -102,7 +108,8 @@
 
 ## 6. Per-phase verification (repeat for every release)
 
-Done for the four Phase 5 releases (v1.20.0–v1.23.0); repeat when Phases 2–4 ship.
+Done for the four Phase 5 releases (v1.20.0–v1.23.0) and Phase 3 (v1.24.0); repeat when
+Phases 2 and 4 ship.
 
 - [x] 6.1 `node tests/run-tests.js` → exit 0 (extend fixtures when engine/storage behavior
   changes; copy-only phases need none) — 195/195 after F37–F40
@@ -116,5 +123,6 @@ Done for the four Phase 5 releases (v1.20.0–v1.23.0); repeat when Phases 2–4
   no new app files in Phase 5 (PRECACHE unchanged, CACHE bumped 4×); browser runner
   195/195 with the SW registered
 - [x] 6.5 Phase-specific checks: XSS literal-render when notes ship; malformed-JSON import
-  rejected after Phase 3; offline force-update aborts after Phase 3 — n/a for Phase 5
-  (notes and Phase 3 hardening not yet shipped); CSV quoting covered by F40b
+  rejected after Phase 3; offline force-update aborts after Phase 3 — both verified in the
+  v1.24.0 headless pass (Polish errors on malformed/foreign/NaN imports; offline abort with
+  caches intact); CSV quoting covered by F40b

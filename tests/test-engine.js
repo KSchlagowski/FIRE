@@ -508,6 +508,48 @@ test('F33: import odrzuca stany, które UI już zabrania (D6)', () => {
   assertEq(S.validateState(ok).version, 6, 'poprawna kompozycja przechodzi');
 });
 
+test('F41: głęboka walidacja importu — NaN/typy/kształty odrzucone (Faza 3)', () => {
+  // NaN w założeniach → odrzucone (typeof 'number' by to przepuścił).
+  const nanIncome = baseState();
+  nanIncome.assumptions.monthlyIncome = NaN;
+  assertThrows(() => S.validateState(nanIncome), 'NaN monthlyIncome odrzucone');
+  // String zamiast liczby we wpisie → odrzucony.
+  const strEarned = baseState();
+  strEarned.entries.push(entry('2026-07', 8000, 5000));
+  strEarned.entries[0].earned = '8000';
+  assertThrows(() => S.validateState(strEarned), 'string earned odrzucone');
+  // NaN nadpłata → odrzucona; null-owe korekty sald nadal przechodzą.
+  const badOver = baseState();
+  badOver.entries.push(entry('2026-07', 8000, 5000, { overpayment: NaN }));
+  assertThrows(() => S.validateState(badOver), 'NaN overpayment odrzucone');
+  const badOverride = baseState();
+  badOverride.entries.push(entry('2026-07', 8000, 5000, { cashOverride: '100' }));
+  assertThrows(() => S.validateState(badOverride), 'string cashOverride odrzucone');
+  // Brak profilu → odrzucony.
+  const noProfile = baseState();
+  delete noProfile.profile;
+  assertThrows(() => S.validateState(noProfile), 'brak profile odrzucony');
+  // belkaEnabled nie-boolean przy v ≥ 5 → odrzucone.
+  const badTaxes = baseState();
+  badTaxes.taxes.belkaEnabled = 'tak';
+  assertThrows(() => S.validateState(badTaxes), 'nie-boolean belkaEnabled odrzucone');
+  // Kształt kredytu przy włączonym planie: principal jako string → odrzucone.
+  const badMortgage = baseState({ housing: { housePlan: housePlan() } });
+  badMortgage.housing.housePlan.mortgage.principal = '600000';
+  assertThrows(() => S.validateState(badMortgage), 'string principal odrzucone');
+  // Poprawny stan (null-owe korekty, brak familyOverpayment w starych wpisach,
+  // włączony plan domu) nadal przechodzi.
+  const ok = baseState({ housing: { housePlan: housePlan() } });
+  ok.entries.push(entry('2026-07', 8000, 5000));
+  assertEq(S.validateState(ok).version, 6, 'poprawny stan przechodzi');
+  // Kopie sprzed v5 (bez sekcji podatków) nadal przechodzą i migrują —
+  // walidacja podatków jest bramkowana wersją.
+  const v4 = JSON.parse(JSON.stringify(baseState()));
+  v4.version = 4;
+  delete v4.taxes;
+  assertEq(S.migrate(S.validateState(v4)).version, 6, 'v4 bez taxes przechodzi i migruje');
+});
+
 test('F11: odzysk z .bak po korupcji', () => {
   const backing = mockBacking();
   const store = S.makeStorage(backing);
