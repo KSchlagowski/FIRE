@@ -735,6 +735,39 @@ export function deleteEntry(state, month, now = new Date()) {
   recomputeDerived(state, now);
 }
 
+// ── Planowane zdarzenia jednorazowe (część planu, nie historii) ──────────
+// Kwota realna (dzisiejsze zł), ze znakiem: dodatnia = przychód, ujemna =
+// wydatek. Wpływa TYLKO na prognozę (projectFire), nigdy na historię ani
+// werdykty — gdy miesiąc nadejdzie, rzeczywistą kwotę zapisuje check-in, a
+// zdarzenie przestaje być prognozowane (pętla projekcji rusza od upto+1).
+// Dozwolony jest bieżący (niedokończony) miesiąc — wciąż prognozowany.
+export function addEvent(state, input, now = new Date()) {
+  const { month } = input;
+  if (!isValidYm(month)) throw new Error('Nieprawidłowy miesiąc');
+  if (ymToIdx(month) <= ymToIdx(lastCompleteMonth(now))) {
+    throw new Error('Zdarzenie musi dotyczyć bieżącego lub przyszłego miesiąca');
+  }
+  const amount = roundGrosze(Number(input.amount));
+  if (!isFinite(amount) || amount === 0) throw new Error('Kwota musi być różna od zera');
+  // Monotoniczne id: max(istniejące) + 1 — deterministyczne, bez Date/random w silniku.
+  const id = state.events.reduce((m, e) => Math.max(m, e.id), 0) + 1;
+  const ev = {
+    id, month, amount,
+    label: String(input.label || '').trim().slice(0, 80),
+    createdAt: now.toISOString(),
+  };
+  state.events.push(ev);
+  state.events.sort((x, y) => (x.month < y.month ? -1 : 1));
+  recomputeDerived(state, now);
+  return ev;
+}
+
+export function removeEvent(state, id, now = new Date()) {
+  const i = state.events.findIndex(e => e.id === id);
+  if (i >= 0) state.events.splice(i, 1);
+  recomputeDerived(state, now);
+}
+
 // Re-kotwiczenie startu planu. W PRZÓD (auto po edycji dochodu/wydatków/czynszu
 // albo ręcznie): salda przenoszone na nową kotwicę. WSTECZ (ręcznie, aby otworzyć
 // wcześniejsze miesiące do check-inu): salda startowe zostają takie, jakie ustawił
@@ -860,6 +893,16 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm, o
   if (debtStarted && debtBal <= EPS) debtFreeYm = uptoYm;
   if (famStarted && famBal <= EPS) familyFreeYm = uptoYm;
 
+  // Planowane zdarzenia jednorazowe: sumowane po indeksie miesiąca. Pętla rusza
+  // od max(upto+1, a0), więc zdarzenia z przeszłości (≤ upto) i sprzed kotwicy
+  // są pomijane za darmo — brak podwójnego liczenia. `state.events || []`
+  // zabezpiecza płytkie kopie stanu (testy, częściowe stany).
+  const eventsByIdx = new Map();
+  for (const ev of state.events || []) {
+    const i = ymToIdx(ev.month);
+    eventsByIdx.set(i, (eventsByIdx.get(i) || 0) + ev.amount);
+  }
+
   const startIdx = Math.max(upto + 1, a0);
   for (let idx = startIdx; idx < a0 + plan.length; idx++) {
     const pm = plan[idx - a0];
@@ -873,7 +916,7 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm, o
     // oszczędności — tylko w miesiącach PROGNOZY (D7); z wyłączonym ikeIkze
     // beginMonth zwraca 0 i s pozostaje bez zmian.
     const refund = tracker ? tracker.beginMonth(ym) : 0;
-    const s = pm.plannedSavings + delta + refund;
+    const s = pm.plannedSavings + delta + refund + (eventsByIdx.get(idx) || 0);
     let flowCash = 0, flowPortfolio = 0;
 
     // Dług rodzinny topi się równolegle wg harmonogramu (bez auto-nadpłat).
@@ -2132,7 +2175,7 @@ export function defaultAssumptions() {
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 9,
+    version: 10,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },
@@ -2155,6 +2198,7 @@ export function createState(partial = {}, now = new Date()) {
       ikeIkze: { enabled: false, employmentForm: 'employee', pitRate: 0.12, ikeStart: 0, ikzeStart: 0 },
     },
     entries: [],
+    events: [],
     ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null, milestonesSeen: [] },
   };
   deepMerge(state, partial);

@@ -1,7 +1,7 @@
 // storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
 // migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const KEY = 'fireApp';
 export const BAK = 'fireApp.bak';
 export const APP_TAG = 'fire-companion';
@@ -54,6 +54,16 @@ export function validateState(s) {
     // Notatka (od v7): null albo string; długości nie egzekwujemy — starsza
     // kopia z dłuższą notatką nie może zablokować importu (silnik tnie przy edycji).
     if (e.note != null && typeof e.note !== 'string') throw new Error('Uszkodzony wpis w historii');
+  }
+  // Zdarzenia jednorazowe (od v10): krytyczne dla replayu — NaN/Infinity w kwocie
+  // po cichu zatrułby całą prognozę. `s.events || []` przepuszcza kopie sprzed v10
+  // (walidacja biegnie PRZED migracją, więc brak klucza musi przejść).
+  if (!Array.isArray(s.events || [])) throw new Error('Uszkodzona lista zdarzeń');
+  for (const ev of s.events || []) {
+    if (!ev || typeof ev !== 'object' || !/^\d{4}-\d{2}$/.test(ev.month)
+      || !fin(ev.amount)) {
+      throw new Error('Uszkodzone zdarzenie w planie');
+    }
   }
   if (!s.housing) throw new Error('Brak sekcji mieszkaniowej');
   // Kształt planu domu, gdy włączony (pola, po których liczy replay/projekcja).
@@ -187,6 +197,11 @@ export function migrate(s) {
     }
     // fall-through
     case 9:
+      // v9 → v10: planowane zdarzenia jednorazowe (duże wydatki i przychody).
+      if (!Array.isArray(cur.events)) cur.events = [];
+      cur.version = 10;
+      // fall-through
+    case 10:
       break;
     default:
       throw new Error(`Nieznana wersja schematu: ${cur.version}`);

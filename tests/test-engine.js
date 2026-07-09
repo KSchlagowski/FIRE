@@ -3855,3 +3855,243 @@ test('F45e: krawędzie — lata poza planem, rok bieżący, pusty rok, reportYea
   assertEq(E.reportYears(st).join(','), '2027,2026', 'lata malejąco');
   assertEq(E.reportYears(baseState()).length, 0, 'brak wpisów → []');
 });
+
+// ── F48: planowane zdarzenia jednorazowe (events) — schemat v10 ────────────
+// Duże jednorazowe wydatki/przychody wpięte w prognozę (projectFire), nigdy w
+// historię ani werdykty. Kwota realna, ze znakiem: + przychód, − wydatek.
+// Stan bez zdarzeń jest bajt-w-bajt jak dotąd (gwarancja: reszta suite przechodzi).
+
+const findRow = (proj, ym) => proj.series.find(r => r.ym === ym);
+
+test('F48a: domyślne i schemat — createState.events = [], version 10, SCHEMA_VERSION 10', () => {
+  const st = E.createState({}, NOW);
+  assertTrue(Array.isArray(st.events) && st.events.length === 0, 'events = []');
+  assertEq(st.version, 10, 'version 10');
+  assertEq(S.SCHEMA_VERSION, 10, 'SCHEMA_VERSION 10');
+});
+
+test('F48b: migracja — v9 zyskuje events=[]; łańcuch v1 też; jawna lista nietknięta', () => {
+  const st = baseState();
+  const v9 = JSON.parse(JSON.stringify(st));
+  v9.version = 9;
+  delete v9.events;
+  const m9 = S.migrate(S.validateState(v9));
+  assertEq(m9.version, S.SCHEMA_VERSION);
+  assertTrue(Array.isArray(m9.events) && m9.events.length === 0, 'events dołożone jako []');
+  // Jawna lista zdarzeń przeżywa migrację bez zmian.
+  const v9b = JSON.parse(JSON.stringify(st));
+  v9b.version = 9;
+  v9b.events = [{ id: 1, month: '2030-01', amount: -1000, label: 'x', createdAt: '2026-01-01T00:00:00.000Z' }];
+  const m9b = S.migrate(S.validateState(v9b));
+  assertEq(m9b.events.length, 1, 'jawna lista nietknięta');
+  assertEq(m9b.events[0].amount, -1000);
+  // Łańcuch od v1 dokłada events po drodze (1→…→10).
+  const v1 = JSON.parse(JSON.stringify(st));
+  v1.version = 1;
+  delete v1.events;
+  delete v1.housing.housePlan.familyLoan;
+  delete v1.debt.familyOverrides;
+  delete v1.assumptions.postRetirementReturnReal;
+  delete v1.assumptions.freezeExpensesAtRetirement;
+  delete v1.assumptions.pensionMonthly;
+  delete v1.assumptions.pensionAge;
+  delete v1.taxes;
+  const m1 = S.migrate(S.validateState(v1));
+  assertEq(m1.version, S.SCHEMA_VERSION, 'łańcuch 1→…→10');
+  assertTrue(Array.isArray(m1.events) && m1.events.length === 0, 'events dołożone w łańcuchu');
+});
+
+test('F48c: walidacja — kopia v9 bez events przechodzi; zła lista/miesiąc/kwota odrzucone', () => {
+  // s.events || [] — kopia sprzed v10 (brak klucza) musi przejść (walidacja przed migracją).
+  const v9 = JSON.parse(JSON.stringify(baseState()));
+  v9.version = 9;
+  delete v9.events;
+  assertEq(S.validateState(v9).version, 9, 'v9 bez events przechodzi');
+  // Nie-tablica events → odrzucone.
+  const badList = baseState();
+  badList.events = { nope: true };
+  assertThrows(() => S.validateState(badList), 'events nie-tablica odrzucone');
+  // Zły miesiąc (jednocyfrowy) → odrzucone.
+  const badMonth = baseState();
+  badMonth.events = [{ id: 1, month: '2030-1', amount: -1000, label: 'x', createdAt: 'x' }];
+  assertThrows(() => S.validateState(badMonth), 'zły miesiąc odrzucony');
+  // Kwota nie-skończona / nie-liczbowa → odrzucone (NaN zatrułby prognozę).
+  const badAmt = baseState();
+  badAmt.events = [{ id: 1, month: '2030-01', amount: NaN, label: 'x', createdAt: 'x' }];
+  assertThrows(() => S.validateState(badAmt), 'NaN kwota odrzucona');
+  const badAmt2 = baseState();
+  badAmt2.events = [{ id: 1, month: '2030-01', amount: 'dużo', label: 'x', createdAt: 'x' }];
+  assertThrows(() => S.validateState(badAmt2), 'string kwota odrzucona');
+});
+
+test('F48d: mutacje — addEvent waliduje, nadaje monotoniczne id, zaokrągla, sortuje; removeEvent', () => {
+  const st = baseState();
+  // Bieżący miesiąc dozwolony (2026-07 przy NOW = 15 lipca 2026; upto = 2026-06).
+  const e1 = E.addEvent(st, { month: '2026-07', amount: 1000, label: 'teraz' }, NOW);
+  assertEq(e1.id, 1);
+  assertEq(e1.month, '2026-07');
+  // Przeszły miesiąc (≤ ostatni pełny), zły miesiąc, zero — odrzucone.
+  assertThrows(() => E.addEvent(st, { month: '2026-06', amount: 1000 }, NOW), 'przeszły miesiąc');
+  assertThrows(() => E.addEvent(st, { month: '2026-13', amount: 1000 }, NOW), 'zły miesiąc');
+  assertThrows(() => E.addEvent(st, { month: '2027-01', amount: 0 }, NOW), 'zero');
+  // Zaokrąglenie do grosza.
+  const e2 = E.addEvent(st, { month: '2027-02', amount: 100.005, label: 'grosz' }, NOW);
+  assertEq(e2.amount, 100.01);
+  // Monotoniczne id + sort po miesiącu.
+  const e3 = E.addEvent(st, { month: '2026-09', amount: 500, label: 'c' }, NOW);
+  assertEq(e3.id, 3);
+  assertEq(st.events.map(e => e.month).join(','), '2026-07,2026-09,2027-02', 'sort rosnąco');
+  // Usunięcie środkowego → następne id = max+1 (bez reuse skasowanego).
+  E.removeEvent(st, e2.id, NOW);
+  const e4 = E.addEvent(st, { month: '2030-01', amount: 700, label: 'd' }, NOW);
+  assertEq(e4.id, 4, 'id = max+1, nie reuse 2');
+  // Etykieta cięta do 80 znaków.
+  const e5 = E.addEvent(st, { month: '2031-01', amount: 100, label: 'x'.repeat(200) }, NOW);
+  assertEq(e5.label.length, 80);
+  // removeEvent z nieznanym id — no-op.
+  const n = st.events.length;
+  E.removeEvent(st, 9999, NOW);
+  assertEq(st.events.length, n, 'nieznany id no-op');
+  // Mutacje uruchamiają recomputeDerived.
+  assertTrue(!!st.derived && !!st.derived.projection, 'derived przeliczone');
+});
+
+test('F48e: prognoza — przychód w fazie inwestowania rośnie o kwotę × (1+rPort)^k; FIRE nie później', () => {
+  const noEv = baseState();
+  E.recomputeDerived(noEv, NOW);
+  const withEv = baseState();
+  E.addEvent(withEv, { month: '2028-01', amount: 100000, label: 'spadek' }, NOW);
+  const rPort = E.monthlyRate(0.05);
+  const p0 = noEv.derived.projection, p1 = withEv.derived.projection;
+  // Przed miesiącem zdarzenia serie identyczne.
+  assertClose(findRow(p1, '2027-12').portfolio, findRow(p0, '2027-12').portfolio, 1e-6, 'przed zdarzeniem bez zmian');
+  // Od miesiąca zdarzenia różnica = kwota skapitalizowana (1+rPort) na miesiąc.
+  assertClose(findRow(p1, '2028-01').portfolio - findRow(p0, '2028-01').portfolio, 100000 * (1 + rPort), 0.01);
+  assertClose(findRow(p1, '2028-02').portfolio - findRow(p0, '2028-02').portfolio, 100000 * (1 + rPort) ** 2, 0.01);
+  assertClose(findRow(p1, '2028-06').portfolio - findRow(p0, '2028-06').portfolio, 100000 * (1 + rPort) ** 6, 0.01);
+  // FIRE nie później niż bez zdarzenia (przychód przyspiesza).
+  assertTrue(E.ymToIdx(p1.fireYm) <= E.ymToIdx(p0.fireYm), 'FIRE nie później');
+  assertTrue(E.ymToIdx(p1.fireYm) < E.ymToIdx(p0.fireYm), 'duży przychód → FIRE wcześniej');
+});
+
+test('F48f: prognoza — wydatek w fazie oszczędzania drenuje gotówkę, potem portfel; wydatek opóźnia FIRE', () => {
+  // Faza oszczędzania = przed startem kredytu (kubełek gotówki). Zwroty 0 →
+  // ręczne wyliczenie trywialne.
+  const mk = () => baseState({
+    assumptions: { portfolioStart: 50000, realReturnAnnual: 0, cashReturnReal: 0, targetFireAge: 60 },
+    housing: { housePlan: housePlan({
+      moveInMonth: '2035-07',
+      houseSpend: { month: null, amount: null },
+      mortgage: { startMonth: '2035-07', principal: 600000, rateNominal: 0.07, termYears: 20, paymentOverrideMonthly: null },
+    }) },
+  });
+  const noEv = mk();
+  E.recomputeDerived(noEv, NOW);
+  const withEv = mk();
+  E.addEvent(withEv, { month: '2027-01', amount: -60000, label: 'wesele' }, NOW);
+  const p0 = noEv.derived.projection, p1 = withEv.derived.projection;
+  // 2026-12: przed zdarzeniem gotówka 24000 (6 × 4000), portfel 50000 w obu.
+  assertClose(findRow(p0, '2026-12').cash, 24000, 0.01);
+  assertClose(findRow(p1, '2026-12').cash, 24000, 0.01);
+  // Bez zdarzenia 2027-01: gotówka 28000, portfel 50000.
+  assertClose(findRow(p0, '2027-01').cash, 28000, 0.01);
+  assertClose(findRow(p0, '2027-01').portfolio, 50000, 0.01);
+  // Ze zdarzeniem: s netto = 4000 − 60000 = −56000 → gotówka 24000 pochłonięta
+  // do zera, reszta 32000 z portfela (50000 − 32000 = 18000).
+  assertClose(findRow(p1, '2027-01').cash, 0, 0.01, 'gotówka najpierw');
+  assertClose(findRow(p1, '2027-01').portfolio, 18000, 0.01, 'potem portfel');
+  // Duży wydatek w fazie inwestowania (bez domu, prognoza sięga FIRE) opóźnia FIRE.
+  const b0 = baseState();
+  E.recomputeDerived(b0, NOW);
+  const b1 = baseState();
+  E.addEvent(b1, { month: '2035-01', amount: -300000, label: 'duży wydatek' }, NOW);
+  assertTrue(E.ymToIdx(b1.derived.projection.fireYm) > E.ymToIdx(b0.derived.projection.fireYm), 'wydatek → FIRE później');
+});
+
+test('F48g: prognoza — przychód w fazie długu nadpłaca kredyt; nadwyżka wraca do portfela', () => {
+  const mk = () => baseState({
+    assumptions: { monthlyIncome: 20000, targetFireAge: 60, cashReturnReal: 0 },
+    housing: { housePlan: housePlan({
+      moveInMonth: '2026-07',
+      houseSpend: { month: '2026-07', amount: 0 },
+      mortgage: { startMonth: '2026-07', principal: 300000, rateNominal: 0.07, termYears: 20, paymentOverrideMonthly: null },
+    }) },
+  });
+  const noEv = mk();
+  E.recomputeDerived(noEv, NOW);
+  const withEv = mk();
+  E.addEvent(withEv, { month: '2027-01', amount: 50000, label: 'premia' }, NOW);
+  const p0 = noEv.derived.projection, p1 = withEv.derived.projection;
+  // Przychód nadpłaca kredyt → wolny od długu wcześniej.
+  assertTrue(E.ymToIdx(p1.debtFreeYm) < E.ymToIdx(p0.debtFreeYm), 'przychód przyspiesza spłatę');
+  // Ogromny przychód > saldo → dług spłacony w tym miesiącu, nadwyżka (spill) w portfelu.
+  const spillState = mk();
+  E.addEvent(spillState, { month: '2027-01', amount: 400000, label: 'ogromna premia' }, NOW);
+  const ps = spillState.derived.projection;
+  assertEq(ps.debtFreeYm, '2027-01', 'ogromny przychód spłaca dług w tym miesiącu');
+  assertClose(findRow(ps, '2027-01').debtReal, 0, 0.01, 'saldo długu zero');
+  assertTrue(findRow(ps, '2027-01').portfolio > findRow(p0, '2027-01').portfolio + 1, 'spill trafia do portfela');
+});
+
+test('F48h: brak podwójnego liczenia — zdarzenie ≤ upto lub sprzed kotwicy nie zmienia prognozy', () => {
+  const a = baseState();
+  E.recomputeDerived(a, NOW);
+  const b = baseState();
+  // Wstrzykujemy ręcznie (addEvent odrzuca przeszłe miesiące) — test dotyczy
+  // odcięcia startIdx w projectFire, nie walidacji mutacji.
+  b.events = [
+    { id: 1, month: '2026-06', amount: 999999, label: 'upto', createdAt: '2026-01-01T00:00:00.000Z' },
+    { id: 2, month: '2026-05', amount: -555555, label: 'preanchor', createdAt: '2026-01-01T00:00:00.000Z' },
+  ];
+  E.recomputeDerived(b, NOW);
+  assertEq(JSON.stringify(b.derived.projection.series), JSON.stringify(a.derived.projection.series), 'seria bez zmian');
+  assertEq(b.derived.projection.fireYm, a.derived.projection.fireYm, 'FIRE bez zmian');
+});
+
+test('F48i: werdykty i benchmark nietknięte — buildPlan/plannedSavingsFor/check-in identyczne', () => {
+  const mk = () => baseState({ anchorMonth: '2026-01' }); // kotwica cofnięta → check-in 2026-06 legalny
+  const noEv = mk();
+  const withEv = mk();
+  E.addEvent(withEv, { month: '2028-06', amount: -40000, label: 'wesele' }, NOW);
+  // Zdarzenie nie rusza buildPlan → benchmark oszczędności ten sam.
+  assertEq(JSON.stringify(E.buildPlan(withEv)), JSON.stringify(E.buildPlan(noEv)), 'buildPlan identyczny');
+  assertEq(E.plannedSavingsFor(E.buildPlan(withEv), '2028-06'), E.plannedSavingsFor(E.buildPlan(noEv), '2028-06'));
+  // Check-in za ostatni pełny miesiąc daje ten sam snapshot i werdykt.
+  const ea = E.applyCheckIn(noEv, { month: '2026-06', earned: 10000, spent: 6000 }, NOW);
+  const eb = E.applyCheckIn(withEv, { month: '2026-06', earned: 10000, spent: 6000 }, NOW);
+  assertEq(eb.plannedSavingsSnapshot, ea.plannedSavingsSnapshot, 'snapshot identyczny');
+  assertEq(eb.verdict, ea.verdict, 'werdykt identyczny');
+});
+
+test('F48j: czystość i determinizm — projectionWith nie rusza stanu; recomputeDerived dwa razy identyczne', () => {
+  const st = baseState();
+  E.addEvent(st, { month: '2030-01', amount: -50000, label: 'x' }, NOW);
+  const strip = s => { const { derived, ...rest } = s; return JSON.stringify(rest); };
+  const before = strip(st);
+  E.projectionWith(st, { extraMonthlySavings: 1000 }, NOW);
+  assertEq(strip(st), before, 'projectionWith nie mutuje stanu (w tym events)');
+  E.recomputeDerived(st, NOW);
+  const s1 = JSON.stringify(st.derived.projection.series);
+  E.recomputeDerived(st, NOW);
+  assertEq(JSON.stringify(st.derived.projection.series), s1, 'dwa przebiegi identyczne');
+});
+
+test('F48k: solvery — duży przyszły wydatek zwiększa wymaganą dopłatę', () => {
+  const mk = () => baseState({ assumptions: { targetFireAge: 42 } });
+  const noEv = mk();
+  const withEv = mk();
+  E.addEvent(withEv, { month: '2030-01', amount: -200000, label: 'dom' }, NOW);
+  const solNo = E.solveExtraSavingsForAge(noEv, 42 * 12, {}, NOW);
+  const solEv = E.solveExtraSavingsForAge(withEv, 42 * 12, {}, NOW);
+  assertTrue(solNo.feasible && solEv.feasible, 'oba wykonalne');
+  assertTrue(solEv.extraMonthly > solNo.extraMonthly, 'wydatek → większa wymagana dopłata');
+});
+
+test('F48l: round-trip eksport/import zachowuje zdarzenia dokładnie', () => {
+  const st = baseState();
+  E.addEvent(st, { month: '2028-06', amount: -40000, label: 'Wesele' }, NOW);
+  E.addEvent(st, { month: '2030-03', amount: 100000, label: 'Spadek' }, NOW);
+  const back = S.importJSON(S.exportJSON(st));
+  assertEq(JSON.stringify(back.events), JSON.stringify(st.events), 'events przeżywają round-trip');
+  assertEq(back.version, S.SCHEMA_VERSION);
+});

@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage, milestoneMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.31.0';
+export const APP_VERSION = '1.32.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1936,6 +1936,7 @@ function renderPlanHub() {
     ['💰', 'Finanse i start planu', 'dochód, wydatki, salda startowe', '#/plan/finanse'],
     ['🏠', 'Mieszkanie i kredyt', 'czynsz, dom, kredyt, dług rodzinny', '#/plan/dom'],
     ['🧾', 'Podatki', 'podatek Belki, IKE i IKZE', '#/plan/podatki'],
+    ['📅', 'Zdarzenia jednorazowe', 'planowane duże wydatki i przychody', '#/plan/zdarzenia'],
     ['⚙️', 'Aplikacja', 'motyw', '#/plan/aplikacja'],
     ['🩹', 'Korekty sald', 'wyrównanie gotówki, portfela i długu', '#/plan/korekty'],
     ['📖', 'Słowniczek', 'pojęcia używane w aplikacji', '#/slowniczek'],
@@ -1975,6 +1976,7 @@ function renderPlanSection(section) {
   else if (section === 'finanse') renderPlanFinanse();
   else if (section === 'dom') renderPlanDom();
   else if (section === 'podatki') renderPlanPodatki();
+  else if (section === 'zdarzenia') renderPlanZdarzenia();
   else if (section === 'aplikacja') renderPlanAplikacja();
   else if (section === 'korekty') renderPlanKorekty();
   else location.hash = '#/plan';
@@ -2321,6 +2323,92 @@ function renderPlanPodatki() {
     toast('Zapisano ustawienia podatków.');
     location.hash = '#/plan';
   });
+}
+
+// ── Zdarzenia jednorazowe (#/plan/zdarzenia) ──
+// Planowane duże wydatki/przychody wpięte w prognozę (projectFire), nie w
+// historię. Formularz: miesiąc (bieżący lub przyszły), segment Wydatek/Przychód
+// (znak nadawany przy zapisie), kwota (pl-PL, pole tekstowe jak nadpłaty — nie
+// type=number) i opcjonalny opis (≤80 znaków). Lista sortowana po miesiącu, z
+// usuwaniem; minione zdarzenia (miesiąc ≤ ostatni pełny — możliwe tylko, gdy
+// upłynął czas) wyszarzone z plakietką i wciąż usuwalne — nic już nie liczą.
+function renderPlanZdarzenia() {
+  const minMonth = E.todayYm();          // bieżący lub przyszły
+  const lastOk = E.lastCompleteMonth();  // granica „minione"
+  const proj = state.derived.projection;
+  const fireYm = proj && proj.reached ? proj.fireYm : null;
+  const events = [...state.events].sort((a, b) => (a.month < b.month ? -1 : 1));
+
+  const row = ev => {
+    const past = E.ymToIdx(ev.month) <= E.ymToIdx(lastOk);
+    const income = ev.amount > 0;
+    const afterFire = !past && fireYm && E.ymToIdx(ev.month) > E.ymToIdx(fireYm);
+    return `<div class="ev-row${past ? ' ev-past' : ''}">
+      <div class="ev-main">
+        <div class="ev-when">${esc(Fmt.formatMonthName(ev.month))}</div>
+        ${ev.label ? `<div class="muted small">${esc(ev.label)}</div>` : ''}
+        ${past ? '<div class="ev-badge muted small">minione — ujęte w check-inie</div>'
+          : afterFire ? '<div class="ev-badge muted small">po prognozowanym FIRE — prognoza kończy się na FIRE</div>' : ''}
+      </div>
+      <div class="ev-amount ${income ? 'good' : 'bad'}">${income ? '+' : '−'}${Fmt.formatPLN(Math.abs(ev.amount))}</div>
+      <button type="button" class="btn ghost ev-del" data-del-ev="${ev.id}" aria-label="Usuń zdarzenie">✕</button>
+    </div>`;
+  };
+
+  view().innerHTML = `${planBack}
+  <div id="plan-error"></div>
+  <div class="card"><h2>Zdarzenia jednorazowe 📅</h2>
+    <p class="muted small">Kwoty w dzisiejszych złotych. Zdarzenie wpływa na prognozę; gdy miesiąc nadejdzie, rzeczywistą kwotę zapisz w check-inie.</p>
+    <label class="field"><span class="lbl">Miesiąc</span>
+      <input type="month" id="ev-month" min="${minMonth}" value="${minMonth}">
+    </label>
+    <div class="seg" role="tablist">
+      <button type="button" data-ev-kind="expense" class="on">Wydatek</button>
+      <button type="button" data-ev-kind="income">Przychód</button>
+    </div>
+    <label class="field"><span class="lbl">Kwota <span class="muted">(zł)</span></span>
+      <input type="text" inputmode="decimal" id="ev-amount" placeholder="np. 40 000">
+    </label>
+    <label class="field"><span class="lbl">Opis <span class="muted">(opcjonalnie)</span></span>
+      <input type="text" id="ev-label" maxlength="80" placeholder="np. Wesele, spadek, premia">
+    </label>
+    <button id="ev-add" class="primary wide">Dodaj zdarzenie</button>
+  </div>
+  ${events.length
+    ? `<div class="card"><h3>Zaplanowane</h3>${events.map(row).join('')}</div>`
+    : '<p class="muted small center">Brak zaplanowanych zdarzeń.</p>'}
+  ${planBack}`;
+
+  let kind = 'expense';
+  $$('[data-ev-kind]').forEach(el => el.addEventListener('click', () => {
+    kind = el.dataset.evKind;
+    $$('[data-ev-kind]').forEach(b => b.classList.toggle('on', b === el));
+  }));
+
+  $('#ev-add').addEventListener('click', () => {
+    $('#plan-error').innerHTML = '';
+    const month = $('#ev-month').value;
+    if (!/^\d{4}-\d{2}$/.test(month)) return planFail('Podaj miesiąc zdarzenia.');
+    const amt = parseMoney('ev-amount', { min: 0 });
+    if (amt.error) return planFail(`Popraw kwotę: ${amt.error}`);
+    if (!(amt.value > 0)) return planFail('Kwota musi być większa od zera.');
+    const signed = kind === 'income' ? amt.value : -amt.value;
+    try {
+      E.addEvent(state, { month, amount: signed, label: $('#ev-label').value });
+    } catch (err) {
+      return planFail(err.message);
+    }
+    persist();
+    toast('Dodano zdarzenie.');
+    renderPlanZdarzenia();
+  });
+
+  $$('[data-del-ev]').forEach(el => el.addEventListener('click', () => {
+    E.removeEvent(state, Number(el.dataset.delEv));
+    persist();
+    toast('Usunięto zdarzenie.');
+    renderPlanZdarzenia();
+  }));
 }
 
 // ── Aplikacja ──
