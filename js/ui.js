@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.24.0';
+export const APP_VERSION = '1.25.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -304,10 +304,18 @@ function showChartTip(svg, tip, clientX, clientY) {
 
 export function startApp(loaded) {
   state = loaded;
+  // Stan mógł przejść walidację, a przeliczenie i tak paść — zamiast białego
+  // ekranu spadamy na ekran awaryjny (dane w localStorage nietknięte).
+  let bootError = null;
   if (state) {
-    E.recomputeDerived(state);
-    applyTheme();
+    try {
+      E.recomputeDerived(state);
+    } catch (err) {
+      bootError = String(err && err.message || err);
+      state = null;
+    }
   }
+  if (state) applyTheme();
   $('#header-month').textContent = Fmt.formatMonthName(E.todayYm());
   // Jeden delegowany listener na cały dokument — przeżywa podmiany innerHTML
   // dynamicznych poddrzew (wyniki suwaków), inaczej niż wiązanie per-render.
@@ -338,6 +346,9 @@ export function startApp(loaded) {
   });
   window.addEventListener('hashchange', route);
   route();
+  // Ten sam wzorzec co ścieżka corrupt w app.js: router wyrenderował spód,
+  // ekran awaryjny nadpisuje go na wierzchu.
+  if (bootError) renderCorrupt(bootError);
 }
 
 export function getState() { return state; }
@@ -2301,6 +2312,17 @@ function renderBackup() {
     const btn = $('#bk-update');
     btn.disabled = true;
     btn.textContent = '⏳ Pobieram najnowszą wersję…';
+    // Sonda online PRZED czyszczeniem cache — offline skasowalibyśmy jedyną
+    // kopię aplikacji. Unikalny query omija cache-first SW (dokładne
+    // dopasowanie URL), a no-store — HTTP cache; pewniejsze niż navigator.onLine.
+    try {
+      await fetch('./manifest.webmanifest?sonda=' + Date.now(), { cache: 'no-store' });
+    } catch {
+      btn.disabled = false;
+      btn.textContent = '🔄 Wymuś aktualizację i przeładuj';
+      toast('Jesteś offline — spróbuj z internetem.');
+      return;
+    }
     try {
       // Kasujemy TYLKO Cache Storage (pliki aplikacji) — localStorage z danymi zostaje.
       if (window.caches) {
@@ -2375,9 +2397,19 @@ function renderBackup() {
       <button id="bk-import-go" class="danger wide" style="margin-top:.5rem">Zastąp obecne dane tym plikiem</button>`;
       $('#bk-import-go').addEventListener('click', () => {
         confirmModal('Na pewno? Obecne dane zostaną bezpowrotnie zastąpione danymi z pliku.', () => {
-          state = importCandidate.state;
+          // Walidacja przepuszcza, a przeliczenie i tak może paść — wtedy
+          // zostajemy przy dotychczasowym stanie (persist się nie wykonał).
+          const prev = state;
+          try {
+            state = importCandidate.state;
+            E.recomputeDerived(state);
+          } catch (err) {
+            state = prev;
+            importCandidate = null;
+            toast('Import przerwany — nie udało się przeliczyć danych z pliku (' + err.message + '). Obecne dane pozostały bez zmian.', 8000);
+            return;
+          }
           importCandidate = null;
-          E.recomputeDerived(state);
           persist();
           applyTheme();
           toast('Dane zaimportowane.');
@@ -2426,8 +2458,10 @@ export function renderCorrupt(errorMsg) {
     reader.onload = () => {
       try {
         const p = importPreview(reader.result);
+        // Przypisanie dopiero PO udanym przeliczeniu — rzut nie może
+        // zostawić w module na wpół zepsutego stanu.
+        E.recomputeDerived(p.state);
         state = p.state;
-        E.recomputeDerived(state);
         persist();
         applyTheme();
         document.getElementById('tabbar').hidden = false;
