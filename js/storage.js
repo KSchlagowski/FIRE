@@ -180,6 +180,56 @@ export function exportJSON(state, now = new Date()) {
   }, null, 2);
 }
 
+// CSV historii check-inów — eksport jednokierunkowy do analizy (Excel pl-PL):
+// średniki (polski separator listy), przecinek dziesiętny bez grupowania
+// tysięcy (formatPLN z NBSP zepsułby liczby w Excelu), BOM UTF-8, CRLF.
+// To NIE jest kopia zapasowa — nie dotykamy ui.lastExportAt ani importu.
+// Kolumny pochodne czytane z state.derived (cache z recomputeDerived) po ym;
+// bez derived (albo dla miesięcy sprzed anchorMonth po reanchor) zostają
+// puste — kolumny wpisu nie zależą od nich. verdictLabel wstrzykiwany
+// (wzorzec makeStorage): storage jest liściem L0 i nie importuje coach.
+
+function csvNum(x) {
+  return x == null ? '' : Number(x).toFixed(2).replace('.', ',');
+}
+
+// Cytowanie RFC 4180 (defensywnie — np. wstrzyknięta etykieta werdyktu).
+function csvCell(s) {
+  const t = String(s == null ? '' : s);
+  return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+
+export function entriesCSV(state, { verdictLabel = v => v } = {}) {
+  const d = state.derived;
+  const byYm = rows => new Map((rows || []).map(r => [r.ym, r]));
+  const balBy = byYm(d && d.balances ? d.balances.rows : null);
+  const debtBy = byYm(d && d.debt ? d.debt.rows : null);
+  const famBy = byYm(d && d.family ? d.family.rows : null);
+  const header = ['Miesiąc', 'Zarobione', 'Wydane', 'Oszczędności', 'Plan oszczędności',
+    'Różnica vs plan', 'Werdykt', 'Werdykt (opis)', 'Nadpłata kredytu',
+    'Nadpłata długu rodzinnego', 'Korekta gotówki', 'Korekta portfela',
+    'Gotówka po miesiącu', 'Portfel po miesiącu', 'Faza',
+    'Kredyt — saldo (nominalnie)', 'Dług rodzinny — saldo (nominalnie)',
+    'Utworzono', 'Zaktualizowano'];
+  const lines = [header.map(csvCell).join(';')];
+  for (const e of [...state.entries].sort((x, y) => (x.month < y.month ? -1 : 1))) {
+    const net = e.earned - e.spent;
+    const bal = balBy.get(e.month), debt = debtBy.get(e.month), fam = famBy.get(e.month);
+    lines.push([
+      csvCell(e.month),
+      csvNum(e.earned), csvNum(e.spent), csvNum(net),
+      csvNum(e.plannedSavingsSnapshot), csvNum(net - e.plannedSavingsSnapshot),
+      csvCell(e.verdict), csvCell(verdictLabel(e.verdict)),
+      csvNum(e.overpayment || 0), csvNum(e.familyOverpayment || 0),
+      csvNum(e.cashOverride), csvNum(e.balanceOverride),
+      bal ? csvNum(bal.cash) : '', bal ? csvNum(bal.portfolio) : '', bal ? csvCell(bal.phase) : '',
+      debt ? csvNum(debt.balNominal) : '', fam ? csvNum(fam.balNominal) : '',
+      csvCell(e.createdAt), csvCell(e.updatedAt),
+    ].join(';'));
+  }
+  return '\uFEFF' + lines.join('\r\n');
+}
+
 export function importPreview(text) {
   const doc = JSON.parse(text);
   if (doc.app !== APP_TAG) throw new Error('To nie jest kopia zapasowa FIRE Companion');

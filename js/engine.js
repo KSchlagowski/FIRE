@@ -748,7 +748,7 @@ export function assumedDelta(entries) {
   return sum / last.length;
 }
 
-export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
+export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm, opts = {}) {
   const a = state.assumptions;
   const anchor = state.anchorMonth;
   const a0 = ymToIdx(anchor);
@@ -935,7 +935,9 @@ export function projectFire(state, plan, balances, debtRes, familyRes, uptoYm) {
     const effective = tracker ? tracker.netValueReal(ym) : portfolio;
     if (!fireYm && houseSettled && famSettled && effective >= pm.targetReal - EPS) {
       fireYm = ym;
-      break;
+      // stopAtFire:false (pasmo prognozy) biegnie dalej do końca planu —
+      // po FIRE miesiące dalej idą istniejącą ścieżką invest (dług spłacony).
+      if (opts.stopAtFire !== false) break;
     }
   }
 
@@ -960,6 +962,7 @@ export function retirementOpts(state, overrides = {}) {
       : (a.postRetirementReturnReal != null ? a.postRetirementReturnReal : 0.02),
     freezeExpenses: overrides.freezeExpenses != null ? overrides.freezeExpenses
       : (a.freezeExpensesAtRetirement != null ? a.freezeExpensesAtRetirement : true),
+    crash: overrides.crash || null, // { year, pct } — what-if Symulacji, nigdy nie zapisywane
   };
 }
 
@@ -969,6 +972,7 @@ export function retirementOpts(state, overrides = {}) {
 export function projectWithdrawal(state, opts = {}) {
   const a = state.assumptions;
   const ro = opts.ro || retirementOpts(state);
+  const crash = opts.crash != null ? opts.crash : ro.crash; // szok { year, pct } albo nic
   const proj = opts.projection || null;
   const reached = !!(proj && proj.reached);
   const hypothetical = opts.startYm == null && !reached;
@@ -1033,6 +1037,14 @@ export function projectWithdrawal(state, opts = {}) {
   let bal = startPortfolioReal;
   for (let n = 1; n <= years; n++) {
     const ym = addMonths(startYm, (n - 1) * 12);
+    // Krach (test sekwencji zwrotów): szok na POCZĄTKU roku crash.year, przed
+    // wypłatą. Skaluje też kubełki podatkowe (spadek wartości, basis bez zmian
+    // — gainShareOf i tak zaciska do [0,1], wartość < basis ⇒ zysk 0).
+    const crashed = !!(crash && n === crash.year);
+    if (crashed) {
+      bal *= (1 - crash.pct);
+      bT *= (1 - crash.pct); bIke *= (1 - crash.pct); bIkze *= (1 - crash.pct);
+    }
     const startReal = bal;
     const withdrawalReal = withdrawalRealYearly * Math.pow(wG, n - 1);
     let endReal, taxReal = 0, grossReal = withdrawalReal;
@@ -1086,7 +1098,7 @@ export function projectWithdrawal(state, opts = {}) {
     const endNominal = endReal * pfN;
     const growthNominal = endNominal - (startNominal - withdrawalNominal - (active.any ? taxReal * pf1 : 0));
     rows.push({
-      year: n, ym, age: birth ? ageAt(birth, ym).years : null,
+      year: n, ym, age: birth ? ageAt(birth, ym).years : null, crashed,
       startReal, startNominal,
       withdrawalReal, withdrawalNominal,
       growthReal, growthNominal, endReal, endNominal,
@@ -1099,6 +1111,7 @@ export function projectWithdrawal(state, opts = {}) {
     startYm, startAge, hypothetical, swr, realRate, inflation, nominalRate,
     withdrawalRealYearly, withdrawalGrowthReal: wG - 1, priceFactorAtStart,
     rows, depletedYear, ro, taxesApplied: active,
+    crashApplied: rows.some(r => r.crashed),
     ...(active.any ? { taxTotalReal } : {}),
   };
 }
@@ -1259,6 +1272,45 @@ export function projectDieWithZero(state, opts = {}) {
   };
 }
 
+// Deterministyczny test krachu (ryzyko sekwencji zwrotów). Bez losowania:
+// dla każdego roku szoku k liczymy pełną fazę wypłat (projectWithdrawal)
+// z krachem {year: k, pct} na starcie k-tego roku wypłat; przebieg bazowy
+// (bez krachu) dla kontrastu. Horyzont = deathAge − wiek startowy; lata
+// szoku poza horyzontem są pomijane. Czysta analiza — nic nie zapisujemy.
+// Passthrough startYm/startPortfolioReal/withdrawalRealYearly istnieje dla
+// determinizmu testów (todayYm() nie jest wstrzykiwalne) — UI ich nie podaje.
+export function stressTestRetirement(state, opts = {}) {
+  const birth = state.profile.birthDate;
+  if (!birth) return null;
+  const ro = opts.ro || retirementOpts(state);
+  const shockPct = opts.shockPct != null ? opts.shockPct : 0.30;
+  const deathAge = opts.deathAge != null ? opts.deathAge : 90;
+  const proj = opts.projection || null;
+  const reached = !!(proj && proj.reached);
+  const startYm = opts.startYm != null ? opts.startYm : (reached ? proj.fireYm : todayYm());
+  const startAge = ageAt(birth, startYm).years;
+  const horizonYears = Math.max(1, deathAge - startAge);
+  const shockYears = (opts.shockYears || [1, 10]).filter(y => y >= 1 && y <= horizonYears);
+  const common = {
+    projection: proj, ro, startYm, years: horizonYears,
+    startPortfolioReal: opts.startPortfolioReal,
+    withdrawalRealYearly: opts.withdrawalRealYearly,
+  };
+  const summarize = w => ({
+    depletedYear: w.depletedYear,
+    depletedAge: w.depletedYear != null ? w.rows[w.depletedYear - 1].age : null,
+    survives: w.depletedYear == null,
+    endReal: w.rows.length ? w.rows[w.rows.length - 1].endReal : 0,
+  });
+  const base = summarize(projectWithdrawal(state, common));
+  const scenarios = shockYears.map(k => ({
+    shockYear: k,
+    ...summarize(projectWithdrawal(state, { ...common, crash: { year: k, pct: shockPct } })),
+  }));
+  return { startYm, startAge, horizonYears, shockPct, deathAge,
+           hypothetical: !reached, base, scenarios };
+}
+
 // Projekcja roczna (model aplikacji): serie miesięczne pogrupowane w bloki
 // 12 miesięcy roku planu (od anchorMonth). Wzrost jest REZYDUALNY:
 // saldo końc. = saldo pocz. + wpłaty + wzrost — tożsamość zachodzi dokładnie
@@ -1330,7 +1382,7 @@ export function excelProjection(state, opts = {}) {
 
 // Wrażliwość: pełny potok na płytkiej kopii stanu (wszystkie funkcje potoku
 // są czystymi czytelnikami — stan wejściowy pozostaje nietknięty, test F15a).
-export function projectionWith(state, { assumptions = {}, taxes = null, extraMonthlySavings = 0, extraSavings = null } = {}, now = new Date()) {
+export function projectionWith(state, { assumptions = {}, taxes = null, extraMonthlySavings = 0, extraSavings = null, stopAtFire = true } = {}, now = new Date()) {
   const st = { ...state, assumptions: { ...state.assumptions, ...assumptions } };
   if (taxes) {
     // Płytkie kopie + zagnieżdżony merge podsekcji ikeIkze — stan wejściowy
@@ -1359,7 +1411,39 @@ export function projectionWith(state, { assumptions = {}, taxes = null, extraMon
   const debt = replayDebt(st, upto);
   const family = replayFamilyLoan(st, upto);
   const balances = replayBalances(st, upto, debt, family);
-  return projectFire(st, plan, balances, debt, family, upto);
+  return projectFire(st, plan, balances, debt, family, upto, { stopAtFire });
+}
+
+export const BAND_SPREAD = 0.015; // ±1,5 pkt proc. na realReturnAnnual (D9)
+
+// Pasmo prognozy: deterministyczna koperta optymistyczna/pesymistyczna — dwa
+// przebiegi projectFire przy realReturnAnnual ± spread, bez losowania (D9,
+// „pasmo", nigdy „percentyl"). Jedna wspólna baza: plan + repliki liczone raz
+// na PRAWDZIWYCH założeniach — replayBalances rośnie w miesiącach historii wg
+// realReturnAnnual, więc naiwny rerun projectionWith fałszywie rozjechałby
+// pasmo na przeszłości użytkownika. stopAtFire:false, bo optymistyczna ścieżka
+// osiąga FIRE wcześniej i bez tego urywałaby się w połowie wykresu. Historia:
+// lo == hi == fakt (z konstrukcji). Czysta — nic nie zapisujemy.
+export function projectionBand(state, { spread = BAND_SPREAD } = {}, now = new Date()) {
+  const upto = lastCompleteMonth(now);
+  const plan = buildPlan(state);
+  const debt = replayDebt(state, upto);
+  const family = replayFamilyLoan(state, upto);
+  const balances = replayBalances(state, upto, debt, family);
+  const run = r => projectFire(
+    { ...state, assumptions: { ...state.assumptions, realReturnAnnual: r } },
+    plan, balances, debt, family, upto, { stopAtFire: false }).series;
+  const r0 = state.assumptions.realReturnAnnual;
+  const up = run(r0 + spread), down = run(r0 - spread);
+  // min/max per wiersz — defensywnie na skrzyżowania (ujemny portfel w fazie
+  // długu rośnie „na minus" szybciej przy wyższej stopie).
+  const rows = [];
+  for (let i = 0; i < Math.min(up.length, down.length); i++) rows.push({
+    ym: up[i].ym,
+    lo: Math.min(down[i].portfolio, up[i].portfolio),
+    hi: Math.max(down[i].portfolio, up[i].portfolio),
+  });
+  return { spread, rows };
 }
 
 // Wartość przyszła równych miesięcznych wpłat (annuity-due — kolejność jak w

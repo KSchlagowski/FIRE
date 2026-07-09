@@ -143,4 +143,15 @@ export const FIX = {
     refundPit32: 3617.28,        // 0.32 × 11304
     eps: 0.01,
   },
+  // Pasmo prognozy (D9): zwrot ±1,5 pkt proc. — stała przypięta przeciw
+  // przypadkowej edycji (legenda/objaśnienie w ui.js niosą tę samą liczbę
+  // w kopii i muszą iść razem z nią). Plan: docs/plan-projection-band.md
+  // (tam „F32" — zajęte przez audyt parsowania → F38).
+  F38: { spread: 0.015 },
+  // Test krachu: szok −30% na starcie roku k, horyzont do deathAge. Baza 1,8M /
+  // W₁ 72k przy r=5%: równowaga W₁(1+r)/r = 1 512 000 < 1,8M → baza przeżywa;
+  // po krachu saldo spada pod równowagę → wyczerpanie (rok liczony w teście
+  // niezależną rekurencją). Plan: docs/plan-crash-stress-test.md (tam „F31" —
+  // zajęte przez IKE/IKZE → F39).
+  F39: { shockPct: 0.30, deathAge: 90, years: [1, 10], start: 1800000, wYear: 72000, startYm: '2026-07' },
 };

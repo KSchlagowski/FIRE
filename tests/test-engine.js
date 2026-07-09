@@ -5,7 +5,7 @@ import * as E from '../js/engine.js';
 import * as F from '../js/format.js';
 import * as S from '../js/storage.js';
 import { coachMessage, checkinCelebration, decisionMessage } from '../js/coach.js';
-import { chartSVG, stackedBarSVG } from '../js/charts.js';
+import { chartSVG, stackedBarSVG, tipHit } from '../js/charts.js';
 import { FIX } from './fixtures.js';
 
 // ── Mini-harness ────────────────────────────────────────────────────────
@@ -1787,6 +1787,8 @@ test('F27a: retirementOpts — domyślna, override, fallback, czystość', () =>
   const st = E.createState();
   assertEq(E.retirementOpts(st).postReturnReal, 0.02, 'nowy stan → domyślna marża EDO 2%');
   assertEq(E.retirementOpts(st, { postReturnReal: 0.045 }).postReturnReal, 0.045, 'override wygrywa');
+  assertEq(E.retirementOpts(st).crash, null, 'crash domyślnie null (F39)');
+  assertEq(E.retirementOpts(st, { crash: { year: 1, pct: 0.3 } }).crash.year, 1, 'override crash wygrywa');
   // Brak założenia w stanie → fallback 0.02.
   const noField = E.createState();
   delete noField.assumptions.postRetirementReturnReal;
@@ -2603,4 +2605,429 @@ test('F31k: spill z kredytów omija limity (D6) — ląduje na koncie zwykłym m
     if (!fOn.has(r.ym) || r.ym.endsWith('-04')) continue;
     assertClose(fOn.get(r.ym) - r.flowPortfolio, 0, f.eps, `przepływy identyczne (${r.ym})`);
   }
+});
+
+// ── F37: tap-to-inspect — payload data-tip + hit-test tipHit ──────────────
+// Plan: docs/plan-chart-tooltips-tap-to-inspect.md (tam „F30" — zajęte przez
+// Belkę → F37). Etykiety serii (label) są opt-in: bez nich wyjście builderów
+// pozostaje bajt-w-bajt jak w F29; payload niesie surowe liczby (grosze),
+// formatowanie robi ui.js. Wskaźnik/odczyt to DOM (ui.js) — QA ręczne.
+
+const LINE_DEFS_L = [
+  { get: r => r.a, cls: 'line-port', label: 'portfel' },
+  { get: r => r.b, cls: 'line-target', label: 'cel' },
+];
+const BAR_SEGS_L = [
+  { get: r => r.principal, cls: 'bar-principal', label: 'kapitał' },
+  { get: r => r.interest, cls: 'bar-interest', label: 'odsetki' },
+];
+
+// Wyciąga i odkodowuje payload data-tip (odwrotność esc; &amp; na końcu).
+function tipOf(svg) {
+  const m = svg.match(/ data-tip="([^"]*)"/);
+  if (!m) return null;
+  return JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'));
+}
+
+test('F37a: bez etykiet zero zmian — data-tip tylko przy label, po zdjęciu atrybutu wyjścia identyczne', () => {
+  const rows = lineRows(36);
+  const plain = chartSVG(rows, LINE_DEFS);
+  assertTrue(!plain.includes('data-tip'), 'bez label brak atrybutu (linie)');
+  const labeled = chartSVG(rows, LINE_DEFS_L);
+  assertTrue(labeled.includes('data-tip'), 'z label atrybut jest');
+  assertEq(labeled.replace(/ data-tip="[^"]*"/, ''), plain, 'poza atrybutem wyjście bajt-w-bajt');
+  const bplain = stackedBarSVG(barRows(20), BAR_SEGS);
+  assertTrue(!bplain.includes('data-tip'), 'bez label brak atrybutu (słupki)');
+  assertEq(stackedBarSVG(barRows(20), BAR_SEGS_L).replace(/ data-tip="[^"]*"/, ''), bplain, 'słupki: poza atrybutem identyczne');
+});
+
+test('F37b: payload liniowy — geometria pola rysunku, etykiety YYYY-MM, wartości do grosza w kolejności defs', () => {
+  const tip = tipOf(chartSVG(lineRows(36), LINE_DEFS_L));
+  assertEq(tip.kind, 'line', 'kind');
+  assertEq(tip.x0, 48, 'x0 = padL');
+  assertEq(tip.x1, 432, 'x1 = W − padR');
+  assertEq(tip.y0, 10, 'y0 = padT');
+  assertEq(tip.y1, 150, 'y1 = H − padB');
+  assertEq(tip.labels.length, 36, '36 punktów bez decymacji');
+  assertEq(tip.labels[0], '2026-01', 'pierwsza etykieta = ym pierwszego rzędu');
+  assertEq(tip.series.map(s => s.label).join(','), 'portfel,cel', 'kolejność serii = kolejność defs');
+  assertEq(tip.series[0].v[7], 70000, 'v[i] = get(r) (a = i·10 000)');
+  assertEq(tip.series[1].v[7], 35000, 'v[i] = get(r) (b = i·5 000)');
+  const frac = tipOf(chartSVG([{ ym: '2026-01', a: 1234.5678, b: 0 }], LINE_DEFS_L));
+  assertEq(frac.series[0].v[0], 1234.57, 'zaokrąglenie do grosza');
+});
+
+test('F37c: decymacja — payload ma dokładnie te punkty, które narysowano', () => {
+  const svg = chartSVG(lineRows(500), [{ get: r => r.a, cls: 'line-port', label: 'a' }], { maxPoints: 240 });
+  const pts = svg.match(/points="([^"]+)"/)[1].split(' ');
+  const tip = tipOf(svg);
+  assertEq(tip.labels.length, pts.length, 'labels i polyline z tych samych pts');
+  assertEq(tip.series[0].v.length, pts.length, 'v wyrównane z labels');
+  assertEq(tip.labels[tip.labels.length - 1], lineRows(500)[499].ym, 'ostatni rząd zachowany');
+});
+
+test('F37d: payload słupkowy — lata jako etykiety, ujemne segmenty zaciśnięte do 0 jak na rysunku', () => {
+  const rows = barRows(20);
+  rows[3].interest = -700; // rysunek pomija ujemne — payload musi też
+  const tip = tipOf(stackedBarSVG(rows, BAR_SEGS_L));
+  assertEq(tip.kind, 'bars', 'kind');
+  assertEq(tip.labels.length, 20, '20 słupków');
+  assertEq(tip.labels[0], 2026, 'etykiety = lata (liczby)');
+  assertEq(tip.series[1].v[3], 0, 'ujemny segment → 0 (jak narysowano)');
+  assertEq(tip.series[0].v[3], 1300, 'sąsiedni segment bez zmian');
+});
+
+test('F37e: tipHit linie — najbliższy punkt siatki, zaciski na krańcach, n=1', () => {
+  const tip = { kind: 'line', x0: 48, x1: 432, y0: 10, y1: 150, labels: ['a', 'b', 'c', 'd', 'e'], series: [] };
+  const step = (432 - 48) / 4;
+  assertEq(tipHit(tip, 48).i, 0, 'vx = x0 → i 0');
+  assertEq(tipHit(tip, 0).i, 0, 'vx < x0 → zacisk 0');
+  assertEq(tipHit(tip, 9999).i, 4, 'vx > x1 → zacisk n−1');
+  assertEq(tipHit(tip, 48 + step * 1.4).i, 1, '1,4 kroku → punkt 1');
+  assertEq(tipHit(tip, 48 + step * 1.6).i, 2, '1,6 kroku → punkt 2');
+  assertClose(tipHit(tip, 48 + step * 1.6).cx, 48 + 2 * step, 1e-9, 'cx = x(i) buildera');
+  const one = tipHit({ ...tip, labels: ['x'] }, 240);
+  assertEq(one.i, 0, 'n=1 → i 0');
+  assertEq(one.cx, 48, 'n=1 → cx = x0 (jak pojedynczy punkt chartSVG)');
+});
+
+test('F37f: tipHit słupki — slot z floor, środek slotu, zaciski; pusty/zepsuty payload → null', () => {
+  const tip = { kind: 'bars', x0: 48, x1: 432, y0: 10, y1: 150, labels: [2026, 2027, 2028, 2029], series: [] };
+  const slot = (432 - 48) / 4;
+  assertEq(tipHit(tip, 48 + slot * 0.99).i, 0, 'tuż przed granicą slotu → 0');
+  assertEq(tipHit(tip, 48 + slot * 1.01).i, 1, 'tuż za granicą → 1');
+  assertEq(tipHit(tip, -50).i, 0, 'zacisk lewy');
+  assertEq(tipHit(tip, 5000).i, 3, 'zacisk prawy');
+  assertClose(tipHit(tip, 48 + slot * 2.5).cx, 48 + slot * 2.5, 1e-9, 'cx = środek slotu');
+  assertEq(tipHit({ ...tip, labels: [] }, 100), null, 'puste labels → null');
+  assertEq(tipHit(null, 100), null, 'null → null');
+  assertEq(tipHit({}, 100), null, 'obiekt bez labels → null');
+});
+
+test('F37g: czystość i higiena — determinizm, zero NaN, esc płaszczyzny atrybutu odwracalne', () => {
+  const rows = lineRows(36);
+  assertEq(chartSVG(rows, LINE_DEFS_L), chartSVG(rows, LINE_DEFS_L), 'dwa wywołania identyczne');
+  const svg = chartSVG(rows, LINE_DEFS_L);
+  assertTrue(!/NaN/.test(svg), 'zero NaN');
+  assertTrue(svg.includes('&quot;'), 'cudzysłowy JSON-a zescape\'owane w atrybucie');
+  const withQuote = chartSVG(rows, [{ get: r => r.a, cls: 'line-port', label: 'z "cudzysłowem" & <znakami>' }]);
+  assertEq(tipOf(withQuote).series[0].label, 'z "cudzysłowem" & <znakami>', 'round-trip esc → JSON.parse');
+});
+
+// ── F38: pasmo prognozy — projectionBand + stopAtFire (D9) ────────────────
+// Deterministyczna koperta ±spread na realReturnAnnual. Wspólna baza replayów
+// (historia sald zależy od realReturnAnnual — naiwny rerun projectionWith
+// fałszywie rozjechałby pasmo na przeszłości; F38b to egzekwuje). Wielokąt
+// w charts.js (def {band:true}) — geometria pod F38e.
+
+test('F38: BAND_SPREAD przypięty do fixture (kopia w legendzie ui.js idzie razem z nim)', () => {
+  assertEq(E.BAND_SPREAD, FIX.F38.spread, 'stała silnika = fixture');
+});
+
+test('F38a: stopAtFire:false — ta sama data FIRE, seria biegnie do końca planu, prefiks identyczny', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  E.recomputeDerived(st, NOW);
+  const base = E.projectionWith(st, {}, NOW);
+  const full = E.projectionWith(st, { stopAtFire: false }, NOW);
+  assertEq(full.reached, true, 'reached');
+  assertEq(full.fireYm, base.fireYm, 'fireYm identyczny');
+  assertEq(full.fireAge.totalMonths, base.fireAge.totalMonths, 'fireAge identyczny');
+  assertTrue(full.series.length > base.series.length, 'seria pełna dłuższa niż ucięta na FIRE');
+  assertEq(full.series[full.series.length - 1].ym, E.addMonths(st.anchorMonth, E.HORIZON_MONTHS - 1),
+    'ostatni wiersz = koniec 720-miesięcznego planu');
+  for (const i of [0, Math.floor(base.series.length / 2), base.series.length - 1]) {
+    assertEq(JSON.stringify(full.series[i]), JSON.stringify(base.series[i]), `prefiks identyczny (i=${i})`);
+  }
+  const explicit = E.projectionWith(st, { stopAtFire: true }, NOW);
+  assertEq(JSON.stringify(explicit), JSON.stringify(base), 'jawne stopAtFire:true ≡ domyślne');
+});
+
+test('F38b: pasmo wyrównane z serią; historia lo === hi === fakt (wspólna baza replayów)', () => {
+  // Wpis tylko w 2026-01 → miesiące 02–06 to historia rosnąca wg realReturnAnnual;
+  // naiwny rerun wariantami rozjechałby tu lo/hi — strikte równości to łapią.
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  st.entries.push(entry('2026-01', 10000, 6000, { plannedSavingsSnapshot: 4000 }));
+  E.recomputeDerived(st, NOW);
+  const full = E.projectionWith(st, { stopAtFire: false }, NOW);
+  const band = E.projectionBand(st, {}, NOW);
+  assertEq(band.spread, E.BAND_SPREAD, 'domyślny spread');
+  assertEq(band.rows.length, full.series.length, 'pasmo pokrywa pełną serię');
+  for (const i of [0, 5, Math.floor(full.series.length / 2), full.series.length - 1]) {
+    assertEq(band.rows[i].ym, full.series[i].ym, `ym wyrównany (i=${i})`);
+  }
+  let histSeen = 0;
+  band.rows.forEach((b, i) => {
+    assertTrue(b.hi >= b.lo, `hi ≥ lo (${b.ym})`);
+    if (full.series[i].projected === false) {
+      histSeen++;
+      assertEq(b.lo, full.series[i].portfolio, `historia lo === fakt (${b.ym})`);
+      assertEq(b.hi, full.series[i].portfolio, `historia hi === fakt (${b.ym})`);
+    }
+  });
+  assertTrue(histSeen >= 6, `test ma realną historię (${histSeen} wierszy)`);
+});
+
+test('F38c: koperta — na prognozie lo ≤ portfel(stopa użytkownika) ≤ hi', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  E.recomputeDerived(st, NOW);
+  const full = E.projectionWith(st, { stopAtFire: false }, NOW);
+  const band = E.projectionBand(st, {}, NOW);
+  band.rows.forEach((b, i) => {
+    if (!full.series[i].projected) return;
+    assertTrue(b.lo <= full.series[i].portfolio + 1e-9, `lo ≤ portfel (${b.ym})`);
+    assertTrue(b.hi >= full.series[i].portfolio - 1e-9, `hi ≥ portfel (${b.ym})`);
+  });
+});
+
+test('F38d: krawędzie i czystość — spread 0 zwija pasmo; stan nietknięty; determinizm', () => {
+  const st = baseState({ anchorMonth: '2026-01', assumptions: { portfolioStart: 1000000 } });
+  st.entries.push(entry('2026-01', 10000, 6000, { plannedSavingsSnapshot: 4000 }));
+  E.recomputeDerived(st, NOW);
+  const zero = E.projectionBand(st, { spread: 0 }, NOW);
+  zero.rows.forEach(b => assertEq(b.hi, b.lo, `spread 0 → hi === lo (${b.ym})`));
+  const before = JSON.stringify(st);
+  const b1 = E.projectionBand(st, {}, NOW);
+  assertEq(JSON.stringify(st), before, 'czystość (wzorzec F15a)');
+  assertEq(JSON.stringify(E.projectionBand(st, {}, NOW)), JSON.stringify(b1), 'dwa wywołania identyczne');
+});
+
+test('F38e: chartSVG def {band:true} — wielokąt za liniami, skala z hi, bez label brak w data-tip', () => {
+  const base = E.ymToIdx('2026-01');
+  const rows = [];
+  for (let i = 0; i < 12; i++) rows.push({
+    ym: E.idxToYm(base + i), a: 1000 + i * 100,
+    lo: 900 + i * 80, hi: 1100 + i * 130,
+  });
+  const defs = [
+    { band: true, lo: r => r.lo, hi: r => r.hi, cls: 'band-return' },
+    { get: r => r.a, cls: 'line-port', label: 'portfel' },
+  ];
+  const svg = chartSVG(rows, defs);
+  const polyIdx = svg.indexOf('<polygon class="band-return"');
+  assertTrue(polyIdx >= 0, 'wielokąt pasma obecny');
+  assertTrue(polyIdx < svg.indexOf('<polyline'), 'pasmo rysowane przed linią (tło)');
+  const ptsAttr = svg.match(/<polygon[^>]*points="([^"]+)"/)[1].split(' ');
+  assertEq(ptsAttr.length, 24, '12 punktów hi (w przód) + 12 lo (wstecz)');
+  const maxHi = 1100 + 11 * 130; // 2530 > max a — skala musi objąć hi
+  assertTrue(svg.includes(`>${fmtShort(maxHi)}</text>`), 'etykieta Y = max z hi');
+  const tip = tipOf(svg);
+  assertEq(tip.series.length, 1, 'pasmo (bez label) nieobecne w odczycie');
+  assertEq(tip.series[0].label, 'portfel', 'seria liniowa w odczycie');
+  // Wiersze bez skończonych lo/hi wypadają z wielokąta, a < 2 punktów → brak.
+  const sparse = rows.map((r, i) => i < 11 ? { ...r, lo: undefined, hi: undefined } : r);
+  assertTrue(!chartSVG(sparse, defs).includes('<polygon'), '≤1 użyteczny punkt → bez wielokąta');
+});
+
+// ── F39: test krachu (ryzyko sekwencji zwrotów) ───────────────────────────
+// Deterministyczny szok {year, pct} w projectWithdrawal + stressTestRetirement
+// (bez losowania, D2: crash płynie przez retirementOpts/opts, nic nie
+// zapisujemy). Plan: docs/plan-crash-stress-test.md (tam „F31" — zajęte
+// przez IKE/IKZE → F39). Wartości oczekiwane z niezależnej rekurencji w teście:
+// P ← (P − W₁)·(1+r), szok mnoży P ×(1−pct) na starcie roku k, przed wypłatą.
+
+test('F39a: projectWithdrawal — mechanika krachu (tożsamość roku 1, prefiks do szoku, brak = bez zmian)', () => {
+  const f = FIX.F39;
+  const st = baseState();
+  const common = { startYm: f.startYm, startPortfolioReal: f.start, withdrawalRealYearly: f.wYear, years: 10 };
+  const base = E.projectWithdrawal(st, common);
+  // Krach w roku 1 ≡ przebieg bez krachu od kapitału ×0,7 (poza flagą crashed).
+  const c1 = E.projectWithdrawal(st, { ...common, crash: { year: 1, pct: f.shockPct } });
+  const c1ref = E.projectWithdrawal(st, { ...common, startPortfolioReal: f.start * (1 - f.shockPct) });
+  assertEq(c1.rows.length, c1ref.rows.length, 'ta sama długość przebiegu');
+  c1.rows.forEach((r, i) => {
+    const { crashed: _a, ...rest } = r;
+    const { crashed: _b, ...ref } = c1ref.rows[i];
+    assertEq(JSON.stringify(rest), JSON.stringify(ref), `rok ${i + 1} identyczny poza flagą`);
+  });
+  assertEq(c1.rows[0].crashed, true, 'rok 1 oflagowany');
+  assertEq(c1.crashApplied, true, 'crashApplied');
+  // Krach w roku 3: prefiks 1–2 bajt-w-bajt z bazą, potem start = end₂ × 0,7.
+  const c3 = E.projectWithdrawal(st, { ...common, crash: { year: 3, pct: f.shockPct } });
+  assertEq(JSON.stringify(c3.rows.slice(0, 2)), JSON.stringify(base.rows.slice(0, 2)), 'lata przed szokiem nietknięte');
+  assertEq(c3.rows[2].crashed, true, 'rok szoku oflagowany');
+  assertClose(c3.rows[2].startReal, base.rows[1].endReal * (1 - f.shockPct), 1e-6, 'start roku 3 = end roku 2 × 0,7');
+  // Bez krachu: każda flaga false, crashApplied false (ścieżka jak dotąd —
+  // liczby F13/F27 pilnują wartości).
+  assertTrue(base.rows.every(r => r.crashed === false), 'bez krachu flagi false');
+  assertEq(base.crashApplied, false, 'crashApplied false');
+});
+
+test('F39b: stressTestRetirement — szok 0 ≡ baza, determinizm, czystość', () => {
+  const f = FIX.F39;
+  const st = baseState();
+  const opts = { startYm: f.startYm, startPortfolioReal: f.start, withdrawalRealYearly: f.wYear, deathAge: f.deathAge };
+  const zero = E.stressTestRetirement(st, { ...opts, shockPct: 0 });
+  zero.scenarios.forEach(s => {
+    assertEq(s.survives, zero.base.survives, `szok 0 (rok ${s.shockYear}): survives = baza`);
+    assertEq(s.depletedYear, zero.base.depletedYear, 'depletedYear = baza');
+    assertClose(s.endReal, zero.base.endReal, 1e-9, 'endReal = baza');
+  });
+  const before = JSON.stringify(st);
+  const r1 = E.stressTestRetirement(st, { ...opts, shockPct: f.shockPct });
+  assertEq(JSON.stringify(st), before, 'czystość (wzorzec F15a)');
+  assertEq(JSON.stringify(E.stressTestRetirement(st, { ...opts, shockPct: f.shockPct })), JSON.stringify(r1), 'dwa wywołania identyczne');
+});
+
+test('F39c: ryzyko sekwencji — baza przeżywa, krach w roku 1 boli bardziej niż w roku 10', () => {
+  const f = FIX.F39;
+  const st = baseState();
+  const r = st.assumptions.postRetirementReturnReal; // 5% — mrożenie włączone, wypłaty płaskie realnie
+  const res = E.stressTestRetirement(st, {
+    startYm: f.startYm, startPortfolioReal: f.start, withdrawalRealYearly: f.wYear,
+    deathAge: f.deathAge, shockPct: f.shockPct, shockYears: f.years,
+  });
+  assertEq(res.horizonYears, f.deathAge - res.startAge, 'horyzont = deathAge − wiek startowy');
+  assertEq(res.base.survives, true, 'baza przeżywa (1,8M > równowagi 1 512 000)');
+  // Niezależna rekurencja: rok n → P ← (P − W₁)·(1+r); szok ×(1−pct) na starcie roku k.
+  const depletion = shockYear => {
+    let P = f.start;
+    for (let n = 1; n <= res.horizonYears; n++) {
+      if (n === shockYear) P *= (1 - f.shockPct);
+      P = (P - f.wYear) * (1 + r);
+      if (P <= 0.005) return n;
+    }
+    return null;
+  };
+  const s1 = res.scenarios.find(s => s.shockYear === 1);
+  const s10 = res.scenarios.find(s => s.shockYear === 10);
+  assertEq(s1.survives, false, 'krach w roku 1 → wyczerpanie');
+  assertEq(s1.depletedYear, depletion(1), 'rok wyczerpania = rekurencja niezależna (szok w 1.)');
+  assertEq(s10.depletedYear, depletion(10), 'rok wyczerpania = rekurencja niezależna (szok w 10.)');
+  assertTrue(s10.depletedYear == null || s10.depletedYear > s1.depletedYear, 'ten sam krach 10 lat później → później albo wcale');
+  assertEq(s1.depletedAge, res.startAge + s1.depletedYear - 1, 'wiek wyczerpania (szok 1)');
+  assertEq(s10.depletedAge, res.startAge + s10.depletedYear - 1, 'wiek wyczerpania (szok 10)');
+});
+
+test('F39d: horyzont i strażnicy — filtr lat szoku, brak profilu, clamp, hypothetical', () => {
+  const f = FIX.F39;
+  const st = baseState();
+  const opts = { startYm: f.startYm, startPortfolioReal: f.start, withdrawalRealYearly: f.wYear, deathAge: f.deathAge };
+  const filtered = E.stressTestRetirement(st, { ...opts, shockYears: [1, 999] });
+  assertEq(filtered.scenarios.length, 1, 'rok poza horyzontem odfiltrowany');
+  assertEq(filtered.scenarios[0].shockYear, 1, 'został tylko rok 1');
+  const noBirth = baseState({ profile: { birthDate: null } });
+  assertEq(E.stressTestRetirement(noBirth, opts), null, 'bez daty urodzenia → null');
+  const clamp = E.stressTestRetirement(st, { ...opts, deathAge: 10 });
+  assertEq(clamp.horizonYears, 1, 'deathAge ≤ wiek startowy → horyzont 1 (clamp)');
+  assertEq(E.stressTestRetirement(st, opts).hypothetical, true, 'bez osiągniętej prognozy → hypothetical');
+  const withProj = E.stressTestRetirement(st, {
+    ...opts, startYm: undefined,
+    projection: { reached: true, fireYm: f.startYm, series: [] },
+  });
+  assertEq(withProj.hypothetical, false, 'osiągnięta prognoza → nie-hipotetyczny');
+  assertEq(withProj.startYm, f.startYm, 'startYm = fireYm prognozy');
+});
+
+// ── F40: eksport CSV historii check-inów (Excel pl-PL) ────────────────────
+// Dialekt sam w sobie jest specyfikacją: średniki, przecinek dziesiętny bez
+// grupowania (dwa miejsca), BOM UTF-8, CRLF bez końcowego, cytowanie RFC 4180.
+// Kolumny pochodne z state.derived po ym (bez derived → puste); verdictLabel
+// wstrzykiwany. Plan: docs/plan-csv-export-entries.md (tam „F30" — zajęte
+// przez Belkę → F40; kolumna „Notatka" dojdzie razem z notatkami z fazy 4).
+
+const CSV_HEADER = 'Miesiąc;Zarobione;Wydane;Oszczędności;Plan oszczędności;'
+  + 'Różnica vs plan;Werdykt;Werdykt (opis);Nadpłata kredytu;Nadpłata długu rodzinnego;'
+  + 'Korekta gotówki;Korekta portfela;Gotówka po miesiącu;Portfel po miesiącu;Faza;'
+  + 'Kredyt — saldo (nominalnie);Dług rodzinny — saldo (nominalnie);Utworzono;Zaktualizowano';
+const csvNumT = x => Number(x).toFixed(2).replace('.', ',');
+
+test('F40a: dokładna serializacja — BOM, nagłówek, CRLF bez końcowego, przecinek dziesiętny, derived po ym', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 10000, 6000, { snapshot: 4000 }));
+  st.entries.push(entry('2026-02', 9000.5, 7500.25, {
+    snapshot: 4000, verdict: 'behind', overpayment: 300, familyOverpayment: 150,
+    cashOverride: 1000, balanceOverride: 50000, updatedAt: '2026-03-02T10:00:00.000Z',
+  }));
+  E.recomputeDerived(st, NOW);
+  const labels = { on_plan: 'W planie', behind: 'Lekko pod planem' };
+  const csv = S.entriesCSV(st, { verdictLabel: v => labels[v] || v });
+  assertEq(csv[0], '\uFEFF', 'BOM na początku');
+  assertTrue(!csv.endsWith('\r\n'), 'bez końcowego CRLF');
+  const lines = csv.slice(1).split('\r\n');
+  assertEq(lines.length, 3, 'nagłówek + 2 wpisy');
+  assertEq(lines[0], CSV_HEADER, 'nagłówek co do bajta');
+  const bal = m => st.derived.balances.rows.find(r => r.ym === m);
+  const b1 = bal('2026-01'), b2 = bal('2026-02');
+  assertEq(lines[1], ['2026-01', '10000,00', '6000,00', '4000,00', '4000,00', '0,00',
+    'on_plan', 'W planie', '0,00', '0,00', '', '',
+    csvNumT(b1.cash), csvNumT(b1.portfolio), b1.phase, '', '',
+    '2026-01-01T00:00:00.000Z', ''].join(';'), 'wiersz 1 co do bajta');
+  assertEq(lines[2], ['2026-02', '9000,50', '7500,25', '1500,25', '4000,00', '-2499,75',
+    'behind', 'Lekko pod planem', '300,00', '150,00', '1000,00', '50000,00',
+    csvNumT(b2.cash), csvNumT(b2.portfolio), b2.phase, '', '',
+    '2026-01-01T00:00:00.000Z', '2026-03-02T10:00:00.000Z'].join(';'), 'wiersz 2 co do bajta');
+});
+
+test('F40b: cytowanie RFC 4180 — średnik/cudzysłów/nowa linia w komórce', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 10000, 6000));
+  E.recomputeDerived(st, NOW);
+  const csv = S.entriesCSV(st, { verdictLabel: () => 'W "planie"; test' });
+  assertTrue(csv.includes(';"W ""planie""; test";'), 'komórka opakowana, cudzysłowy podwojone');
+  const row = csv.slice(1).split('\r\n')[1];
+  const quoted = row.match(/"([^"]|"")*"/g);
+  assertEq(quoted.length, 1, 'jedna komórka cytowana');
+  assertEq(row.replace(/"([^"]|"")*"/g, 'X').split(';').length, 19, '19 pól mimo średnika w treści');
+  const nl = S.entriesCSV(st, { verdictLabel: () => 'a\nb' });
+  assertTrue(nl.includes(';"a\nb";'), 'nowa linia w komórce → cytowanie');
+});
+
+test('F40c: puste komórki — brak derived, miesiąc sprzed kotwicy, brak kredytu; kredyt wypełnia saldo', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 10000, 6000));
+  E.recomputeDerived(st, NOW);
+  const stripped = { ...st };
+  delete stripped.derived;
+  const row = S.entriesCSV(stripped).slice(1).split('\r\n')[1].split(';');
+  assertEq(row.slice(12, 17).join('|'), '||||', 'bez derived kolumny 13–17 puste');
+  assertEq(row[1], '10000,00', 'kolumny wpisu nietknięte');
+  // Wpis sprzed kotwicy (historia po reanchor w przód): saldo/faza puste.
+  const st2 = baseState({ anchorMonth: '2026-03' });
+  st2.entries.push(entry('2026-01', 10000, 6000));
+  st2.entries.push(entry('2026-03', 10000, 6000));
+  E.recomputeDerived(st2, NOW);
+  const rows2 = S.entriesCSV(st2).slice(1).split('\r\n');
+  assertEq(rows2[1].split(';').slice(12, 15).join('|'), '||', 'miesiąc sprzed kotwicy: 13–15 puste');
+  assertTrue(rows2[2].split(';')[12] !== '', 'miesiąc od kotwicy: gotówka wypełniona');
+  // Aktywny kredyt: kolumna 16 niesie saldo nominalne z repliki długu.
+  const st3 = baseState({
+    anchorMonth: '2026-01',
+    housing: { housePlan: housePlan({ moveInMonth: '2026-01', mortgage: { startMonth: '2026-01' } }) },
+  });
+  st3.entries.push(entry('2026-02', 10000, 6000));
+  E.recomputeDerived(st3, NOW);
+  const row3 = S.entriesCSV(st3).slice(1).split('\r\n')[1].split(';');
+  const debtRow = st3.derived.debt.rows.find(r => r.ym === '2026-02');
+  assertEq(row3[15], csvNumT(debtRow.balNominal), 'saldo kredytu z repliki (nominalnie)');
+});
+
+test('F40d: sortowanie rosnąco po miesiącu + czystość stanu', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-03', 1000, 500));
+  st.entries.push(entry('2026-01', 1000, 500));
+  st.entries.push(entry('2026-02', 1000, 500));
+  E.recomputeDerived(st, NOW);
+  const before = JSON.stringify(st);
+  const months = S.entriesCSV(st).slice(1).split('\r\n').slice(1).map(r => r.split(';')[0]);
+  assertEq(months.join(','), '2026-01,2026-02,2026-03', 'wyjście rosnąco');
+  assertEq(st.entries[0].month, '2026-03', 'tablica wejściowa nieposortowana (kopia)');
+  assertEq(JSON.stringify(st), before, 'czystość — stan (z derived) nietknięty');
+});
+
+test('F40e: pusta historia → dokładnie BOM + nagłówek', () => {
+  const st = baseState();
+  E.recomputeDerived(st, NOW);
+  assertEq(S.entriesCSV(st), '\uFEFF' + CSV_HEADER, 'tylko nagłówek');
+});
+
+test('F40f: domyślne opcje — opis = surowy klucz; zero i ujemne kwoty w dialekcie', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  st.entries.push(entry('2026-01', 5000, 6500.75, { verdict: 'hard' }));
+  E.recomputeDerived(st, NOW);
+  const row = S.entriesCSV(st).slice(1).split('\r\n')[1].split(';');
+  assertEq(row[6], 'hard', 'surowy klucz');
+  assertEq(row[7], 'hard', 'bez opcji opis = klucz');
+  assertEq(row[3], '-1500,75', 'ujemne oszczędności z minusem');
+  assertEq(row[8], '0,00', 'zero jako 0,00');
 });
