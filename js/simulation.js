@@ -366,6 +366,49 @@ export function crashCard({ pct, deathAge, resultHTML }) {
   </div>`;
 }
 
+// ── 8. Barista FIRE (dorabianie po FIRE) ─────────────────────────────────
+// Czysty what-if: dwa wejścia (kwota, wiek końca), porównanie z tym samym
+// mostem ZUS bez dorabiania. Nic nie zapisywane — barista nigdy nie wchodzi
+// do state.assumptions.
+
+export function baristaResult({ pb, pbBase, amount, untilAge }) {
+  if (pb == null || pbBase == null) {
+    return '<p class="muted">Uzupełnij datę urodzenia w Plan → Profil, aby policzyć wariant Barista.</p>';
+  }
+  const pensionOn = !!(pb.ro.pension && pb.ro.pension.monthly > 0);
+  const diff = pb.target - pbBase.target;
+  const rows = [
+    pb.hypothetical ? '<div class="banner info small">FIRE poza horyzontem prognozy — scenariusz modelowy liczony od dziś.</div>' : '',
+    kv('Potrzebny portfel (Barista)', money(pb.target)),
+    kv(pensionOn ? 'Potrzebny portfel (bez dorabiania, z ZUS)' : 'Potrzebny portfel (bez dorabiania)', money(pbBase.target)),
+    kv('Różnica', signed(diff), diff <= 0 ? 'good' : 'warn-text'),
+    kv('Data FIRE (Barista)', fireCell(pb.fireYm, pbBase.fireYm)),
+    gainLine(pb.fireYm, pbBase.fireYm),
+    amount > 0 && pb.baristaYearly === 0
+      ? `<p class="muted small">W miesiącu startu wypłat masz już ${pb.startAge} lat — dorabianie do wieku ${esc(untilAge)} nie obejmuje ani roku po FIRE. Podaj późniejszy wiek.</p>`
+      : '',
+    metodologia([
+      'Dorobione pieniądze zmniejszają wypłaty z portfela, dopóki dorabiasz; od podanego wieku portfel przejmuje pełne wydatki (klasyczna stopa wypłat). Ten sam rachunek co przy moście ZUS — najpierw lżejsze lata, potem pełny cel.',
+      pensionOn ? 'Emerytura z ZUS z Twoich ustawień jest uwzględniona w obu wariantach — różnica pokazuje czysty efekt dorabiania.' : '',
+      `Po FIRE portfel pracuje na ${gl('realnie', 'realny')} zwrot po FIRE (z ustawień). Gdy jest niższy niż Twoja stopa wypłat, lata «na moście» są drogie — przy małym dorabianiu cel może wyjść nawet wyższy niż klasyczny. To nie błąd, tylko cena bezpieczniejszego portfela.`,
+      'Kwota w dzisiejszych złotówkach, stała realnie. Niczego nie zapisujemy — to podgląd.',
+    ]),
+  ];
+  return rows.join('');
+}
+
+export function baristaCard({ amount, untilAge, resultHTML }) {
+  return `<div class="card"><h2>Barista FIRE ☕💼</h2>
+    <p class="muted small">Nie musisz rzucać pracy z dnia na dzień. Jeśli po FIRE dorobisz kilka tysięcy miesięcznie — pół etatu, zlecenia — portfel może być mniejszy, a FIRE bliżej. Czysta symulacja, niczego nie zapisujemy.</p>
+    <label class="field"><span class="lbl">Dorabiam po FIRE <span class="muted">(zł/mies. netto)</span></span>
+      <input type="text" id="sym-barista" inputmode="decimal" value="${esc(amount)}" placeholder="np. 3000">
+      <div class="hint">Kwota w dzisiejszych złotówkach.</div></label>
+    <label class="field"><span class="lbl">Dorabiam do wieku</span>
+      <input type="text" id="sym-barista-age" inputmode="numeric" value="${esc(untilAge)}" placeholder="np. 55"></label>
+    <div id="sym-barista-result">${resultHTML}</div>
+  </div>`;
+}
+
 export function retirementCard({ value, base, freeze, pension, pensionAge, resultHTML }) {
   const v = value == null ? base : Number(value);
   return `<div class="card"><h2>Emerytura po FIRE 🏖️</h2>

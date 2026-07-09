@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage, milestoneMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.30.0';
+export const APP_VERSION = '1.31.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1554,6 +1554,8 @@ let symRetPension = null; // Emerytura: ZUS zł/mies. (string; null = z ustawie�
 let symRetPage = null;    // Emerytura: wiek emerytalny (string; null = z ustawień)
 let symCrashPct = '30'; // Krach: % spadku portfela
 let symCrashAge = '90'; // Krach: dożywam do wieku
+let symBarista = '';    // Barista: dorabiane zł/mies. (string)
+let symBaristaAge = ''; // Barista: dorabiam do wieku (string)
 
 const SYM_CAP = 100000;   // górny limit dopłaty w „Cel: wiek FIRE"
 
@@ -1572,6 +1574,7 @@ const SYM_CALCS = [
   ['wiecej', '💪', 'Oszczędzaj więcej', 'o ile wcześniej osiągniesz FIRE'],
   ['zwrot', '📊', 'Wpływ zwrotu', 'jak inny zwrot z inwestycji przesuwa FIRE'],
   ['emerytura', '🏖️', 'Emerytura po FIRE', 'zwrot po FIRE, mrożenie wydatków i emerytura ZUS'],
+  ['barista', '☕', 'Barista FIRE', 'dorabianie po FIRE — mniejszy portfel, FIRE bliżej'],
   ['krach', '📉', 'Test krachu', 'co krach rynkowy zrobi z Twoją emeryturą'],
   ['kredyt', '🧮', 'Kalkulator kredytu', 'rata, odsetki i efekt nadpłat dowolnego kredytu'],
   ['nadplata', '💸', 'Nadpłata kredytu', 'ile oszczędzasz, nadpłacając swój kredyt'],
@@ -1771,6 +1774,24 @@ function renderSymulacja(calc) {
     return Sim.retirementResult({ ro, dz, dzBase, w, pb, deathAge: 90 });
   };
 
+  // Barista: override niesie TYLKO baristę — zapisana emerytura i ustawienia po
+  // FIRE jadą w obu ro, więc porównanie izoluje sam efekt dorabiania.
+  const baristaResult = () => {
+    if (!state.profile.birthDate) return '<p class="muted">Uzupełnij datę urodzenia w Plan → Profil, aby policzyć wariant Barista.</p>';
+    const rawA = String(symBarista).trim(), rawW = String(symBaristaAge).trim();
+    if (rawA === '' || rawW === '') return '<p class="muted small">Podaj kwotę i wiek, aby zobaczyć efekt dorabiania.</p>';
+    const amount = Fmt.parsePLN(rawA);
+    if (amount == null || amount < 0) return '<div class="field-error">Podaj kwotę: 0 lub więcej.</div>';
+    const ageY = Fmt.parsePLN(rawW);
+    if (ageY == null || ageY <= 0 || ageY > 100) return '<div class="field-error">Podaj realny wiek (1–100).</div>';
+    const currentAge = E.ageAt(state.profile.birthDate, nowYm).years;
+    if (ageY <= currentAge) return `<p class="muted small">Podaj wiek większy niż Twój obecny (${currentAge}).</p>`;
+    const ro = E.retirementOpts(state, { barista: { monthly: amount, untilAge: Math.round(ageY) } });
+    const pb = E.projectBridgeFire(state, { projection: proj, ro });
+    const pbBase = E.projectBridgeFire(state, { projection: proj });
+    return Sim.baristaResult({ pb, pbBase, amount, untilAge: Math.round(ageY) });
+  };
+
   const crashResult = () => {
     const pct = Fmt.parsePLN(symCrashPct);
     if (pct == null || pct <= 0 || pct >= 100) return '<div class="field-error">Podaj spadek w procentach (między 0 a 100).</div>';
@@ -1803,6 +1824,8 @@ function renderSymulacja(calc) {
       pensionAge: symRetPage == null ? String(a.pensionAge) : symRetPage,
       resultHTML: retirementResult(),
     });
+  } else if (calc === 'barista') {
+    body = Sim.baristaCard({ amount: symBarista, untilAge: symBaristaAge, resultHTML: baristaResult() });
   } else if (calc === 'krach') {
     body = Sim.crashCard({ pct: symCrashPct, deathAge: symCrashAge, resultHTML: crashResult() });
   } else {
@@ -1810,9 +1833,9 @@ function renderSymulacja(calc) {
   }
 
   // Kalkulatory dokładające kwotę do planu — przypomnij, że liczy się sama
-  // nadwyżka. Nie dotyczy „Zwrotu", „Nadpłaty", „Kredytu", „Emerytury" ani
-  // „Krachu" (czyste podglądy — nic nie dokładają do planu).
-  const note = calc === 'zwrot' || calc === 'nadplata' || calc === 'kredyt' || calc === 'emerytura' || calc === 'krach' ? '' : Sim.nadwyzkaNote();
+  // nadwyżka. Nie dotyczy „Zwrotu", „Nadpłaty", „Kredytu", „Emerytury",
+  // „Baristy" ani „Krachu" (czyste podglądy — nic nie dokładają do planu).
+  const note = calc === 'zwrot' || calc === 'nadplata' || calc === 'kredyt' || calc === 'emerytura' || calc === 'barista' || calc === 'krach' ? '' : Sim.nadwyzkaNote();
 
   view().innerHTML = symBack + body + note + symBack;
 
@@ -1882,6 +1905,10 @@ function renderSymulacja(calc) {
       symRetPage = pageEl.value;
       $('#sym-ret-result').innerHTML = retirementResult();
     });
+  } else if (calc === 'barista') {
+    const refresh = () => { const r = $('#sym-barista-result'); if (r) r.innerHTML = baristaResult(); };
+    const amEl = $('#sym-barista'); if (amEl) amEl.addEventListener('input', () => { symBarista = amEl.value; refresh(); });
+    const agEl = $('#sym-barista-age'); if (agEl) agEl.addEventListener('input', () => { symBaristaAge = agEl.value; refresh(); });
   } else if (calc === 'krach') {
     const refresh = () => { const r = $('#sym-crash-result'); if (r) r.innerHTML = crashResult(); };
     const pEl = $('#sym-crash-pct'); if (pEl) pEl.addEventListener('input', () => { symCrashPct = pEl.value; refresh(); });

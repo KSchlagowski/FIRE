@@ -2214,6 +2214,154 @@ test('F47d: projectBridgeFire — cel klasyczny echo z TEGO SAMEGO miesiąca (st
   assertClose(ph.targetClassic, E.fireTargetAt(hyp, ph.startYm), 1e-9, 'hipotetycznie również');
 });
 
+// ── Barista FIRE: drugi offset w_n (dorabianie po FIRE) ─────────────────
+// Dołącza do suit ZUS: F27 (retirementOpts/projectWithdrawal), F28 (do zera),
+// F46 (bridgeTargetAt), F47 (projectBridgeFire). Formy zamknięte liczone w
+// teście SĄ specyfikacją; silnik liczy pętlą wsteczną — parytet to test.
+// Nic nie zapisywane: barista domyślnie null (inert), więc liczby F13/F24/F27/
+// F28/F46/F47 bez zmian (patrz 229 wcześniejszych asercji powyżej).
+
+test('F27i: retirementOpts — pole barista (domyślna null, override, jawny null, czystość)', () => {
+  const st = E.createState();
+  assertEq(E.retirementOpts(st).barista, null, 'nowy stan → brak dorabiania (null)');
+  const o = E.retirementOpts(st, { barista: { monthly: 3000, untilAge: 40 } });
+  assertEq(o.barista.monthly, 3000, 'kwota z override');
+  assertEq(o.barista.untilAge, 40, 'wiek z override');
+  assertEq(E.retirementOpts(st, { barista: null }).barista, null, 'jawny null → brak dorabiania');
+  const before = JSON.stringify(st);
+  E.retirementOpts(st, { barista: { monthly: 1000, untilAge: 50 } });
+  assertEq(JSON.stringify(st), before, 'stan nietknięty');
+});
+
+test('F27j: projectWithdrawal — offset baristy do untilAge + podłoga zera', () => {
+  const b = FIX.BARISTA;
+  const st = baseState(); // ZUS 0, postReturnReal 0.05
+  const age0 = E.ageAt(st.profile.birthDate, '2026-07').years; // 26
+  const untilAge = age0 + 10; // 36 — granica w środku tabeli
+  const ro = E.retirementOpts(st, { barista: { monthly: b.monthly, untilAge } });
+  const w = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: 1800000, years: 45, ro });
+  const crossing = w.rows.find(r => r.age >= untilAge); // wiersz z ageAt, nie z ręki
+  assertTrue(!!crossing, 'horyzont przecina wiek końca dorabiania');
+  for (const r of w.rows) {
+    if (r.age < untilAge) {
+      assertEq(r.baristaReal, 12 * b.monthly, `dorabianie 36 000/rok przed ${untilAge} (rok ${r.year})`);
+      assertClose(r.netWithdrawalReal, Math.max(0, r.withdrawalReal - r.pensionReal - 12 * b.monthly), 1e-9, 'netto = brutto − ZUS − barista');
+    } else {
+      assertEq(r.baristaReal, 0, `brak dorabiania od ${untilAge} (rok ${r.year})`);
+    }
+  }
+  assertEq(crossing.baristaReal, 0, 'wiersz przekroczenia bez dorabiania');
+  // Rekurencja na NETTO (jeden aktywny wiersz z ręki); brutto bez zmian.
+  const active = w.rows[0];
+  assertClose(active.withdrawalReal, 72000, 1e-9, 'brutto to dalej pełne wydatki');
+  assertClose(active.netWithdrawalReal, 72000 - 12 * b.monthly, 1e-9, 'netto = brutto − barista');
+  assertClose(active.endReal, (active.startReal - active.netWithdrawalReal) * 1.05, 1e-6, 'rekurencja na netto');
+  assertClose(active.baristaNominal, active.baristaReal * Math.pow(1.03, active.year - 1), 1e-6, 'nominal: epoka startYm');
+  // Podłoga zera (D7): ogromne dorabianie → nic nie schodzi z portfela, rośnie.
+  const rich = E.retirementOpts(st, { barista: { monthly: 10000, untilAge } });
+  const wRich = E.projectWithdrawal(st, { startYm: '2026-07', startPortfolioReal: 1800000, years: 45, ro: rich });
+  for (const r of wRich.rows.filter(r => r.age < untilAge)) {
+    assertEq(r.netWithdrawalReal, 0, `netto na podłodze 0 (rok ${r.year})`);
+    assertTrue(r.endReal > r.startReal, `portfel rośnie, gdy dorabianie pokrywa całość (rok ${r.year})`);
+  }
+  // Brak daty urodzenia → dorabianie nieobliczalne, baristaReal 0 wszędzie.
+  const nb = baseState();
+  nb.profile.birthDate = null;
+  const wNb = E.projectWithdrawal(nb, { startYm: '2026-07', startPortfolioReal: 1800000, years: 45,
+    ro: E.retirementOpts(nb, { barista: { monthly: b.monthly, untilAge } }) });
+  assertTrue(wNb.rows.every(r => r.baristaReal === 0), 'bez birthDate → baristaReal 0 wszędzie');
+});
+
+test('F28g: cel „do zera" z baristą — arytmetyka całkowita przy r = 0 i krawędzie', () => {
+  // N = 10 (wiek 26 w 2026-07, dożycie 36). Barista 3 000/mies. = 36 000/rok do
+  // wieku 30 → aktywna lata 1..4 (wiek 26–29). cel = 4·(72000−36000) + 6·72000.
+  const st = baseState({ assumptions: { postRetirementReturnReal: 0 } });
+  const ro = E.retirementOpts(st, { barista: { monthly: 3000, untilAge: 30 } });
+  const t = E.dieWithZeroTargetAt(st, '2026-07', 36, ro);
+  assertEq(t.yearsN, 10);
+  assertClose(t.target, 4 * (72000 - 36000) + 6 * 72000, 1e-6, 'B·(W₁−bar) + (N−B)·W₁ = 576 000');
+  // Dorabianie ≥ W₁ → podłoga zera przez cały most → cel = same lata po baristcie.
+  const rich = E.retirementOpts(st, { barista: { monthly: 6000, untilAge: 30 } }); // 72 000 = W₁
+  assertClose(E.dieWithZeroTargetAt(st, '2026-07', 36, rich).target, 6 * 72000, 1e-6, 'barista ≥ W₁ → lata mostu składają 0');
+  // untilAge ≤ wiek startowy → cel DOKŁADNIE jak bez baristy.
+  const none = E.dieWithZeroTargetAt(st, '2026-07', 36).target;
+  const past = E.retirementOpts(st, { barista: { monthly: 3000, untilAge: 26 } });
+  assertEq(E.dieWithZeroTargetAt(st, '2026-07', 36, past).target, none, 'untilAge = wiek0 → bez wpływu');
+});
+
+test('F46e: bridgeTargetAt — barista, tożsamość arytmetyczna przy r = 0', () => {
+  const b = FIX.BARISTA; // 3 000/mies. do wieku 40
+  const st = baseState({ assumptions: { postRetirementReturnReal: 0 } });
+  const age0 = E.ageAt(st.profile.birthDate, '2026-07').years; // 26
+  const B = b.untilAge - age0; // 14
+  const bt = E.bridgeTargetAt(st, '2026-07', E.retirementOpts(st, { barista: b }));
+  assertEq(bt.bridgeYears, B, 'most = untilAge − wiek0');
+  assertEq(bt.baristaYearly, 12 * b.monthly, 'echo rocznej baristy');
+  assertClose(bt.terminalTarget, 72000 / 0.04, 1e-6, 'terminal = pełne wydatki / SWR (barista wygasła)');
+  assertClose(bt.target, B * (72000 - 12 * b.monthly) + 72000 / 0.04, 1e-6, 'r=0: B·(W₁−bar) + W₁/wr = 2 304 000');
+  // KOREKTA planu: przy r = 0 cel NIE jest < klasyczny — most jest
+  // nieprzeceniony, więc finansowanie lat mostu + pełny terminal kosztuje
+  // WIĘCEJ niż sam klasyczny. Nierówność żyje dopiero w F46f przy r = 5%.
+  assertTrue(bt.target > bt.targetClassic, 'r=0: finansowanie lat mostu podnosi cel ponad klasyczny');
+});
+
+test('F46f: bridgeTargetAt — barista, forma zamknięta i nierówność przy r = 5%', () => {
+  const b = FIX.BARISTA;
+  const st = baseState(); // postRetirementReturnReal 0.05, ZUS 0
+  const age0 = E.ageAt(st.profile.birthDate, '2026-07').years;
+  const B = b.untilAge - age0; // 14
+  const bt = E.bridgeTargetAt(st, '2026-07', E.retirementOpts(st, { barista: b }));
+  const q = 1 / 1.05;
+  const w = 72000 - 12 * b.monthly; // 36 000
+  const expected = w * (1 - Math.pow(q, B)) / (1 - q) + (72000 / 0.04) * Math.pow(q, B);
+  assertClose(bt.target, expected, 1e-6, 'r=5%: Σ w·qⁿ⁻¹ + terminal·qᴮ');
+  assertClose(bt.targetClassic, 1800000, 1e-9, 'echo klasyczny (ten sam miesiąc)');
+  assertTrue(bt.target < bt.targetClassic, 'przy r > wr dorabianie obniża cel');
+  assertEq(bt.baristaYearly, 36000, 'echo rocznej baristy');
+  // untilAge ≤ wiek0 → most 0, cel DOKŁADNIE klasyczny (jak bez baristy).
+  const past = E.bridgeTargetAt(st, '2026-07', E.retirementOpts(st, { barista: { monthly: 3000, untilAge: age0 } }));
+  assertEq(past.bridgeYears, 0, 'untilAge = wiek0 → most zerowy');
+  assertEq(past.baristaYearly, 0, 'echo 0, gdy barista nieaktywna w ym');
+  assertClose(past.target, E.fireTargetAt(st, '2026-07'), 1e-6, 'cel degeneruje się do klasycznego');
+});
+
+test('F46h: bridgeTargetAt — emerytura + barista razem: monotoniczność i czystość', () => {
+  const st = baseState({ assumptions: { pensionMonthly: 2000, pensionAge: 65 } });
+  const bar = { monthly: 3000, untilAge: 40 };
+  const both = E.bridgeTargetAt(st, '2026-07', E.retirementOpts(st, { barista: bar })).target;
+  const pensOnly = E.bridgeTargetAt(st, '2026-07').target; // sama emerytura z założeń
+  const barOnly = E.bridgeTargetAt(st, '2026-07',
+    E.retirementOpts(st, { pension: null, barista: bar })).target;
+  // Więcej dochodu nigdy nie podnosi wymaganego celu (w tej samej konstrukcji).
+  assertTrue(both < pensOnly, 'dodanie baristy obniża cel vs sama emerytura');
+  assertTrue(both < barOnly, 'dodanie emerytury obniża cel vs sama barista');
+  const before = JSON.stringify(st);
+  E.bridgeTargetAt(st, '2026-07', E.retirementOpts(st, { barista: bar }));
+  assertEq(JSON.stringify(st), before, 'stan nietknięty');
+});
+
+test('F47e: projectBridgeFire — barista przesuwa FIRE nie później; echo pól', () => {
+  const st = baseState({ assumptions: { portfolioStart: 10000, cashStart: 6000 } }); // ZUS 0
+  E.recomputeDerived(st, NOW);
+  const proj = st.derived.projection;
+  assertTrue(proj.reached, 'stan osiąga klasyczne FIRE');
+  const age0 = E.ageAt(st.profile.birthDate, proj.fireYm).years;
+  const bar = { monthly: 3000, untilAge: age0 + 20 };
+  const pb = E.projectBridgeFire(st, { projection: proj, now: NOW, ro: E.retirementOpts(st, { barista: bar }) });
+  const pbBase = E.projectBridgeFire(st, { projection: proj, now: NOW });
+  assertEq(pb.hypothetical, false);
+  assertTrue(E.ymToIdx(pb.fireYm) <= E.ymToIdx(pbBase.fireYm), 'FIRE z baristą nie później niż bez');
+  assertTrue(pb.target < pbBase.target, 'cel z baristą niższy (r > wr)');
+  assertEq(pb.baristaMonthly, bar.monthly, 'echo kwoty dla builderów');
+  assertEq(pb.baristaUntilAge, bar.untilAge, 'echo wieku dla builderów');
+  assertTrue(pb.baristaYearly > 0, 'barista aktywna w startYm → echo roczne > 0');
+  assertClose(pb.targetClassic, E.fireTargetAt(st, pb.startYm), 1e-9, 'klasyczny liczony w startYm (precedens F47d)');
+  // Duże dorabianie → FIRE ściśle wcześniej.
+  const rich = E.projectBridgeFire(st, { projection: proj, now: NOW,
+    ro: E.retirementOpts(st, { barista: { monthly: 5000, untilAge: age0 + 30 } }) });
+  assertTrue(E.ymToIdx(rich.fireYm) < E.ymToIdx(pbBase.fireYm), 'duże dorabianie → FIRE ściśle wcześniej');
+});
+
 // ── F29: charts.js — buildery SVG (opcje width/maxPoints/detail) ─────────
 // Czyste asercje na stringach (bez DOM). Domyślne wyjście ma być bajt-w-bajt
 // jak przed wydzieleniem modułu; opcje obsługują nakładkę pełnoekranową.

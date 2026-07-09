@@ -374,7 +374,18 @@ TODAY's assumptions and differ only in the entry cutoff), `projectionAsOf`
 truncation ≡ a state without the later entries plus byte-exact state purity,
 the edge years (fully before the anchor / after the last complete month →
 null; a plan-intersecting empty year still reports), surfaced notes, and
-descending `reportYears`.
+descending `reportYears`. Barista FIRE (the second `w_n` offset, dorabianie po
+FIRE — a Symulacja what-if only, never persisted) joins the retirement-phase
+suites: F27i/F27j (`retirementOpts.barista` default-null/override/purity;
+`projectWithdrawal` `baristaReal`/`baristaNominal` rows, the `age < untilAge`
+boundary, the net floor at 0, no-`birthDate` inertness), F28g
+(`dieWithZeroTargetAt` r=0 integer arithmetic + barista ≥ W₁ floor +
+`untilAge ≤ age0` identity), F46e/F46f (`bridgeTargetAt` `B = max(pensionB,
+baristaB)`: the r=0 identity `B·(W₁−bar)+W₁/wr` — which is **higher** than
+classic, the Plan-A worked-example correction — and the r=5% closed form with
+`target < classic`), F46h (pension + barista monotonicity + purity), and F47e
+(`projectBridgeFire` barista echo fields + FIRE-date-not-later). The barista
+`null` default keeps every prior expected number byte-identical.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

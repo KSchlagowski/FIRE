@@ -1012,25 +1012,31 @@ export function retirementOpts(state, overrides = {}) {
       ? overrides.pension // null ⇒ ZUS wyłączony w tym what-ifie
       : { monthly: a.pensionMonthly != null ? a.pensionMonthly : 0,
           fromAge: a.pensionAge != null ? a.pensionAge : 65 },
+    // Barista FIRE (dorabianie po FIRE): { monthly, untilAge } — wyłącznie
+    // what-if z Symulacji, nigdy nie zapisywane, brak domyślnej z założeń, więc
+    // zwykły idiom `!= null` (null = brak dorabiania, nie znaczący override).
+    barista: overrides.barista != null ? overrides.barista : null,
   };
 }
 
 // ── Most ZUS: wypłata netto i PV fazy emerytalnej ───────────────────────
 // JEDYNE miejsce definicji w_n (D7/D8): brutto rok n = W₁·G^(n−1); emerytura
 // płynie w roku n, gdy wiek na starcie roku ≥ pension.fromAge (lata całkowite);
-// z portfela schodzi max(0, brutto − emerytura) — nadwyżka emerytury nad
-// wydatkami jest wydawana, nigdy re-inwestowana (D7). Barista dołoży tu kiedyś
-// drugi offset — nic więcej.
+// barista (dorabianie po FIRE) płynie, gdy wiek na starcie roku < untilAge;
+// z portfela schodzi max(0, brutto − emerytura − barista) — nadwyżka dochodu
+// nad wydatkami jest wydawana, nigdy re-inwestowana (D7). Oba offsety realne,
+// płaskie (nie rosną z expenseGrowthReal — D6). To JEDYNE miejsce testu wieku.
 function netWithdrawalYear(state, ro, startYm, W1, n) {
   const a = state.assumptions;
   const birth = state.profile.birthDate;
   const g = ro.freezeExpenses ? 0 : a.expenseGrowthReal;
   const gross = W1 * Math.pow(1 + g, n - 1);
+  const ageAtYear = birth ? ageAt(birth, addMonths(startYm, (n - 1) * 12)).years : null;
   const pensionOn = !!(ro.pension && ro.pension.monthly > 0 && birth);
-  const active = pensionOn
-    && ageAt(birth, addMonths(startYm, (n - 1) * 12)).years >= ro.pension.fromAge;
-  const pension = active ? 12 * ro.pension.monthly : 0;
-  return { gross, pension, net: Math.max(0, gross - pension) };
+  const pension = pensionOn && ageAtYear >= ro.pension.fromAge ? 12 * ro.pension.monthly : 0;
+  const barOn = !!(ro.barista && ro.barista.monthly > 0 && birth);
+  const barista = barOn && ageAtYear < ro.barista.untilAge ? 12 * ro.barista.monthly : 0;
+  return { gross, pension, barista, net: Math.max(0, gross - pension - barista) };
 }
 
 // PV fazy emerytalnej do dokładnej wartości końcowej — pętla wsteczna:
@@ -1131,6 +1137,7 @@ export function projectWithdrawal(state, opts = {}) {
     const wn = netWithdrawalYear(state, ro, startYm, withdrawalRealYearly, n);
     const withdrawalReal = wn.gross;
     const pensionReal = wn.pension;
+    const baristaReal = wn.barista;
     const netWithdrawalReal = wn.net;
     let endReal, taxReal = 0, grossReal = netWithdrawalReal;
     if (active.any) {
@@ -1188,6 +1195,7 @@ export function projectWithdrawal(state, opts = {}) {
       startReal, startNominal,
       withdrawalReal, withdrawalNominal,
       pensionReal, pensionNominal: pensionReal * pf1,
+      baristaReal, baristaNominal: baristaReal * pf1,
       netWithdrawalReal, netWithdrawalNominal,
       growthReal, growthNominal, endReal, endNominal,
       ...(active.any ? { taxReal, taxNominal: taxReal * pf1, grossReal } : {}),
@@ -1267,10 +1275,18 @@ export function bridgeTargetAt(state, ym, ro = retirementOpts(state)) {
   if (!birth) return null;
   const W1 = fireTargetAt(state, ym) * a.withdrawalRate;
   const pensionOn = !!(ro.pension && ro.pension.monthly > 0);
+  const barOn = !!(ro.barista && ro.barista.monthly > 0);
   const age0 = ageAt(birth, ym).years;
-  const bridgeYears = Math.max(0, pensionOn ? ro.pension.fromAge - age0 : 0);
+  // Most = najdłuższy z lżejszych okresów: do wieku emerytalnego (ZUS) i do
+  // końca dorabiania (barista). Interior (offset zaczyna/kończy się w środku)
+  // ogarnia pętla wsteczna przez w_n — bez analizy przypadków.
+  const pensionB = pensionOn ? ro.pension.fromAge - age0 : 0;
+  const baristaB = barOn ? ro.barista.untilAge - age0 : 0;
+  const bridgeYears = Math.max(0, pensionB, baristaB);
   const g = ro.freezeExpenses ? 0 : a.expenseGrowthReal;
   const pensionYearly = pensionOn ? 12 * ro.pension.monthly : 0;
+  // Terminal (start roku B+1): barista z konstrukcji już wygasła (baristaB ≤ B),
+  // dopłaca tylko emerytura — resztówka bez offsetu baristy.
   const grossAfterBridge = W1 * Math.pow(1 + g, bridgeYears); // E_{B+1}
   const terminalTarget = Math.max(0, grossAfterBridge - pensionYearly) / a.withdrawalRate;
   const target = pvOfRetirement(state, ro, ym, bridgeYears, W1, terminalTarget);
@@ -1278,6 +1294,7 @@ export function bridgeTargetAt(state, ym, ro = retirementOpts(state)) {
     target,
     targetClassic: fireTargetAt(state, ym), // echo do porównania w UI (ten sam miesiąc)
     bridgeYears, terminalTarget, withdrawalYear1: W1, pensionYearly,
+    baristaYearly: barOn && ro.barista.untilAge > age0 ? 12 * ro.barista.monthly : 0,
   };
 }
 
@@ -1372,6 +1389,7 @@ export function projectDieWithZero(state, opts = {}) {
     const wn = netWithdrawalYear(state, ro, startYm, W1, n);
     const withdrawalReal = wn.gross;
     const pensionReal = wn.pension;
+    const baristaReal = wn.barista;
     const netWithdrawalReal = wn.net;
     let endReal = (startReal - netWithdrawalReal) * (1 + r);
     if (Math.abs(endReal) <= EPS) endReal = 0;
@@ -1388,6 +1406,7 @@ export function projectDieWithZero(state, opts = {}) {
       startReal, startNominal,
       withdrawalReal, withdrawalNominal,
       pensionReal, pensionNominal: pensionReal * pf1,
+      baristaReal, baristaNominal: baristaReal * pf1,
       netWithdrawalReal, netWithdrawalNominal,
       growthReal, growthNominal, endReal, endNominal,
     });
@@ -1427,6 +1446,10 @@ export function projectBridgeFire(state, opts = {}) {
     withdrawalYear1: bt.withdrawalYear1, pensionYearly: bt.pensionYearly,
     pensionMonthly: ro.pension ? ro.pension.monthly : 0,
     pensionAge: ro.pension ? ro.pension.fromAge : null,
+    // Echo baristy dla czystych builderów (precedens pensionMonthly/pensionAge).
+    baristaYearly: bt.baristaYearly,
+    baristaMonthly: ro.barista ? ro.barista.monthly : 0,
+    baristaUntilAge: ro.barista ? ro.barista.untilAge : null,
     ro,
   };
 }

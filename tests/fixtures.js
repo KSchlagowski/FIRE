@@ -159,4 +159,8 @@ export const FIX = {
   // baseState). Plan: docs/plan-zus-pension-bridge.md (tam „F29/F30" — zajęte
   // przez charts.js i Belkę → F46: bridgeTargetAt, F47: projectBridgeFire).
   F46: { pension: { monthly: 2000, fromAge: 65 } },
+  // Barista FIRE (dorabianie po FIRE jako drugi offset w_n): kwoty oczekiwane
+  // liczone w testach z form zamkniętych. 3 000 zł/mies. = 36 000/rok do wieku 40.
+  // Plan: docs/plan-barista-fire.md (tam „F30/F31" — zajęte → dołącza do F46/F47).
+  BARISTA: { monthly: 3000, untilAge: 40 },
 };
