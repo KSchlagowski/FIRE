@@ -118,6 +118,21 @@ export function planPerfCard({ sav, pva, chartHTML }) {
   </div>`;
 }
 
+// ── 2b. Historia: miesiąc po miesiącu (karta ekranu Historia) ───────────
+// Buduje kartę z gotowym wykresem (engine.monthlySavingsHistory → chartSVG w
+// ui.js). Precedens współdzielenia: analysis.js hostuje już fireCell/cumLegend.
+
+export function savingsHistoryCard({ chartHTML }) {
+  if (!chartHTML) return '';
+  return `<div class="card"><h2>Miesiąc po miesiącu 📈</h2>
+    <p class="muted small">Każdy punkt to jeden check-in: ile według planu miało się
+    odłożyć i ile realnie się udało. Miesiące bez wpisu są pomijane; miesiące budowy
+    i deficyty schodzą poniżej osi zera.</p>
+    ${chartHTML}
+    ${cumLegend()}
+  </div>`;
+}
+
 // ── 3. Projekcja — akumulacja ───────────────────────────────────────────
 
 export function projectionCard({ mode, blocks, series, excelRows, houseOn, selectedYear, fireYm, excelStart, excelContrib, byPlanOnly, delta, hasFamily }) {

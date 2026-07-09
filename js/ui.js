@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.26.0';
+export const APP_VERSION = '1.27.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1180,7 +1180,20 @@ function renderHistory() {
   const addEarlier = `<button class="btn ghost wide hist-add" id="hist-add-earlier">➕ Dodaj wcześniejszy miesiąc</button>
     <p class="muted small">Cofa start planu o miesiąc, aby uzupełnić wcześniejsze check-iny.</p>`;
 
-  view().innerHTML = `<div class="card">
+  // Wykres „odłożone vs plan" nad listą — te same dane, ten sam ekran.
+  // Bez strażnika ≥ 0: chartSVG zna domenę ujemną (miesiące budowy/deficyty).
+  const hist = E.monthlySavingsHistory(state.entries);
+  const chartCard = hist.length > 1
+    ? An.savingsHistoryCard({
+      chartHTML: zoomable('hist-plan', 'Miesiąc po miesiącu: odłożone vs plan',
+        o => chartSVG(hist, [
+          { get: r => r.planned, cls: 'line-target', label: 'plan' },
+          { get: r => r.net, cls: 'line-port', label: 'odłożone' },
+        ], o), { legendHTML: An.cumLegend() }),
+    })
+    : '';
+
+  view().innerHTML = `${chartCard}<div class="card">
     <h2>Historia check-inów</h2>
     ${rows.length ? rows.join('') : '<p class="muted">Jeszcze pusto — pierwszy check-in przed Tobą.</p>'}
     ${addEarlier}

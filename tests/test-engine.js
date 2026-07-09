@@ -2062,6 +2062,25 @@ test('F29e: stackedBarSVG detail — gęstsze etykiety lat na szerokim płótnie
   assertEq((plain.match(/class="axis"/g) || []).length, 3, 'domyślnie 3 osie');
 });
 
+test('F29f: chartSVG — domena ujemna (min < 0): 4 osie, etykieta min, brak NaN', () => {
+  const base = E.ymToIdx('2026-01');
+  const rows = [1000, -1000].map((v, i) => ({ ym: E.idxToYm(base + i), a: v }));
+  const svg = chartSVG(rows, [{ get: r => r.a, cls: 'line-port' }]);
+  assertTrue(!/NaN/.test(svg), 'brak NaN');
+  assertEq((svg.match(/class="axis"/g) || []).length, 4, '4 linie osi (0/max/½/min)');
+  assertTrue(svg.includes(`>${fmtShort(-1000)}</text>`), 'etykieta minimum (−1 tys.)');
+  // Dane symetryczne (min = −max) → oś 0 dokładnie w połowie pola: y(0) = 10 + 0.5·140 = 80.
+  assertTrue(svg.includes('y1="80"'), 'solidna oś 0 w pionowym środku pola');
+  assertEq(chartSVG(rows, [{ get: r => r.a, cls: 'line-port' }]), svg, 'czystość: dwa wywołania identyczne');
+});
+
+test('F29g: chartSVG — parytet przy min = 0 (strażnik bajt-w-bajt)', () => {
+  const svg = chartSVG(lineRows(36), LINE_DEFS);
+  assertEq((svg.match(/class="axis"/g) || []).length, 3, 'dane ≥ 0 → dokładnie 3 osie');
+  assertTrue(!svg.includes(`>${fmtShort(-1000)}</text>`), 'bez etykiety ujemnej');
+  assertTrue(!/>-[\d ]/.test(svg), 'żadnej ujemnej etykiety w wyjściu dla danych ≥ 0');
+});
+
 // ── F34: charts.js — zaciski negatywów i skala z pełnej serii (D7) ────────
 
 test('F34a: chartSVG — ujemne wartości zaciśnięte do viewBox (D7)', () => {
@@ -3138,4 +3157,73 @@ test('F42c: migracja v6→v7 stempluje note: null; walidacja odrzuca nie-string'
   ok.entries.push(entry('2026-07', 8000, 5000, { note: null }));
   ok.entries.push(entry('2026-08', 8000, 5000, { note: 'ok' }));
   assertEq(S.validateState(ok).version, S.SCHEMA_VERSION, 'null i string przechodzą');
+});
+
+// ── F43: historia oszczędzania miesiąc po miesiącu (monthlySavingsHistory) ─
+// Wykres na górze Historii: realnie odłożone vs zamrożony plan. Plan:
+// docs/plan-savings-history-chart.md (tam „F30" — zajęte przez Belkę → F43).
+
+test('F43a: mapowanie i sortowanie rosnąco po ym', () => {
+  const entries = [
+    entry('2026-03', 9000, 5500, { snapshot: 4000, verdict: 'behind' }),
+    entry('2026-01', 10000, 6000, { snapshot: 4000, verdict: 'on_plan' }),
+    entry('2026-02', 12000, 5000, { snapshot: 4000, verdict: 'crushed' }),
+  ];
+  const h = E.monthlySavingsHistory(entries);
+  assertEq(h.map(r => r.ym).join(','), '2026-01,2026-02,2026-03', 'rosnąco po ym');
+  assertClose(h[0].net, 4000, 0.005); assertClose(h[1].net, 7000, 0.005); assertClose(h[2].net, 3500, 0.005);
+  assertEq(h[1].planned, 4000, 'planned = snapshot bez przeliczeń');
+  assertEq(h[2].verdict, 'behind', 'verdict przechodzi 1:1');
+  assertClose(h[2].delta, -500, 0.005, 'delta = net − planned');
+});
+
+test('F43b: rate — null przy zerowym dochodzie, ułamek przy dodatnim', () => {
+  const h = E.monthlySavingsHistory([
+    entry('2026-01', 0, 500, { snapshot: 0 }),
+    entry('2026-02', 8000, 6000, { snapshot: 0 }),
+  ]);
+  assertEq(h[0].rate, null, 'earned 0 → rate null');
+  assertClose(h[1].rate, 0.25, 1e-9, '(8000−6000)/8000');
+});
+
+test('F43c: miesiąc budowy — ujemny zamrożony plan i ujemny net', () => {
+  // Kredyt F3 (rata ≈ 9755,8) aktywny od kotwicy → plan mocno ujemny.
+  const st = baseState({
+    anchorMonth: '2026-01',
+    housing: {
+      currentRentMonthly: 2000,
+      housePlan: housePlan({
+        moveInMonth: '2027-01',
+        mortgage: { startMonth: '2026-01', principal: 1100000, rateNominal: 0.07, termYears: 15 },
+      }),
+    },
+  });
+  const e = E.applyCheckIn(st, { month: '2026-03', earned: 8000, spent: 12000 }, NOW);
+  assertTrue(e.plannedSavingsSnapshot < 0, 'zamrożony plan ujemny (rok budowy)');
+  const h = E.monthlySavingsHistory(st.entries);
+  assertClose(h[0].net, -4000, 0.005, 'net ujemny');
+  assertEq(h[0].planned, e.plannedSavingsSnapshot, 'planned = snapshot z wpisu');
+  assertClose(h[0].delta, -4000 - e.plannedSavingsSnapshot, 0.005, 'delta domyka tożsamość');
+});
+
+test('F43d: czystość — wejście nietknięte, dwa wywołania identyczne, [] → []', () => {
+  const entries = [
+    entry('2026-02', 9000, 5000, { snapshot: 4000 }),
+    entry('2026-01', 10000, 6000, { snapshot: 4000 }),
+  ];
+  const before = JSON.stringify(entries);
+  const h1 = E.monthlySavingsHistory(entries);
+  assertEq(JSON.stringify(entries), before, 'wejście nieposortowane/niezmutowane');
+  assertEq(JSON.stringify(E.monthlySavingsHistory(entries)), JSON.stringify(h1), 'determinizm');
+  assertEq(E.monthlySavingsHistory([]).length, 0, 'pusta historia → pusta tablica');
+});
+
+test('F43e: zamrożony snapshot — zmiana założeń nie przepisuje wykresu', () => {
+  const st = baseState({ anchorMonth: '2026-01' });
+  E.applyCheckIn(st, { month: '2026-01', earned: 10000, spent: 6000 }, NOW);
+  const frozen = st.entries[0].plannedSavingsSnapshot;
+  st.assumptions.monthlyIncome = 20000;
+  E.recomputeDerived(st, NOW);
+  const h = E.monthlySavingsHistory(st.entries);
+  assertEq(h[0].planned, frozen, 'planned = snapshot sprzed zmiany założeń');
 });

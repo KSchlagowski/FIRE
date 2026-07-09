@@ -47,12 +47,16 @@ bundler — the browser loads the modules directly.
 - **`charts.js`** — pure SVG chart builders (`chartSVG`/`stackedBarSVG` + private
   `formatShort`), **zero imports** (L0 leaf), local `esc()`. `width`/`maxPoints`/
   `detail` options drive the fullscreen-landscape overlay; at defaults the output
-  is byte-identical to before the split (guarded by F29). Defs/segments accept an
+  is byte-identical to before the split (guarded by F29). `chartSVG` supports a
+  negative domain (`min < 0`, e.g. build months): the scale extends below zero
+  and the Y axis gains a min gridline/label — for all-≥0 data the output stays
+  byte-identical (guarded by F29f–g). Defs/segments accept an
   optional `label` (Polish series name): any labeled chart embeds a `data-tip`
   JSON payload (raw grosze-rounded values + plot-area geometry) on the `<svg>`
   root, hit-tested by the pure `tipHit(tip, vx)` export; label-less output is
   unchanged (guarded by F37).
-- **`analysis.js`** — pure HTML builders for the **Analiza** screen (`#/analiza`).
+- **`analysis.js`** — pure HTML builders for the **Analiza** screen (`#/analiza`)
+  plus the shared Historia chart card (`savingsHistoryCard`).
   Zero DOM, zero module state: engine results + pre-rendered SVG charts come in as
   params, an HTML string comes out. Has a local `esc()` for user-derived text.
 - **`simulation.js`** — pure HTML builders for the **Symulacja** screen
@@ -344,6 +348,13 @@ slice to 200 chars, edit overwrites incl. back to `null`), the notes-are-inert
 guarantee (`state.derived` bit-identical with and without notes), the v6→v7
 migration stamping `note: null` on entries missing the field while an explicit
 note survives, and `validateState` rejecting a non-string non-null `note`.
+F43 covers the Historia savings chart (`monthlySavingsHistory`): ascending
+mapping with exact `net`/`delta` and `planned`/`verdict` passthrough, `rate`
+null on zero income, a build-month row with a negative frozen snapshot AND a
+negative net (the row the negative chart domain exists for), purity, and the
+frozen-snapshot invariant (assumption edits don't rewrite the chart); F29f–g
+pin the `chartSVG` negative domain (4 axis lines + min label, 0-axis at the
+plot midpoint for symmetric data) and the min = 0 byte-parity guard.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

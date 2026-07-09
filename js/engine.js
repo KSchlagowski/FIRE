@@ -1600,6 +1600,26 @@ export function planVsActualStats(entries) {
   return { n: sorted.length, cumNet, cumPlanned, cumDelta: cumNet - cumPlanned, verdicts, cumRows, best, worst };
 }
 
+// Historia oszczędzania miesiąc po miesiącu — realnie odłożone vs zamrożony plan.
+// Czysta funkcja wpisów: [{ ym, net, planned, delta, rate, verdict }] rosnąco po ym.
+// planned = plannedSavingsSnapshot (niezmiennik: zmiana założeń nie przepisuje
+// przeszłości). Miesiące bez wpisu są pomijane — jak w computeStreak/cumRows.
+export function monthlySavingsHistory(entries) {
+  return [...entries]
+    .sort((x, y) => (x.month < y.month ? -1 : 1))
+    .map(e => {
+      const net = roundGrosze(e.earned - e.spent);
+      return {
+        ym: e.month,
+        net,
+        planned: e.plannedSavingsSnapshot,
+        delta: roundGrosze(net - e.plannedSavingsSnapshot),
+        rate: e.earned > 0 ? net / e.earned : null,
+        verdict: e.verdict,
+      };
+    });
+}
+
 // Harmonogram "sama rata" od zadanego salda (cap 1200 kroków).
 export function remainingSchedule(balNominal, j, payment, extraMonthly = 0) {
   const rows = [];
