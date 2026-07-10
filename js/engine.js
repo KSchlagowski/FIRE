@@ -2175,7 +2175,7 @@ export function defaultAssumptions() {
 
 export function createState(partial = {}, now = new Date()) {
   const state = {
-    version: 10,
+    version: 11,
     createdAt: now.toISOString(),
     anchorMonth: todayYm(now),
     profile: { birthDate: '' },
@@ -2199,6 +2199,10 @@ export function createState(partial = {}, now = new Date()) {
     },
     entries: [],
     events: [],
+    // Zapisane scenariusze Symulacji (v11): rzadka mapa tabKey → [slotA|null,
+    // slotB|null]. Tylko WEJŚCIA what-if, nigdy wyniki — recomputeDerived ich
+    // nie czyta (pipeline pochodny nietknięty). Klucz pojawia się przy 1. zapisie.
+    scenarios: {},
     ui: { theme: 'auto', installTipDismissed: false, reminderTipShown: false, lastExportAt: null, milestonesSeen: [] },
   };
   deepMerge(state, partial);

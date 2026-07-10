@@ -10,7 +10,7 @@ import { glossaryScreen } from './glossary.js';
 import { coachMessage, verdictLabel, verdictEmoji, checkinCelebration, decisionMessage, milestoneMessage } from './coach.js';
 import { storage, exportJSON, importPreview, entriesCSV } from './storage.js';
 
-export const APP_VERSION = '1.32.0';
+export const APP_VERSION = '1.33.0';
 
 let state = null;
 let ob = null;               // stan kreatora onboardingu
@@ -1611,50 +1611,9 @@ function renderSymulacja(calc) {
   const proj = d.projection;
   const baseFireYm = proj.reached ? proj.fireYm : null;
 
-  // ── Kalkulatory wyników (czyste projectionWith / funkcje silnika) ──
-  const whatIfResult = () => {
-    const month = simMonth || nowYm;
-    if (!E.isValidYm(month) || E.ymToIdx(month) < E.ymToIdx(nowYm)) {
-      return '<p class="muted small">Wybierz bieżący lub przyszły miesiąc.</p>';
-    }
-    const raw = simAmount.trim();
-    if (raw === '') return '<p class="muted small">Podaj kwotę, aby zobaczyć wpływ na datę FIRE.</p>';
-    const amount = Fmt.parsePLN(raw);
-    if (amount == null) return '<div class="field-error">Nieprawidłowa kwota</div>';
-    const sim = E.projectionWith(state, { extraSavings: { month, amount, recurring: simRecurring } });
-    return Sim.simulationResult({ baseFireYm, sim, month });
-  };
-
-  const targetAgeResult = () => {
-    const raw = String(symAge).trim();
-    const ageYears = raw === '' ? a.targetFireAge : Fmt.parsePLN(raw);
-    if (ageYears == null || ageYears <= 0) return '<div class="field-error">Podaj docelowy wiek.</div>';
-    const currentAge = E.ageAt(state.profile.birthDate, nowYm).years;
-    if (ageYears <= currentAge) return `<p class="muted small">Podaj wiek większy niż Twój obecny (${currentAge}).</p>`;
-    const sol = E.solveExtraSavingsForAge(state, Math.round(ageYears * 12), { cap: SYM_CAP });
-    const plannedNow = E.plannedSavingsFor(d.plan, nowYm);
-    return Sim.targetAgeResult({ sol, ageYears, plannedNow, baseFireYm, cap: SYM_CAP });
-  };
-
-  const latteResult = () => {
-    const raw = String(symLatte).trim();
-    if (raw === '') return '<p class="muted small">Podaj miesięczną kwotę, aby zobaczyć efekt.</p>';
-    const amount = Fmt.parsePLN(raw);
-    if (amount == null || amount <= 0) return '<div class="field-error">Podaj dodatnią kwotę.</div>';
-    const fv = y => E.futureValueOfMonthly(amount, a.realReturnAnnual, y);
-    const sim = E.projectionWith(state, { extraMonthlySavings: amount });
-    return Sim.latteResult({ amount, fv10: fv(10), fv20: fv(20), fv30: fv(30), sim, baseFireYm });
-  };
-
-  const moreMax = Math.max(1000, Math.round((a.monthlyIncome || 0) / 100) * 100);
-  const moreResult = () => {
-    const extra = symMore == null ? 0 : Number(symMore);
-    if (!extra) return '<p class="muted small">Przesuń suwak, aby zobaczyć, o ile wcześniej osiągniesz FIRE.</p>';
-    const sim = E.projectionWith(state, { extraMonthlySavings: extra });
-    return Sim.moreSavingsResult({ extra, sim, baseFireYm });
-  };
-
-  // ── Nadpłata kredytu: analityka tylko dla aktywnych (saldo > 0) długów ──
+  // ── Nadpłata kredytu: analityka aktywnych (saldo > 0) długów ──
+  // Liczona zawsze (nie tylko na zakładce „nadplata"): kolumny porównania A/B
+  // liczą się z tej samej analityki co wynik na żywo.
   const hp = state.housing.housePlan;
   const houseOn = !!(hp && hp.enabled);
   const opMa = houseOn && d.debt.active ? E.mortgageAnalytics(state, d.debt, proj) : null;
@@ -1665,33 +1624,6 @@ function renderSymulacja(calc) {
   ];
   if (symOverpayLoan === 'family' ? !opFa : !opMa) symOverpayLoan = opLoans.length ? opLoans[0].key : 'mortgage';
 
-  const overpayResult = () => {
-    const an = symOverpayLoan === 'family' ? opFa : opMa;
-    if (!an) return '';
-    const raw = symOverpay == null ? '' : String(symOverpay);
-    const X = raw.trim() === '' ? 0 : Fmt.parsePLN(raw);
-    if (X == null || X < 0) return '<div class="field-error">Podaj nadpłatę: 0 lub więcej.</div>';
-    const base = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment);
-    const sim = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment, X);
-    const chartRows = E.remainingToPayComparison(an.balanceNominal, base.rows, sim.rows);
-    const chartHTML = chartRows.length
-      ? zoomable('sym-nadplata', 'Nadpłata: ile zostało do spłaty', o => stackedBarSVG(chartRows, [
-        { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0, label: 'odsetki (kontrakt)' },
-        { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0, label: 'kapitał (kontrakt)' },
-        { get: r => r.aInterest, cls: 'bar-interest', group: 1, label: 'odsetki (z nadpłatami)' },
-        { get: r => r.aPrincipal, cls: 'bar-principal', group: 1, label: 'kapitał (z nadpłatami)' },
-      ], o), { legendHTML: Sim.remainingCmpLegend() })
-      : '';
-    return Sim.overpaymentResult({
-      amount: X,
-      basePayoffYm: E.addMonths(an.lastYm, base.months),
-      payoffYm: E.addMonths(an.lastYm, sim.months),
-      monthsSaved: base.months - sim.months,
-      interestSaved: base.totalInterest - sim.totalInterest,
-      chartHTML,
-    });
-  };
-
   // ── Kalkulator kredytu (hipotetyczny): seed z planowanego kredytu hip. ──
   const mtg = hp && hp.mortgage;
   const seedP = mtg && mtg.principal > 0 ? mtg.principal : 500000;
@@ -1701,51 +1633,143 @@ function renderSymulacja(calc) {
   const loanR = symLoanR != null ? symLoanR : String(seedR);
   const loanT = symLoanT != null ? symLoanT : String(seedT);
 
-  const loanCalcResult = () => {
-    // Odczyt na żywo (nie z const loanP/… zamrożonych przy renderze), by edycja
-    // pól tekstowych odświeżała wynik bez pełnego re-renderu. Seed jak wyżej.
-    const lp = symLoanP != null ? symLoanP : String(seedP);
-    const lr = symLoanR != null ? symLoanR : String(seedR);
-    const lt = symLoanT != null ? symLoanT : String(seedT);
-    const P = Fmt.parsePLN(lp), R = Fmt.parsePLN(lr), T = Fmt.parsePLN(lt);
-    if (P == null || R == null || T == null) return '<div class="field-error">Uzupełnij poprawnie wszystkie pola.</div>';
-    if (!(P > 0)) return '<p class="muted small">Podaj dodatnią kwotę kredytu.</p>';
-    if (R < 0) return '<div class="field-error">Oprocentowanie nie może być ujemne.</div>';
-    if (!(T > 0)) return '<p class="muted small">Podaj okres kredytu w latach.</p>';
-    const j = E.monthlyRate(R / 100);
-    const N = Math.round(T * 12);
-    if (!(N > 0)) return '<p class="muted small">Podaj okres kredytu w latach.</p>'; // annuityPayment rzuca dla N<=0
-    const payment = E.annuityPayment(P, j, N);
-    const rawOp = symLoanOp == null ? '' : String(symLoanOp);
-    const extra = rawOp.trim() === '' ? 0 : Fmt.parsePLN(rawOp);
-    if (extra == null || extra < 0) return '<div class="field-error">Podaj nadpłatę: 0 lub więcej.</div>';
-    const base = E.remainingSchedule(P, j, payment);
-    const sim = extra > 0 ? E.remainingSchedule(P, j, payment, extra) : base;
-    const chartRows = E.remainingToPayComparison(P, base.rows, sim.rows);
-    const chartHTML = chartRows.length
-      ? zoomable('sym-kredyt', 'Kalkulator kredytu: ile zostało do spłaty', o => stackedBarSVG(chartRows, [
-        { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0, label: 'odsetki (kontrakt)' },
-        { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0, label: 'kapitał (kontrakt)' },
-        { get: r => r.aInterest, cls: 'bar-interest', group: 1, label: 'odsetki (z nadpłatami)' },
-        { get: r => r.aPrincipal, cls: 'bar-principal', group: 1, label: 'kapitał (z nadpłatami)' },
-      ], o), { legendHTML: Sim.remainingCmpLegend() })
-      : '';
-    return Sim.loanCalcResult({
-      payment, baseMonths: base.months, extra, simMonths: sim.months,
-      baseInterest: base.totalInterest, interestSaved: base.totalInterest - sim.totalInterest, chartHTML,
-    });
-  };
-
+  const moreMax = Math.max(1000, Math.round((a.monthlyIncome || 0) / 100) * 100);
   const retMin = Math.round((a.realReturnAnnual - 0.03) * 1000) / 1000;
   const retMax = Math.round((a.realReturnAnnual + 0.03) * 1000) / 1000;
-  const returnResult = () => {
-    const newReturn = symReturn == null ? a.realReturnAnnual : Number(symReturn);
-    const sim = Math.abs(newReturn - a.realReturnAnnual) < 1e-9
-      ? proj
-      : E.projectionWith(state, { assumptions: { realReturnAnnual: newReturn } });
-    return Sim.returnResult({ newReturn, baseReturn: a.realReturnAnnual, sim, baseFireYm });
+
+  // Kontekst dla SCENARIO_SPECS.normalize (czysty — nic z DOM). currentAge null,
+  // gdy brak daty urodzenia (bramka wieku pomijana, jak w kodzie na żywo).
+  const currentAge = state.profile.birthDate ? E.ageAt(state.profile.birthDate, nowYm).years : null;
+  const ctx = { nowYm, currentAge, defaultAge: a.targetFireAge, baseReturn: a.realReturnAnnual };
+  if (!state.scenarios) state.scenarios = {}; // obrona: migracja i tak to zapewnia
+
+  // Wspólny builder słupków „ile zostało do spłaty" (kontrakt vs z nadpłatą).
+  const loanBars = (chartRows, key, title) => chartRows.length
+    ? zoomable(key, title, o => stackedBarSVG(chartRows, [
+      { get: r => r.cInterest, cls: 'bar-interest-ghost', group: 0, label: 'odsetki (kontrakt)' },
+      { get: r => r.cPrincipal, cls: 'bar-principal-ghost', group: 0, label: 'kapitał (kontrakt)' },
+      { get: r => r.aInterest, cls: 'bar-interest', group: 1, label: 'odsetki (z nadpłatami)' },
+      { get: r => r.aPrincipal, cls: 'bar-principal', group: 1, label: 'kapitał (z nadpłatami)' },
+    ], o), { legendHTML: Sim.remainingCmpLegend() })
+    : '';
+
+  // ── Rejestr 7 zakładek what-if: capture (moduł→raw), apply (inputs→moduł,
+  // z przycięciem suwaków), compute (inputs→{ html, series }). compute liczy
+  // TYMI SAMYMI wywołaniami silnika co na żywo — kolumna porównania to ten sam
+  // wynik dla zapisanych wejść. `chart:false` gasi wykres wewnątrz kolumny
+  // (nakładka A vs B rysowana osobno). series = dane do nakładki (albo null). ──
+  const SCN = {
+    cojesli: {
+      capture: () => ({ month: simMonth, amount: simAmount, recurring: simRecurring }),
+      apply: inp => { simMonth = inp.month; simAmount = String(inp.amount); simRecurring = !!inp.recurring; return {}; },
+      compute: inp => {
+        // stopAtFire:false → seria biegnie do końca planu (nie urywa się na FIRE),
+        // więc nakładka A vs B nie „spada do zera", gdy jeden scenariusz osiąga
+        // FIRE wcześniej. fireYm/reached identyczne (stopAtFire nie wpływa na nie).
+        const sim = E.projectionWith(state, { extraSavings: { month: inp.month, amount: inp.amount, recurring: inp.recurring }, stopAtFire: false });
+        return { html: Sim.simulationResult({ baseFireYm, sim, month: inp.month }), series: sim.series };
+      },
+    },
+    wiek: {
+      capture: () => ({ age: symAge }),
+      apply: inp => { symAge = String(inp.age); return {}; },
+      compute: inp => {
+        const sol = E.solveExtraSavingsForAge(state, Math.round(inp.age * 12), { cap: SYM_CAP });
+        const plannedNow = E.plannedSavingsFor(d.plan, nowYm);
+        return { html: Sim.targetAgeResult({ sol, ageYears: inp.age, plannedNow, baseFireYm, cap: SYM_CAP }), series: null };
+      },
+    },
+    latte: {
+      capture: () => ({ amount: symLatte }),
+      apply: inp => { symLatte = String(inp.amount); return {}; },
+      compute: inp => {
+        const fv = y => E.futureValueOfMonthly(inp.amount, a.realReturnAnnual, y);
+        const sim = E.projectionWith(state, { extraMonthlySavings: inp.amount, stopAtFire: false });
+        return { html: Sim.latteResult({ amount: inp.amount, fv10: fv(10), fv20: fv(20), fv30: fv(30), sim, baseFireYm }), series: sim.series };
+      },
+    },
+    wiecej: {
+      capture: () => ({ extra: symMore }),
+      apply: inp => {
+        const v = Math.min(Math.max(0, inp.extra), moreMax);
+        symMore = String(v);
+        return { clamped: v !== inp.extra };
+      },
+      compute: inp => {
+        const sim = E.projectionWith(state, { extraMonthlySavings: inp.extra, stopAtFire: false });
+        return { html: Sim.moreSavingsResult({ extra: inp.extra, sim, baseFireYm }), series: sim.series };
+      },
+    },
+    zwrot: {
+      capture: () => ({ realReturnAnnual: symReturn }),
+      apply: inp => {
+        const v = Math.min(Math.max(retMin, inp.realReturnAnnual), retMax);
+        symReturn = String(v);
+        return { clamped: Math.abs(v - inp.realReturnAnnual) > 1e-9 };
+      },
+      compute: inp => {
+        // Zawsze pełny horyzont (stopAtFire:false) — spójna nakładka A vs B bez
+        // urwania na FIRE; fireYm identyczne jak w skróconej prognozie bazowej.
+        const sim = E.projectionWith(state, { assumptions: { realReturnAnnual: inp.realReturnAnnual }, stopAtFire: false });
+        return { html: Sim.returnResult({ newReturn: inp.realReturnAnnual, baseReturn: a.realReturnAnnual, sim, baseFireYm }), series: sim.series };
+      },
+    },
+    kredyt: {
+      capture: () => ({ principal: loanP, rate: loanR, term: loanT, extra: symLoanOp }),
+      apply: inp => {
+        symLoanP = String(inp.principal); symLoanR = String(inp.ratePct);
+        symLoanT = String(inp.termYears); symLoanOp = String(inp.extra);
+        return {};
+      },
+      compute: (inp, { chart = true } = {}) => {
+        const P = inp.principal, j = E.monthlyRate(inp.ratePct / 100), N = Math.round(inp.termYears * 12);
+        const payment = E.annuityPayment(P, j, N);
+        const base = E.remainingSchedule(P, j, payment);
+        const sim = inp.extra > 0 ? E.remainingSchedule(P, j, payment, inp.extra) : base;
+        const chartRows = E.remainingToPayComparison(P, base.rows, sim.rows);
+        const html = Sim.loanCalcResult({
+          payment, baseMonths: base.months, extra: inp.extra, simMonths: sim.months,
+          baseInterest: base.totalInterest, interestSaved: base.totalInterest - sim.totalInterest,
+          chartHTML: chart ? loanBars(chartRows, 'sym-kredyt', 'Kalkulator kredytu: ile zostało do spłaty') : '',
+        });
+        const series = E.yearlyRemainingToPay(sim.rows, P).map((r, k) => ({ ym: E.addMonths(nowYm, k * 12), val: r.principal + r.interest }));
+        return { html, series };
+      },
+    },
+    nadplata: {
+      capture: () => ({ loan: symOverpayLoan, extra: symOverpay }),
+      apply: inp => { symOverpayLoan = inp.loan; symOverpay = String(inp.extra); return {}; },
+      compute: (inp, { chart = true } = {}) => {
+        const an = inp.loan === 'family' ? opFa : opMa;
+        if (!an) return { html: '<div class="banner warn small">Ten kredyt jest już spłacony lub wyłączony.</div>', series: null, degraded: true };
+        const X = inp.extra;
+        const base = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment);
+        const sim = E.remainingSchedule(an.balanceNominal, an.rateMonthly, an.payment, X);
+        const chartRows = E.remainingToPayComparison(an.balanceNominal, base.rows, sim.rows);
+        const html = Sim.overpaymentResult({
+          amount: X,
+          basePayoffYm: E.addMonths(an.lastYm, base.months),
+          payoffYm: E.addMonths(an.lastYm, sim.months),
+          monthsSaved: base.months - sim.months,
+          interestSaved: base.totalInterest - sim.totalInterest,
+          chartHTML: chart ? loanBars(chartRows, 'sym-nadplata', 'Nadpłata: ile zostało do spłaty') : '',
+        });
+        const series = E.yearlyRemainingToPay(sim.rows, an.balanceNominal).map((r, k) => ({ ym: E.addMonths(an.lastYm, k * 12 + 1), val: r.principal + r.interest }));
+        return { html, series };
+      },
+    },
   };
 
+  // Wynik na żywo: normalize(capture) → komunikat (hint/error) lub compute.html.
+  const scnMessage = norm => norm.kind === 'error'
+    ? `<div class="field-error">${esc(norm.msg)}</div>`
+    : `<p class="muted small">${esc(norm.msg)}</p>`;
+  const live = tab => {
+    const norm = Sim.SCENARIO_SPECS[tab].normalize(SCN[tab].capture(), ctx);
+    return norm.ok ? SCN[tab].compute(norm.inputs).html : scnMessage(norm);
+  };
+
+  // ── Zakładki emerytalne (bez scenariuszy) — wynik jak dotąd ──
   const retirementResult = () => {
     const overrides = {};
     if (symRetPost != null) overrides.postReturnReal = Number(symRetPost);
@@ -1802,19 +1826,61 @@ function renderSymulacja(calc) {
     return Sim.crashResult({ st });
   };
 
+  // ── Kolumna porównania dla slotu i (0=A, 1=B): defensywny odczyt →
+  // compute z wygaszonym wykresem. Zwraca { label, describe, body, series }
+  // albo null (slot pusty/uszkodzony). Przeterminowany „cojesli" → nota. ──
+  const scenarioColumn = (tab, i) => {
+    const snap = Sim.readSnapshot(state.scenarios, tab, i, ctx);
+    if (!snap) return null;
+    const label = ['A', 'B'][i];
+    const describe = Sim.SCENARIO_SPECS[tab].describe(snap.inputs);
+    if (snap.stale) {
+      return { label, describe, series: null, body: '<div class="banner warn small">Miesiąc scenariusza już minął — zaktualizuj i zapisz ponownie.</div>' };
+    }
+    const res = SCN[tab].compute(snap.inputs, { chart: false });
+    return { label, describe, body: res.html, series: res.degraded ? null : res.series };
+  };
+
+  const buildScenariosCard = tab => {
+    const colA = scenarioColumn(tab, 0), colB = scenarioColumn(tab, 1);
+    let compareHTML = '';
+    if (colA || colB) {
+      let chartHTML = '', legendHTML = '';
+      if (colA && colB && colA.series && colB.series) {
+        const isLoan = tab === 'kredyt' || tab === 'nadplata';
+        const merged = Sim.mergeSeries(colA.series, colB.series, { yKey: isLoan ? 'val' : 'portfolio' });
+        if (merged.length > 1) {
+          const title = isLoan ? 'Ile zostało do spłaty: A vs B' : 'Portfel: scenariusz A vs B';
+          legendHTML = Sim.scenarioABLegend();
+          chartHTML = `<h4>${title}</h4>` + zoomable('scn-' + tab, title, o => chartSVG(merged, [
+            { get: r => r.a, cls: 'line-scn-a', label: 'A' },
+            { get: r => r.b, cls: 'line-scn-b', label: 'B' },
+          ], o), { legendHTML });
+        }
+      }
+      const note = colA && colB ? 'Oba scenariusze liczone są od dziś, według aktualnych założeń — zmiana planu przesuwa obie kolumny.' : '';
+      compareHTML = Sim.scenarioCompare({ a: colA, b: colB, chartHTML, legendHTML, note });
+    }
+    const slots = [0, 1].map(i => {
+      const snap = Sim.readSnapshot(state.scenarios, tab, i, ctx);
+      return snap ? { filled: true, summary: Sim.SCENARIO_SPECS[tab].describe(snap.inputs), savedAt: snap.savedAt } : { filled: false };
+    });
+    return Sim.scenariosCard({ slots, compareHTML });
+  };
+
   let body = '';
   if (calc === 'cojesli') {
-    body = Sim.whatIfCard({ nowYm, month: simMonth || nowYm, amount: simAmount, recurring: simRecurring, resultHTML: whatIfResult() });
+    body = Sim.whatIfCard({ nowYm, month: simMonth || nowYm, amount: simAmount, recurring: simRecurring, resultHTML: live('cojesli') });
   } else if (calc === 'wiek') {
-    body = Sim.targetAgeCard({ ageValue: symAge, defaultAge: a.targetFireAge, resultHTML: targetAgeResult() });
+    body = Sim.targetAgeCard({ ageValue: symAge, defaultAge: a.targetFireAge, resultHTML: live('wiek') });
   } else if (calc === 'latte') {
-    body = Sim.latteCard({ amountValue: symLatte, resultHTML: latteResult() });
+    body = Sim.latteCard({ amountValue: symLatte, resultHTML: live('latte') });
   } else if (calc === 'wiecej') {
-    body = Sim.moreSavingsCard({ value: symMore, max: moreMax, resultHTML: moreResult() });
+    body = Sim.moreSavingsCard({ value: symMore, max: moreMax, resultHTML: live('wiecej') });
   } else if (calc === 'kredyt') {
-    body = Sim.loanCalcCard({ principal: loanP, rate: loanR, term: loanT, amount: symLoanOp, resultHTML: loanCalcResult() });
+    body = Sim.loanCalcCard({ principal: loanP, rate: loanR, term: loanT, amount: symLoanOp, resultHTML: live('kredyt') });
   } else if (calc === 'nadplata') {
-    body = Sim.overpaymentCard({ loans: opLoans, activeLoan: symOverpayLoan, amount: symOverpay, resultHTML: overpayResult() });
+    body = Sim.overpaymentCard({ loans: opLoans, activeLoan: symOverpayLoan, amount: symOverpay, resultHTML: live('nadplata') });
   } else if (calc === 'emerytura') {
     body = Sim.retirementCard({
       value: symRetPost == null ? a.postRetirementReturnReal : Number(symRetPost),
@@ -1829,7 +1895,7 @@ function renderSymulacja(calc) {
   } else if (calc === 'krach') {
     body = Sim.crashCard({ pct: symCrashPct, deathAge: symCrashAge, resultHTML: crashResult() });
   } else {
-    body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: returnResult() });
+    body = Sim.returnCard({ value: symReturn, min: retMin, max: retMax, baseReturn: a.realReturnAnnual, resultHTML: live('zwrot') });
   }
 
   // Kalkulatory dokładające kwotę do planu — przypomnij, że liczy się sama
@@ -1837,10 +1903,13 @@ function renderSymulacja(calc) {
   // „Baristy" ani „Krachu" (czyste podglądy — nic nie dokładają do planu).
   const note = calc === 'zwrot' || calc === 'nadplata' || calc === 'kredyt' || calc === 'emerytura' || calc === 'barista' || calc === 'krach' ? '' : Sim.nadwyzkaNote();
 
-  view().innerHTML = symBack + body + note + symBack;
+  // Scenariusze A/B tylko dla 7 zakładek what-if (rejestr SCN); emerytalne bez.
+  const scnHTML = SCN[calc] ? buildScenariosCard(calc) : '';
+
+  view().innerHTML = symBack + body + note + scnHTML + symBack;
 
   if (calc === 'cojesli') {
-    const refresh = () => { const r = $('#sim-result'); if (r) r.innerHTML = whatIfResult(); };
+    const refresh = () => { const r = $('#sim-result'); if (r) r.innerHTML = live('cojesli'); };
     const simM = $('#sim-month');
     if (simM) simM.addEventListener('change', () => { simMonth = simM.value; refresh(); });
     const simA = $('#sim-amount');
@@ -1852,32 +1921,32 @@ function renderSymulacja(calc) {
     }));
   } else if (calc === 'wiek') {
     const ageEl = $('#sym-age');
-    if (ageEl) ageEl.addEventListener('input', () => { symAge = ageEl.value; $('#sym-age-result').innerHTML = targetAgeResult(); });
+    if (ageEl) ageEl.addEventListener('input', () => { symAge = ageEl.value; $('#sym-age-result').innerHTML = live('wiek'); });
   } else if (calc === 'latte') {
     const latteEl = $('#sym-latte');
-    if (latteEl) latteEl.addEventListener('input', () => { symLatte = latteEl.value; $('#sym-latte-result').innerHTML = latteResult(); });
+    if (latteEl) latteEl.addEventListener('input', () => { symLatte = latteEl.value; $('#sym-latte-result').innerHTML = live('latte'); });
   } else if (calc === 'wiecej') {
     const moreEl = $('#sym-more');
     if (moreEl) moreEl.addEventListener('input', () => {
       symMore = moreEl.value;
       $('#sym-more-val').textContent = Fmt.formatPLN(Number(symMore));
-      $('#sym-more-result').innerHTML = moreResult();
+      $('#sym-more-result').innerHTML = live('wiecej');
     });
   } else if (calc === 'kredyt') {
-    const refresh = () => { const r = $('#sym-loan-result'); if (r) r.innerHTML = loanCalcResult(); };
+    const refresh = () => { const r = $('#sym-loan-result'); if (r) r.innerHTML = live('kredyt'); };
     const pEl = $('#sym-loan-principal'); if (pEl) pEl.addEventListener('input', () => { symLoanP = pEl.value; refresh(); });
     const rEl = $('#sym-loan-rate'); if (rEl) rEl.addEventListener('input', () => { symLoanR = rEl.value; refresh(); });
     const tEl = $('#sym-loan-term'); if (tEl) tEl.addEventListener('input', () => { symLoanT = tEl.value; refresh(); });
     const opEl = $('#sym-loan-op');
     if (opEl) opEl.addEventListener('input', () => {
       symLoanOp = opEl.value;
-      $('#sym-loan-result').innerHTML = loanCalcResult();
+      $('#sym-loan-result').innerHTML = live('kredyt');
     });
   } else if (calc === 'nadplata') {
     const opEl = $('#sym-overpay');
     if (opEl) opEl.addEventListener('input', () => {
       symOverpay = opEl.value;
-      $('#sym-overpay-result').innerHTML = overpayResult();
+      $('#sym-overpay-result').innerHTML = live('nadplata');
     });
     $$('[data-oploan]').forEach(el => el.addEventListener('click', () => {
       symOverpayLoan = el.dataset.oploan;
@@ -1918,8 +1987,42 @@ function renderSymulacja(calc) {
     if (retEl) retEl.addEventListener('input', () => {
       symReturn = retEl.value;
       $('#sym-return-val').textContent = Fmt.formatPct(Number(symReturn));
-      $('#sym-return-result').innerHTML = returnResult();
+      $('#sym-return-result').innerHTML = live('zwrot');
     });
+  }
+
+  // ── Zdarzenia scenariuszy A/B (zapis wejść, wczytanie, usunięcie) ──
+  // Mutacje trywialne — nic pochodnego się nie zmienia, więc bez
+  // recomputeDerived; persist() zapisuje (derived zdejmowane przy zapisie).
+  if (SCN[calc]) {
+    const AB = ['A', 'B'];
+    $$('[data-scn-save]').forEach(el => el.addEventListener('click', () => {
+      const i = +el.dataset.scnSave;
+      const norm = Sim.SCENARIO_SPECS[calc].normalize(SCN[calc].capture(), ctx);
+      if (!norm.ok) { toast(norm.msg, 5000); return; }
+      if (!Array.isArray(state.scenarios[calc])) state.scenarios[calc] = [null, null];
+      state.scenarios[calc][i] = { savedAt: new Date().toISOString(), inputs: norm.inputs };
+      persist();
+      renderSymulacja(calc);
+      toast('Zapisano scenariusz ' + AB[i]);
+    }));
+    $$('[data-scn-load]').forEach(el => el.addEventListener('click', () => {
+      const i = +el.dataset.scnLoad;
+      const snap = Sim.readSnapshot(state.scenarios, calc, i, ctx);
+      if (!snap) return;
+      const { clamped } = SCN[calc].apply(snap.inputs);
+      renderSymulacja(calc);
+      if (clamped) toast('Wartość spoza zakresu suwaka — przycięto.', 5000);
+    }));
+    $$('[data-scn-del]').forEach(el => el.addEventListener('click', () => {
+      const i = +el.dataset.scnDel;
+      if (!Array.isArray(state.scenarios[calc])) return;
+      state.scenarios[calc][i] = null;
+      if (!state.scenarios[calc][0] && !state.scenarios[calc][1]) delete state.scenarios[calc];
+      persist();
+      renderSymulacja(calc);
+      toast('Usunięto scenariusz ' + AB[i]);
+    }));
   }
 }
 

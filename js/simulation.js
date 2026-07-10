@@ -1,7 +1,12 @@
 // simulation.js — czyste buildery HTML ekranu „Symulacja" (#/symulacja).
 // Zero DOM, zero stanu modułu: dane (wyniki z engine.js) wchodzą parametrami,
 // wychodzi string. Mirror analysis.js. Silnik liczy się w ui.js; tutaj tylko
-// prezentacja. Wszystkie kalkulatory to czyste „co jeśli" — nic nie zapisujemy.
+// prezentacja. Wszystkie kalkulatory to czyste „co jeśli" — WYNIKÓW nie
+// zapisujemy nigdy. Jedyna zapisywana rzecz to state.scenarios: zakładkowe
+// WEJŚCIA what-if (2 sloty A/B na kalkulator), które pipeline pochodny
+// (recomputeDerived) w ogóle nie czyta — zakładki pytań, nie odpowiedzi.
+// SCENARIO_SPECS (normalize/describe) + readSnapshot/mergeSeries są czyste
+// i testowalne w Node; ui.js dokłada tylko obsługę zdarzeń i wykresy nakładki.
 
 import * as E from './engine.js';
 import * as Fmt from './format.js';
@@ -433,5 +438,238 @@ export function retirementCard({ value, base, freeze, pension, pensionAge, resul
     <label class="field"><span class="lbl">Wiek emerytalny (ZUS)</span>
       <input type="text" id="sym-ret-page" inputmode="numeric" value="${esc(pensionAge)}"></label>
     <div id="sym-ret-result">${resultHTML}</div>
+  </div>`;
+}
+
+// ── Scenariusze A/B: zapis WEJŚĆ what-if (2 sloty na kalkulator) ──────────
+// Wszystko poniżej jest czyste — walidacja/kanonizacja wejść (normalize),
+// opis slotu po polsku (describe), defensywny odczyt (readSnapshot) i zip
+// dwóch serii do nakładki (mergeSeries). ui.js liczy wynik przez te same
+// wywołania silnika co na żywo i przekazuje gotowe stringi do builderów.
+
+const err = (msg, kind) => ({ ok: false, msg, kind });     // kind: 'hint' | 'error'
+const okIn = inputs => ({ ok: true, inputs });
+
+// „YYYY-MM" → „MM.YYYY" (opis slotu; NBSP tylko w kwotach, nie w dacie).
+function mmYyyy(ym) { return `${ym.slice(5, 7)}.${ym.slice(0, 4)}`; }
+
+// Kwota z pola tekstowego (string pl-PL) LUB z zapisanych, już-kanonicznych
+// wejść (number). Kluczowe dla idempotencji: readSnapshot rewaliduje slot,
+// podając normalize z powrotem LICZBĘ — String(2500.5) = „2500.5" wpadłby w
+// regułę kropki parsePLN i zwrócił null, więc liczby przepuszczamy wprost.
+// → { empty } (puste pole) | { bad } (nieparsowalne) | { val } (liczba grosze).
+function readAmount(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? { val: E.roundGrosze(v) } : { bad: true };
+  const s = String(v == null ? '' : v).trim();
+  if (s === '') return { empty: true };
+  const n = Fmt.parsePLN(s);
+  return n == null ? { bad: true } : { val: E.roundGrosze(n) };
+}
+
+// Rejestr per zakładka: normalize(raw, ctx) → { ok, inputs } | { ok:false, msg, kind };
+// describe(inputs) → krótki polski opis; isStale?(inputs, ctx) → bool (tylko
+// „cojesli": miesiąc przeterminowany). ctx = { nowYm, currentAge, defaultAge,
+// baseReturn, atSave } — dostarczany przez ui.js ze stanu/derived. atSave !== false
+// (domyślnie zapis) egzekwuje bramki czasowe; przy odczycie (atSave:false)
+// pomijamy je, żeby przeterminowany slot dało się jeszcze opisać/wczytać.
+export const SCENARIO_SPECS = {
+  cojesli: {
+    normalize(raw, ctx) {
+      const month = raw.month || ctx.nowYm;
+      if (!E.isValidYm(month)) return err('Wybierz bieżący lub przyszły miesiąc.', 'hint');
+      if (ctx.atSave !== false && E.ymToIdx(month) < E.ymToIdx(ctx.nowYm)) {
+        return err('Wybierz bieżący lub przyszły miesiąc.', 'hint');
+      }
+      const amt = readAmount(raw.amount);
+      if (amt.empty) return err('Podaj kwotę, aby zobaczyć wpływ na datę FIRE.', 'hint');
+      if (amt.bad) return err('Nieprawidłowa kwota', 'error');
+      return okIn({ month, amount: amt.val, recurring: !!raw.recurring });
+    },
+    describe(inp) {
+      return inp.recurring
+        ? `co miesiąc ${signed(inp.amount)} od ${mmYyyy(inp.month)}`
+        : `jednorazowo ${money(inp.amount)} w ${mmYyyy(inp.month)}`;
+    },
+    isStale(inp, ctx) { return E.ymToIdx(inp.month) < E.ymToIdx(ctx.nowYm); },
+  },
+
+  wiek: {
+    normalize(raw, ctx) {
+      const aRaw = readAmount(raw.age);
+      if (aRaw.bad) return err('Podaj docelowy wiek.', 'error');
+      const age = aRaw.empty ? ctx.defaultAge : aRaw.val;
+      if (age == null || age <= 0) return err('Podaj docelowy wiek.', 'error');
+      if (ctx.atSave !== false && ctx.currentAge != null && age <= ctx.currentAge) {
+        return err(`Podaj wiek większy niż Twój obecny (${ctx.currentAge}).`, 'hint');
+      }
+      return okIn({ age });
+    },
+    describe(inp) { return `wiek ${inp.age}`; },
+  },
+
+  latte: {
+    normalize(raw) {
+      const amt = readAmount(raw.amount);
+      if (amt.empty) return err('Podaj miesięczną kwotę, aby zobaczyć efekt.', 'hint');
+      if (amt.bad || amt.val <= 0) return err('Podaj dodatnią kwotę.', 'error');
+      return okIn({ amount: amt.val });
+    },
+    describe(inp) { return `${money(inp.amount)}/mies.`; },
+  },
+
+  wiecej: {
+    normalize(raw) {
+      const v = raw.extra == null || raw.extra === '' ? 0 : Number(raw.extra);
+      if (!Number.isFinite(v) || !v) {
+        return err('Przesuń suwak, aby zobaczyć, o ile wcześniej osiągniesz FIRE.', 'hint');
+      }
+      return okIn({ extra: E.roundGrosze(v) });
+    },
+    describe(inp) { return `+${money(inp.extra)}/mies.`; },
+  },
+
+  zwrot: {
+    normalize(raw, ctx) {
+      const v = raw.realReturnAnnual == null || raw.realReturnAnnual === ''
+        ? ctx.baseReturn : Number(raw.realReturnAnnual);
+      if (!Number.isFinite(v)) return err('Nieprawidłowy zwrot.', 'error');
+      return okIn({ realReturnAnnual: v });
+    },
+    describe(inp) { return `zwrot ${Fmt.formatPct(inp.realReturnAnnual)}`; },
+  },
+
+  kredyt: {
+    normalize(raw) {
+      // Klucze pola surowego (rate/term) LUB kanoniczne (ratePct/termYears) —
+      // normalize musi być idempotentny (readSnapshot podaje z powrotem kanon).
+      const P = Fmt.parsePLN(raw.principal);
+      const R = Fmt.parsePLN(raw.rate != null ? raw.rate : raw.ratePct);
+      const T = Fmt.parsePLN(raw.term != null ? raw.term : raw.termYears);
+      if (P == null || R == null || T == null) return err('Uzupełnij poprawnie wszystkie pola.', 'error');
+      if (!(P > 0)) return err('Podaj dodatnią kwotę kredytu.', 'hint');
+      if (R < 0) return err('Oprocentowanie nie może być ujemne.', 'error');
+      if (!(T > 0)) return err('Podaj okres kredytu w latach.', 'hint');
+      if (!(Math.round(T * 12) > 0)) return err('Podaj okres kredytu w latach.', 'hint');
+      const eAmt = readAmount(raw.extra);
+      if (eAmt.bad) return err('Podaj nadpłatę: 0 lub więcej.', 'error');
+      const extra = eAmt.empty ? 0 : eAmt.val;
+      if (extra < 0) return err('Podaj nadpłatę: 0 lub więcej.', 'error');
+      return okIn({ principal: E.roundGrosze(P), ratePct: R, termYears: T, extra });
+    },
+    describe(inp) {
+      const yrs = Math.round(inp.termYears);
+      const parts = [money(inp.principal), Fmt.formatPct(inp.ratePct / 100), `${yrs} ${Fmt.polishYears(yrs)}`];
+      parts.push(inp.extra > 0 ? `nadpłata ${money(inp.extra)}/mies.` : 'bez nadpłaty');
+      return parts.join(' · ');
+    },
+  },
+
+  nadplata: {
+    normalize(raw) {
+      const loan = raw.loan === 'family' ? 'family' : 'mortgage';
+      const eAmt = readAmount(raw.extra);
+      if (eAmt.bad) return err('Podaj nadpłatę: 0 lub więcej.', 'error');
+      const extra = eAmt.empty ? 0 : eAmt.val;
+      if (extra < 0) return err('Podaj nadpłatę: 0 lub więcej.', 'error');
+      return okIn({ loan, extra });
+    },
+    describe(inp) {
+      const label = inp.loan === 'family' ? 'dług rodzinny 👨‍👩‍👧' : 'kredyt 🏠';
+      return `${label} · nadpłata ${money(inp.extra)}/mies.`;
+    },
+  },
+};
+
+// Defensywny odczyt slotu: zwraca { inputs, savedAt, stale } tylko gdy slot
+// istnieje i jego wejścia przechodzą normalize w trybie odczytu (atSave:false —
+// bramki czasowe rozluźnione). Cokolwiek uszkodzonego (brak pola, NaN, zły typ,
+// nie-tablica zakładki) → null; kolumna renderuje się wtedy jako pusta i przy
+// najbliższym zapisie na tę zakładkę zostaje po cichu nadpisana.
+export function readSnapshot(scenarios, tab, i, ctx) {
+  const arr = scenarios && scenarios[tab];
+  if (!Array.isArray(arr)) return null;
+  const slot = arr[i];
+  if (!slot || typeof slot !== 'object' || !slot.inputs || typeof slot.inputs !== 'object') return null;
+  const spec = SCENARIO_SPECS[tab];
+  if (!spec) return null;
+  const n = spec.normalize(slot.inputs, { ...ctx, atSave: false });
+  if (!n.ok) return null;
+  return { inputs: n.inputs, savedAt: slot.savedAt || null, stale: spec.isStale ? spec.isStale(n.inputs, ctx) : false };
+}
+
+// Zip dwóch serii silnika do [{ ym, a, b }] wyrównanych pozycyjnie (obie serie
+// startują w tym samym miesiącu/roku i krokują równo); krótszą dopełniamy null.
+// `xKey` = pole wyrównania (domyślnie „ym"), `yKey` = wartość. Czysta —
+// tablic wejściowych nie ruszamy.
+export function mergeSeries(a, b, { xKey = 'ym', yKey = 'portfolio' } = {}) {
+  const A = Array.isArray(a) ? a : [], B = Array.isArray(b) ? b : [];
+  const n = Math.max(A.length, B.length);
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const ra = A[i], rb = B[i], base = ra || rb;
+    rows.push({ ym: base ? base[xKey] : null, a: ra ? ra[yKey] : null, b: rb ? rb[yKey] : null });
+  }
+  return rows;
+}
+
+// Karta „Scenariusze A/B 📌": dwa wiersze slotów + podpowiedź o trwałości +
+// sekcja porównania (compareHTML zbudowana w ui.js — potrzebuje silnika/wykresu).
+// slots[i] = { filled, summary, savedAt } (summary = describe(inputs) lub '').
+export function scenariosCard({ slots, compareHTML = '' }) {
+  const labels = ['A', 'B'];
+  const rows = slots.map((s, i) => {
+    const filled = !!(s && s.filled);
+    const summary = filled ? esc(s.summary) : '<span class="muted">pusty</span>';
+    const when = filled && s.savedAt
+      ? `<div class="scn-when muted small">zapisano ${esc(mmYyyy(String(s.savedAt).slice(0, 7)))}</div>` : '';
+    const buttons = [
+      `<button type="button" data-scn-save="${i}">Zapisz jako ${labels[i]}</button>`,
+      filled ? `<button type="button" class="ghost" data-scn-load="${i}">Wczytaj</button>` : '',
+      filled ? `<button type="button" class="ghost" data-scn-del="${i}">Usuń</button>` : '',
+    ].filter(Boolean).join('');
+    return `<div class="scn-slot">
+      <div class="scn-slot-head"><b>${labels[i]}:</b> ${summary}</div>
+      ${when}
+      <div class="btn-row">${buttons}</div>
+    </div>`;
+  }).join('');
+  return `<div class="card"><h2>Scenariusze A/B 📌</h2>
+    <p class="muted small">Zapisz ustawienia tego kalkulatora jako scenariusz A i B — wrócisz do nich później i zobaczysz oba obok siebie.</p>
+    <div class="scn-slots">${rows}</div>
+    <p class="muted small">Zapisujemy tylko ustawienia tego kalkulatora (scenariusze A/B) — nigdy wyników. Twoje wpisy i założenia pozostają jedynym źródłem prawdy.</p>
+    ${compareHTML}
+  </div>`;
+}
+
+// Legenda nakładki A vs B (wspólna z powiększeniem pełnoekranowym).
+export function scenarioABLegend(labelA = 'A', labelB = 'B') {
+  return `<div class="legend">
+        <span><i style="background:var(--accent)"></i>${esc(labelA)}</span>
+        <span><i style="background:var(--flame)"></i>${esc(labelB)}</span>
+      </div>`;
+}
+
+// Sekcja porównania: nagłówki A|B z opisami, dwie kolumny wyniku w .scn-grid,
+// wspólny wykres nakładki + legenda i uwaga „liczone od dziś". Przy jednym
+// wypełnionym slocie: jedna kolumna + zachęta do zapisania drugiego.
+// a/b = { label, describe, body } (body = gotowy HTML wyniku bez własnego
+// wykresu) albo null.
+export function scenarioCompare({ a, b, chartHTML = '', legendHTML = '', note = '' }) {
+  const present = [a, b].filter(Boolean);
+  if (!present.length) return '';
+  const col = c => `<div class="scn-col">
+      <div class="scn-col-head"><b>${esc(c.label)}</b> <span class="muted small">${esc(c.describe)}</span></div>
+      <div class="scn-col-body">${c.body}</div>
+    </div>`;
+  if (present.length === 1) {
+    return `<div class="scn-compare"><h3>Porównanie A / B</h3>
+      <div class="scn-grid one">${col(present[0])}</div>
+      <p class="muted small">Zapisz drugi scenariusz, aby porównać obok siebie.</p>
+    </div>`;
+  }
+  return `<div class="scn-compare"><h3>Porównanie A / B</h3>
+    <div class="scn-grid">${col(a)}${col(b)}</div>
+    ${chartHTML ? `<div class="scn-chart">${chartHTML}${legendHTML}</div>` : ''}
+    ${note ? `<p class="muted small">${esc(note)}</p>` : ''}
   </div>`;
 }

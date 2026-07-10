@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (248 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (258 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -61,7 +61,12 @@ bundler — the browser loads the modules directly.
   params, an HTML string comes out. Has a local `esc()` for user-derived text.
 - **`simulation.js`** — pure HTML builders for the **Symulacja** screen
   (`#/symulacja`); a mirror of `analysis.js`. All calculators are read-only
-  "what-if" — **nothing here is ever persisted.** Reuses `fireCell` from `analysis.js`.
+  "what-if" — **results are never persisted; the only persisted thing is
+  `state.scenarios`** — saved what-if *inputs* (2 slots A/B per calculator),
+  which the derived pipeline never reads. The pure scenario logic
+  (`SCENARIO_SPECS` = per-tab `normalize`/`describe`, plus `readSnapshot` and
+  `mergeSeries`) lives here and is Node-tested (F49); `ui.js` adds only glue and
+  the overlay charts. Reuses `fireCell` from `analysis.js`.
 - **`motivation.js`** — pure HTML builders for the emotional-feedback layer: the
   post-check-in **modal** (`checkinModal`) and the **Pulpit** „Dzisiejsza decyzja"
   card (`decisionCard`/`avoidedResult`/`spentResult`). Zero DOM/state, local `esc()`.
@@ -142,6 +147,7 @@ and, if it's a top-level tab, the `#tabbar` list in `index.html`.
                  ikeIkze: { enabled, employmentForm, pitRate, ikeStart, ikzeStart } },
   entries:     [ … monthly check-ins (incl. an optional inert `note`, ≤200 chars) … ],
   events:      [ … planned one-off {id, month, amount(signed real PLN), label, createdAt} … ],
+  scenarios:   { <tabKey>: [slotA|null, slotB|null] },  // Symulacja A/B — saved what-if INPUTS only, never read by the pipeline
   ui:          { theme, installTipDismissed, reminderTipShown, lastExportAt,
                  milestonesSeen } }   // celebrated milestone keys — once ever
 ```
@@ -408,6 +414,27 @@ future expense raises `solveExtraSavingsForAge`'s requirement); and the
 export/import round-trip preserving `events` exactly. A state with no events is
 byte-identical to prior behavior — the regression guard is the rest of the suite
 passing untouched.
+F49 covers the Symulacja A/B scenario snapshots (`state.scenarios`, schema v11):
+the `createState` default (`scenarios: {}`) + `version 11`/`SCHEMA_VERSION 11`;
+the v10→v11 migration (missing `scenarios` → `{}`, explicit map untouched, a
+garbage array normalized to `{}` by the `case 10` guard, full v1 chain, unknown
+version still throws); validation (a pre-v11 blob without the key passes via the
+`!= null` gate, a v11 `{}` passes, `scenarios: []`/`'x'` rejected); the pure
+`SCENARIO_SPECS[tab].normalize` (pl-PL string → grosze canonicalization for the
+text tabs, `Number` for the sliders, `recurring` coerced to bool, every existing
+Polish hint/error message preserved verbatim, `ctx`/input purity) and `describe`
+(exact chip strings incl. NBSP grouping, one per tab); `readSnapshot` (valid slot
+round-trips, malformed/NaN/non-array → `null`, a past-month `cojesli` slot
+returned with `stale: true`); `mergeSeries` (equal/unequal lengths with null
+padding, custom `yKey`, empty inputs, input-array purity); compute equivalence (a
+snapshot's inputs fed to `projectionWith` give the identical `fireYm`/series as
+the live path after a JSON round-trip); pipeline independence (`recomputeDerived`
+projection/balances/streak bit-identical with `scenarios: {}` vs fully populated
+slots — nothing in the derived pipeline reads scenarios); and the storage
+round-trip (`save`/`load` + `exportJSON`→`importJSON` preserve `scenarios`
+deep-equal, `stripDerived` leaves them in place). The `ui.js` glue (save/load/del
+events, `applyInputs` slider clamping, overlay charts) is DOM — manual QA, not
+Node.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.
