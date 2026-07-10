@@ -5,6 +5,7 @@ import * as E from '../js/engine.js';
 import * as F from '../js/format.js';
 import * as S from '../js/storage.js';
 import * as Sim from '../js/simulation.js';
+import { annualReportScreen } from '../js/analysis.js';
 import { coachMessage, checkinCelebration, decisionMessage, milestoneMessage } from '../js/coach.js';
 import { chartSVG, stackedBarSVG, tipHit } from '../js/charts.js';
 import { FIX } from './fixtures.js';
@@ -4342,4 +4343,32 @@ test('F49j: round-trip storage — save/load i export/import zachowują scenario
   const back = S.importJSON(S.exportJSON(st));
   assertEq(JSON.stringify(back.scenarios), JSON.stringify(st.scenarios), 'export/import zachowuje scenarios');
   assertEq(back.version, S.SCHEMA_VERSION);
+});
+
+// ── F50: nawigacja raportu rocznego — najbliższy rok z wpisami, także przez lukę ──
+// annualReportScreen jest czysty: {rep, years} → HTML. `years` przychodzi malejąco
+// z engine.reportYears, więc sąsiad to najbliższy istniejący rok, nie rep.year ± 1.
+
+const repFor = year => ({ year, from: `${year}-01`, to: `${year}-12`, entriesCount: 0 });
+
+test('F50a: luka w latach — raport linkuje do najbliższego roku z wpisami, nie do rep.year ± 1', () => {
+  const years = [2024, 2022];                       // brak wpisów w 2023
+  const top = annualReportScreen({ rep: repFor(2024), years });
+  assertTrue(top.includes('href="#/raport/2022"'), '2024 → wstecz do 2022 (przeskok luki)');
+  assertTrue(!top.includes('href="#/raport/2023"'), 'nie linkuje do roku bez wpisów');
+  assertTrue(!top.includes('href="#/raport/2025"'), 'brak linku w przód z najnowszego roku');
+
+  const bottom = annualReportScreen({ rep: repFor(2022), years });
+  assertTrue(bottom.includes('href="#/raport/2024"'), '2022 → w przód do 2024 (przeskok luki)');
+  assertTrue(!bottom.includes('href="#/raport/2021"'), 'brak linku wstecz z najstarszego roku');
+});
+
+test('F50b: lata sąsiadujące i pojedynczy rok — nawigacja bez zmian', () => {
+  const years = [2026, 2025, 2024];
+  const mid = annualReportScreen({ rep: repFor(2025), years });
+  assertTrue(mid.includes('href="#/raport/2024"') && mid.includes('href="#/raport/2026"'), 'środkowy rok ma oba kierunki');
+
+  const only = annualReportScreen({ rep: repFor(2026), years: [2026] });
+  assertTrue(!only.includes('href="#/raport/'), 'jedyny rok → brak linków do lat');
+  assertTrue(only.includes('href="#/history"'), 'powrót do Historii zawsze obecny');
 });

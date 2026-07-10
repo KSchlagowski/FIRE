@@ -17,7 +17,7 @@ When a question isn't answered here, check the plan file first.
 ## Commands
 
 ```bash
-node tests/run-tests.js      # engine test suite; exit 0 = all green (258 tests)
+node tests/run-tests.js      # engine test suite; exit 0 = all green (260 tests)
 python -m http.server 8000   # serve at http://localhost:8000/ (SW works on localhost)
 ```
 
@@ -435,6 +435,13 @@ round-trip (`save`/`load` + `exportJSON`→`importJSON` preserve `scenarios`
 deep-equal, `stripDerived` leaves them in place). The `ui.js` glue (save/load/del
 events, `applyInputs` slider clamping, overlay charts) is DOM — manual QA, not
 Node.
+F50 covers the annual report's year navigation in `annualReportScreen` — the only
+`analysis.js` builder the Node suite imports directly. `reportYears` lists only
+years that *have entries*, descending, so prev/next resolve to the nearest existing
+year via `find`, not `rep.year ± 1`: a calendar gap (entries in 2022 and 2024, none
+in 2023) must still link 2024 ↔ 2022, never 2023, and the outermost years get no
+link in the dead direction. Contiguous years and the single-year case are pinned as
+no-regression guards.
 
 When you change engine behavior, **update or add a fixture** — the Excel-derived
 numbers are the spec. Prefer adding a test over eyeballing a screenshot.

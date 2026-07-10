@@ -547,9 +547,13 @@ export function annualReportScreen({ rep, years }) {
     ${clamped ? `<p class="muted small">Raport obejmuje ${ymShort(rep.from)} – ${ymShort(rep.to)} (część roku w planie).</p>` : ''}
   </div>`;
 
-  // Nawigacja: sąsiednie lata z wpisami + powrót do Historii.
-  const prevY = years.includes(rep.year - 1) ? `<a class="btn" href="#/raport/${rep.year - 1}">← ${rep.year - 1}</a>` : '';
-  const nextY = years.includes(rep.year + 1) ? `<a class="btn" href="#/raport/${rep.year + 1}">${rep.year + 1} →</a>` : '';
+  // Nawigacja: najbliższe lata z wpisami + powrót do Historii.
+  // `years` jest malejąco (engine.reportYears), więc find() trafia w najbliższy sąsiedni rok
+  // także wtedy, gdy w kalendarzu jest luka (np. wpisy w 2022 i 2024, brak w 2023).
+  const prev = years.find(y => y < rep.year);
+  const next = [...years].reverse().find(y => y > rep.year);
+  const prevY = prev ? `<a class="btn" href="#/raport/${prev}">← ${prev}</a>` : '';
+  const nextY = next ? `<a class="btn" href="#/raport/${next}">${next} →</a>` : '';
   const nav = `${prevY || nextY ? `<div class="btn-row">${prevY}${nextY}</div>` : ''}
     <a class="btn ghost wide" href="#/history">← Historia</a>`;
 
