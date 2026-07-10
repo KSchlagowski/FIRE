@@ -4,6 +4,7 @@
 import * as E from '../js/engine.js';
 import * as F from '../js/format.js';
 import * as S from '../js/storage.js';
+import * as Sim from '../js/simulation.js';
 import { coachMessage, checkinCelebration, decisionMessage, milestoneMessage } from '../js/coach.js';
 import { chartSVG, stackedBarSVG, tipHit } from '../js/charts.js';
 import { FIX } from './fixtures.js';
@@ -3863,11 +3864,10 @@ test('F45e: krawędzie — lata poza planem, rok bieżący, pusty rok, reportYea
 
 const findRow = (proj, ym) => proj.series.find(r => r.ym === ym);
 
-test('F48a: domyślne i schemat — createState.events = [], version 10, SCHEMA_VERSION 10', () => {
+test('F48a: domyślne i schemat — createState.events = [], version = SCHEMA_VERSION', () => {
   const st = E.createState({}, NOW);
   assertTrue(Array.isArray(st.events) && st.events.length === 0, 'events = []');
-  assertEq(st.version, 10, 'version 10');
-  assertEq(S.SCHEMA_VERSION, 10, 'SCHEMA_VERSION 10');
+  assertEq(st.version, S.SCHEMA_VERSION, 'createState nadaje najnowszą wersję');
 });
 
 test('F48b: migracja — v9 zyskuje events=[]; łańcuch v1 też; jawna lista nietknięta', () => {
@@ -4093,5 +4093,253 @@ test('F48l: round-trip eksport/import zachowuje zdarzenia dokładnie', () => {
   E.addEvent(st, { month: '2030-03', amount: 100000, label: 'Spadek' }, NOW);
   const back = S.importJSON(S.exportJSON(st));
   assertEq(JSON.stringify(back.events), JSON.stringify(st.events), 'events przeżywają round-trip');
+  assertEq(back.version, S.SCHEMA_VERSION);
+});
+
+// ── F49: scenariusze A/B w Symulacji (state.scenarios) — schemat v11 ───────
+// Zapisujemy tylko WEJŚCIA what-if (2 sloty na kalkulator), nigdy wyniki;
+// pipeline pochodny ich nie czyta. Cała logika czysta (SCENARIO_SPECS,
+// readSnapshot, mergeSeries) — testowalna w Node. Regułą regresji jest reszta
+// pakietu przechodząca bez zmian dla stanu bez scenariuszy.
+
+const NB = ' '; // NBSP — grupowanie w formatPLN
+
+// ctx dla normalize/readSnapshot dla stanu testowego (birthDate 2000-01, NOW 2026-07 → wiek 26).
+const scnCtx = { nowYm: '2026-07', currentAge: 26, defaultAge: 45, baseReturn: 0.05 };
+
+function memBacking() {
+  const m = new Map();
+  return {
+    getItem: k => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)),
+    removeItem: k => m.delete(k),
+  };
+}
+
+test('F49a: schemat — createState.scenarios = {}, version 11, SCHEMA_VERSION 11', () => {
+  const st = E.createState({}, NOW);
+  assertTrue(st.scenarios && typeof st.scenarios === 'object' && !Array.isArray(st.scenarios), 'scenarios = {}');
+  assertEq(Object.keys(st.scenarios).length, 0, 'pusta mapa na start');
+  assertEq(st.version, 11, 'version 11');
+  assertEq(S.SCHEMA_VERSION, 11, 'SCHEMA_VERSION 11');
+});
+
+test('F49b: migracja — v10 zyskuje scenarios={}; łańcuch v1 też; śmieciowa tablica normalizowana; nieznana wersja rzuca', () => {
+  const st = baseState();
+  // v10 → v11: brak klucza dołożony jako {}.
+  const v10 = JSON.parse(JSON.stringify(st));
+  v10.version = 10;
+  delete v10.scenarios;
+  const m10 = S.migrate(S.validateState(v10));
+  assertEq(m10.version, S.SCHEMA_VERSION);
+  assertTrue(m10.scenarios && typeof m10.scenarios === 'object' && !Array.isArray(m10.scenarios), 'scenarios dołożone jako {}');
+  // Jawna mapa scenariuszy przeżywa migrację bez zmian.
+  const v10b = JSON.parse(JSON.stringify(st));
+  v10b.version = 10;
+  v10b.scenarios = { wiecej: [{ savedAt: 'x', inputs: { extra: 1500 } }, null] };
+  const m10b = S.migrate(S.validateState(v10b));
+  assertEq(JSON.stringify(m10b.scenarios), JSON.stringify(v10b.scenarios), 'jawna mapa nietknięta');
+  // migrate na blobie ≤v10 ze śmieciową TABLICĄ scenarios → {} (strażnik case 10).
+  const junk = JSON.parse(JSON.stringify(st));
+  junk.version = 10;
+  junk.scenarios = ['śmieci'];
+  const mjunk = S.migrate(junk);
+  assertTrue(Array.isArray(mjunk.scenarios) === false && typeof mjunk.scenarios === 'object', 'śmieciowa tablica → {}');
+  assertEq(Object.keys(mjunk.scenarios).length, 0);
+  // Łańcuch od v1 dokłada scenarios po drodze (1→…→11).
+  const v1 = JSON.parse(JSON.stringify(st));
+  v1.version = 1;
+  delete v1.scenarios;
+  delete v1.events;
+  delete v1.housing.housePlan.familyLoan;
+  delete v1.debt.familyOverrides;
+  delete v1.assumptions.postRetirementReturnReal;
+  delete v1.assumptions.freezeExpensesAtRetirement;
+  delete v1.assumptions.pensionMonthly;
+  delete v1.assumptions.pensionAge;
+  delete v1.taxes;
+  const m1 = S.migrate(S.validateState(v1));
+  assertEq(m1.version, S.SCHEMA_VERSION, 'łańcuch 1→…→11');
+  assertTrue(m1.scenarios && !Array.isArray(m1.scenarios), 'scenarios dołożone w łańcuchu');
+  // Nieznana wersja nadal rzuca.
+  const bad = JSON.parse(JSON.stringify(st));
+  bad.version = 99;
+  assertThrows(() => S.migrate(bad), 'nieznana wersja rzuca');
+});
+
+test('F49c: walidacja — v10 bez klucza i v11 z {} przechodzą; tablica / string odrzucone', () => {
+  const st = baseState();
+  const v10 = JSON.parse(JSON.stringify(st));
+  v10.version = 10;
+  delete v10.scenarios;
+  assertEq(S.validateState(v10).version, 10, 'v10 bez scenarios przechodzi (klucz undefined)');
+  const v11 = JSON.parse(JSON.stringify(st)); // baseState już ma scenarios:{}
+  assertEq(S.validateState(v11).version, 11, 'v11 z {} przechodzi');
+  const arr = JSON.parse(JSON.stringify(st)); arr.scenarios = [];
+  assertThrows(() => S.validateState(arr), 'scenarios:[] odrzucone');
+  const strv = JSON.parse(JSON.stringify(st)); strv.scenarios = 'x';
+  assertThrows(() => S.validateState(strv), "scenarios:'x' odrzucone");
+});
+
+test('F49d: normalize — kanonizacja pl-PL + roundGrosze + recurring bool; dokładne komunikaty; czystość', () => {
+  // cojesli: „2 500,50" → 2500.5, recurring wymuszony na bool.
+  const raw = { month: '2027-03', amount: '2 500,50', recurring: 1 };
+  const n = Sim.SCENARIO_SPECS.cojesli.normalize(raw, scnCtx);
+  assertTrue(n.ok, 'cojesli ok');
+  assertEq(n.inputs.amount, 2500.5, 'pl-PL sparsowane + grosze');
+  assertEq(n.inputs.recurring, true, 'recurring→bool');
+  assertEq(raw.amount, '2 500,50', 'wejście nietknięte (czystość)');
+  // cojesli: przeszły miesiąc przy zapisie → hint z dokładnym tekstem.
+  const past = Sim.SCENARIO_SPECS.cojesli.normalize({ month: '2026-05', amount: '100' }, scnCtx);
+  assertTrue(!past.ok && past.kind === 'hint', 'przeszły miesiąc = hint');
+  assertEq(past.msg, 'Wybierz bieżący lub przyszły miesiąc.');
+  // cojesli: pusta kwota → hint; zła kwota → error.
+  assertEq(Sim.SCENARIO_SPECS.cojesli.normalize({ month: '2027-03', amount: '' }, scnCtx).msg, 'Podaj kwotę, aby zobaczyć wpływ na datę FIRE.');
+  const badAmt = Sim.SCENARIO_SPECS.cojesli.normalize({ month: '2027-03', amount: 'abc' }, scnCtx);
+  assertTrue(!badAmt.ok && badAmt.kind === 'error', 'zła kwota = error');
+  assertEq(badAmt.msg, 'Nieprawidłowa kwota');
+  // wiek: ≤ obecny → hint z liczbą; puste pole → domyślny wiek.
+  const ageLow = Sim.SCENARIO_SPECS.wiek.normalize({ age: '20' }, scnCtx);
+  assertTrue(!ageLow.ok && ageLow.kind === 'hint');
+  assertEq(ageLow.msg, 'Podaj wiek większy niż Twój obecny (26).');
+  assertEq(Sim.SCENARIO_SPECS.wiek.normalize({ age: '' }, scnCtx).inputs.age, 45, 'puste → defaultAge');
+  assertEq(Sim.SCENARIO_SPECS.wiek.normalize({ age: '0' }, scnCtx).msg, 'Podaj docelowy wiek.');
+  // latte: pusta → hint; ≤0 → error.
+  assertEq(Sim.SCENARIO_SPECS.latte.normalize({ amount: '' }, scnCtx).msg, 'Podaj miesięczną kwotę, aby zobaczyć efekt.');
+  assertEq(Sim.SCENARIO_SPECS.latte.normalize({ amount: '0' }, scnCtx).msg, 'Podaj dodatnią kwotę.');
+  assertEq(Sim.SCENARIO_SPECS.latte.normalize({ amount: '450' }, scnCtx).inputs.amount, 450);
+  // wiecej: 0/pusty → hint.
+  assertEq(Sim.SCENARIO_SPECS.wiecej.normalize({ extra: 0 }, scnCtx).msg, 'Przesuń suwak, aby zobaczyć, o ile wcześniej osiągniesz FIRE.');
+  assertEq(Sim.SCENARIO_SPECS.wiecej.normalize({ extra: '1500' }, scnCtx).inputs.extra, 1500);
+  // zwrot: puste pole → baseReturn; wartość bezwzględna.
+  assertEq(Sim.SCENARIO_SPECS.zwrot.normalize({ realReturnAnnual: '' }, scnCtx).inputs.realReturnAnnual, 0.05, 'puste → baseReturn');
+  assertEq(Sim.SCENARIO_SPECS.zwrot.normalize({ realReturnAnnual: 0.055 }, scnCtx).inputs.realReturnAnnual, 0.055);
+  // kredyt: komplet komunikatów.
+  assertEq(Sim.SCENARIO_SPECS.kredyt.normalize({ principal: 'x', rate: '7', term: '25', extra: '' }, scnCtx).msg, 'Uzupełnij poprawnie wszystkie pola.');
+  assertEq(Sim.SCENARIO_SPECS.kredyt.normalize({ principal: '0', rate: '7', term: '25', extra: '' }, scnCtx).msg, 'Podaj dodatnią kwotę kredytu.');
+  assertEq(Sim.SCENARIO_SPECS.kredyt.normalize({ principal: '500000', rate: '-1', term: '25', extra: '' }, scnCtx).msg, 'Oprocentowanie nie może być ujemne.');
+  assertEq(Sim.SCENARIO_SPECS.kredyt.normalize({ principal: '500000', rate: '7', term: '0', extra: '' }, scnCtx).msg, 'Podaj okres kredytu w latach.');
+  assertEq(Sim.SCENARIO_SPECS.kredyt.normalize({ principal: '500000', rate: '7', term: '25', extra: '-5' }, scnCtx).msg, 'Podaj nadpłatę: 0 lub więcej.');
+  const kOk = Sim.SCENARIO_SPECS.kredyt.normalize({ principal: '500 000', rate: '7', term: '25', extra: '500' }, scnCtx);
+  assertTrue(kOk.ok && kOk.inputs.principal === 500000 && kOk.inputs.extra === 500);
+  // nadplata: ujemna → error; loan whitelisting.
+  assertEq(Sim.SCENARIO_SPECS.nadplata.normalize({ loan: 'family', extra: '-1' }, scnCtx).msg, 'Podaj nadpłatę: 0 lub więcej.');
+  assertEq(Sim.SCENARIO_SPECS.nadplata.normalize({ loan: 'coś', extra: '800' }, scnCtx).inputs.loan, 'mortgage', 'nieznany loan → mortgage');
+});
+
+test('F49e: describe — dokładne stringi z grupowaniem NBSP', () => {
+  assertEq(Sim.SCENARIO_SPECS.cojesli.describe({ month: '2027-03', amount: 2000, recurring: false }), `jednorazowo 2${NB}000${NB}zł w 03.2027`);
+  assertEq(Sim.SCENARIO_SPECS.cojesli.describe({ month: '2026-08', amount: 500, recurring: true }), `co miesiąc +500${NB}zł od 08.2026`);
+  assertEq(Sim.SCENARIO_SPECS.wiek.describe({ age: 45 }), 'wiek 45');
+  assertEq(Sim.SCENARIO_SPECS.latte.describe({ amount: 450 }), `450${NB}zł/mies.`);
+  assertEq(Sim.SCENARIO_SPECS.wiecej.describe({ extra: 1500 }), `+1${NB}500${NB}zł/mies.`);
+  assertEq(Sim.SCENARIO_SPECS.zwrot.describe({ realReturnAnnual: 0.055 }), 'zwrot 5,5%');
+  assertEq(Sim.SCENARIO_SPECS.kredyt.describe({ principal: 500000, ratePct: 7, termYears: 25, extra: 500 }), `500${NB}000${NB}zł · 7% · 25 lat · nadpłata 500${NB}zł/mies.`);
+  assertEq(Sim.SCENARIO_SPECS.nadplata.describe({ loan: 'mortgage', extra: 800 }), `kredyt 🏠 · nadpłata 800${NB}zł/mies.`);
+});
+
+test('F49f: readSnapshot — poprawny slot round-trip; śmieci → null; przeszły cojesli → stale', () => {
+  const scen = { wiecej: [{ savedAt: '2026-07-07T00:00:00.000Z', inputs: { extra: 1500 } }, null] };
+  const snap = Sim.readSnapshot(scen, 'wiecej', 0, scnCtx);
+  assertTrue(snap && snap.inputs.extra === 1500 && snap.stale === false, 'poprawny slot');
+  assertEq(snap.savedAt, '2026-07-07T00:00:00.000Z');
+  assertEq(Sim.readSnapshot(scen, 'wiecej', 1, scnCtx), null, 'slot B pusty → null');
+  // Uszkodzenia → null.
+  assertEq(Sim.readSnapshot({ wiecej: [{ inputs: { extra: NaN } }, null] }, 'wiecej', 0, scnCtx), null, 'NaN → null');
+  assertEq(Sim.readSnapshot({ wiecej: [{ savedAt: 'x' }, null] }, 'wiecej', 0, scnCtx), null, 'brak inputs → null');
+  assertEq(Sim.readSnapshot({ wiecej: 'x' }, 'wiecej', 0, scnCtx), null, 'nie-tablica zakładki → null');
+  assertEq(Sim.readSnapshot({}, 'wiecej', 0, scnCtx), null, 'brak zakładki → null');
+  // Przeterminowany cojesli: zwrócony z inputs, oznaczony stale.
+  const staleScen = { cojesli: [{ savedAt: 'x', inputs: { month: '2026-05', amount: 1000, recurring: false } }, null] };
+  const st = Sim.readSnapshot(staleScen, 'cojesli', 0, scnCtx);
+  assertTrue(st && st.stale === true, 'przeszły miesiąc → stale:true');
+  assertEq(st.inputs.month, '2026-05', 'inputs zachowane mimo stale');
+  // Przyszły cojesli: nie stale.
+  const fresh = { cojesli: [{ savedAt: 'x', inputs: { month: '2027-03', amount: 1000, recurring: false } }, null] };
+  assertEq(Sim.readSnapshot(fresh, 'cojesli', 0, scnCtx).stale, false, 'przyszły miesiąc → nie stale');
+  // Idempotencja: normalize na KANONICZNYCH wejściach (klucze ratePct/termYears,
+  // kwoty jako liczby) musi się udać — inaczej readSnapshot zwróciłby null i slot
+  // wyglądałby na pusty (regresja złapana testem przeglądarkowym).
+  const kSnap = { kredyt: [{ savedAt: 'x', inputs: { principal: 500000, ratePct: 7, termYears: 25, extra: 500 } }, null] };
+  const kRead = Sim.readSnapshot(kSnap, 'kredyt', 0, scnCtx);
+  assertTrue(kRead && kRead.inputs.ratePct === 7 && kRead.inputs.termYears === 25 && kRead.inputs.extra === 500, 'kredyt kanon round-trip');
+  // Kwota ułamkowa (grosze) w cojesli: String(2500.5) wpadłby w regułę kropki
+  // parsePLN → null; readAmount przepuszcza liczbę wprost.
+  const fracRead = Sim.readSnapshot({ cojesli: [{ savedAt: 'x', inputs: { month: '2027-03', amount: 2500.5, recurring: true } }, null] }, 'cojesli', 0, scnCtx);
+  assertTrue(fracRead && fracRead.inputs.amount === 2500.5, 'ułamkowa kwota round-trip');
+  // Ogólna idempotencja: normalize(normalize(raw).inputs).inputs === inputs.
+  for (const [tab, raw] of [
+    ['cojesli', { month: '2027-03', amount: '2 500,50', recurring: 1 }],
+    ['latte', { amount: '450' }],
+    ['kredyt', { principal: '500 000', rate: '7', term: '25', extra: '500' }],
+    ['nadplata', { loan: 'family', extra: '800' }],
+    ['wiek', { age: '48' }],
+  ]) {
+    const once = Sim.SCENARIO_SPECS[tab].normalize(raw, scnCtx);
+    assertTrue(once.ok, tab + ' pierwsza normalize ok');
+    const twice = Sim.SCENARIO_SPECS[tab].normalize(once.inputs, scnCtx);
+    assertTrue(twice.ok, tab + ' druga normalize ok');
+    assertEq(JSON.stringify(twice.inputs), JSON.stringify(once.inputs), tab + ' idempotentne');
+  }
+});
+
+test('F49g: mergeSeries — równe/nierówne długości (null padding), puste, czystość', () => {
+  const a = [{ ym: '2026-07', portfolio: 10 }, { ym: '2026-08', portfolio: 20 }];
+  const b = [{ ym: '2026-07', portfolio: 5 }, { ym: '2026-08', portfolio: 6 }, { ym: '2026-09', portfolio: 7 }];
+  const m = Sim.mergeSeries(a, b);
+  assertEq(m.length, 3, 'długość = max');
+  assertEq(JSON.stringify(m[0]), JSON.stringify({ ym: '2026-07', a: 10, b: 5 }));
+  assertEq(JSON.stringify(m[2]), JSON.stringify({ ym: '2026-09', a: null, b: 7 }), 'krótsza dopełniona null');
+  // yKey inne pole (nakładka kredytowa).
+  const la = [{ ym: '2026-07', val: 100 }], lb = [{ ym: '2026-07', val: 90 }, { ym: '2027-07', val: 40 }];
+  const lm = Sim.mergeSeries(la, lb, { yKey: 'val' });
+  assertEq(lm[1].a, null); assertEq(lm[1].b, 40);
+  // Puste wejścia.
+  assertEq(Sim.mergeSeries([], []).length, 0, 'oba puste → []');
+  assertEq(Sim.mergeSeries(null, null).length, 0, 'null → []');
+  // Czystość: tablice wejściowe nietknięte.
+  const aSnap = JSON.stringify(a), bSnap = JSON.stringify(b);
+  Sim.mergeSeries(a, b);
+  assertEq(JSON.stringify(a), aSnap, 'a nietknięte'); assertEq(JSON.stringify(b), bSnap, 'b nietknięte');
+});
+
+test('F49h: równoważność compute — wejścia scenariusza dają ten sam wynik co ścieżka na żywo (przez round-trip JSON)', () => {
+  const st = baseState();
+  // wiecej to suwak — wejście liczbowe (Number), grosze zaokrąglane.
+  const canon = Sim.SCENARIO_SPECS.wiecej.normalize({ extra: '1500' }, scnCtx).inputs;
+  assertEq(canon.extra, 1500, 'kanonizacja suwaka → 1500');
+  const rt = JSON.parse(JSON.stringify({ savedAt: '2026-07-07T00:00:00.000Z', inputs: canon }));
+  const viaSnap = E.projectionWith(st, { extraMonthlySavings: rt.inputs.extra }, NOW);
+  const viaLive = E.projectionWith(st, { extraMonthlySavings: 1500 }, NOW);
+  assertEq(viaSnap.fireYm, viaLive.fireYm, 'ta sama data FIRE po round-tripie');
+  assertEq(JSON.stringify(viaSnap.series), JSON.stringify(viaLive.series), 'identyczna seria');
+});
+
+test('F49i: niezależność pipeline — recomputeDerived identyczne dla scenarios:{} vs pełnych slotów', () => {
+  const bare = baseState();
+  E.recomputeDerived(bare, NOW);
+  const withScn = baseState();
+  withScn.scenarios = {
+    wiecej: [{ savedAt: 'x', inputs: { extra: 1500 } }, { savedAt: 'y', inputs: { extra: 3000 } }],
+    kredyt: [{ savedAt: 'z', inputs: { principal: 500000, ratePct: 7, termYears: 25, extra: 500 } }, null],
+  };
+  E.recomputeDerived(withScn, NOW);
+  assertEq(JSON.stringify(withScn.derived.projection.series), JSON.stringify(bare.derived.projection.series), 'seria projekcji bez zmian');
+  assertEq(JSON.stringify(withScn.derived.balances.rows), JSON.stringify(bare.derived.balances.rows), 'salda bez zmian');
+  assertEq(JSON.stringify(withScn.derived.streak), JSON.stringify(bare.derived.streak), 'seria dobrych miesięcy bez zmian');
+});
+
+test('F49j: round-trip storage — save/load i export/import zachowują scenarios; stripDerived je zostawia', () => {
+  const store = S.makeStorage(memBacking());
+  const st = baseState();
+  st.scenarios = { wiecej: [{ savedAt: '2026-07-07T00:00:00.000Z', inputs: { extra: 1500 } }, null] };
+  E.recomputeDerived(st, NOW); // dokłada derived (cache)
+  store.save(st);
+  const loaded = store.load().state;
+  assertEq(JSON.stringify(loaded.scenarios), JSON.stringify(st.scenarios), 'save/load zachowuje scenarios');
+  assertEq(loaded.derived, undefined, 'stripDerived usuwa cache, scenarios zostają');
+  // export → import.
+  const back = S.importJSON(S.exportJSON(st));
+  assertEq(JSON.stringify(back.scenarios), JSON.stringify(st.scenarios), 'export/import zachowuje scenarios');
   assertEq(back.version, S.SCHEMA_VERSION);
 });

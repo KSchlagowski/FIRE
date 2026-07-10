@@ -1,7 +1,7 @@
 // storage.js — localStorage z kopią .bak przed każdym zapisem, wersją schematu,
 // migracją i eksportem/importem. Backend wstrzykiwalny (testy w Node).
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 export const KEY = 'fireApp';
 export const BAK = 'fireApp.bak';
 export const APP_TAG = 'fire-companion';
@@ -64,6 +64,13 @@ export function validateState(s) {
       || !fin(ev.amount)) {
       throw new Error('Uszkodzone zdarzenie w planie');
     }
+  }
+  // Scenariusze Symulacji (od v11): lekka kontrola kształtu — NIE krytyczne dla
+  // ładowania (decyzja 5 planu). Zła zawartość slotu nie może zablokować startu;
+  // sloty rewalidowane defensywnie przy odczycie (Sim.readSnapshot). `!= null`
+  // przepuszcza kopie sprzed v11 (undefined) — walidacja biegnie PRZED migracją.
+  if (s.scenarios != null && (typeof s.scenarios !== 'object' || Array.isArray(s.scenarios))) {
+    throw new Error('Uszkodzona sekcja scenariuszy');
   }
   if (!s.housing) throw new Error('Brak sekcji mieszkaniowej');
   // Kształt planu domu, gdy włączony (pola, po których liczy replay/projekcja).
@@ -202,6 +209,14 @@ export function migrate(s) {
       cur.version = 10;
       // fall-through
     case 10:
+      // v10 → v11: zapisane scenariusze Symulacji (tylko wejścia, nigdy wyniki).
+      // Rzadka mapa tabKey → [slotA|null, slotB|null] — puste na start.
+      if (!cur.scenarios || typeof cur.scenarios !== 'object' || Array.isArray(cur.scenarios)) {
+        cur.scenarios = {};
+      }
+      cur.version = 11;
+      // fall-through
+    case 11:
       break;
     default:
       throw new Error(`Nieznana wersja schematu: ${cur.version}`);

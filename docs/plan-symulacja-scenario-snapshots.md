@@ -1,11 +1,20 @@
 # Plan: Scenario snapshots in Symulacja (2 saved configs per calculator)
 
-Status: proposed · Target version: **v1.14.0** · Schema bump: **v2 → v3**
+Status: **SHIPPED** (rebased) · Shipped version: **v1.33.0** · Schema bump:
+**v10 → v11** · Fixture group: **F49**
 
-> Version/schema collision note: `plan-planned-one-off-events.md` also targets
-> v1.14.0 / schema 3 / fixture group F27. Whichever plan ships first takes
-> those numbers; the other rebases to v1.15.0 / schema 4 / F28. The plans are
-> otherwise independent.
+> The codebase moved well past the originally-planned v1.14.0 / schema 3 / F27
+> (those were taken by later features). The feature shipped rebased onto the
+> current head: schema **v10 → v11**, version **v1.33.0**, fixture group **F49**.
+> Snapshots cover the 7 what-if tabs enumerated in the data model below
+> (`cojesli`, `wiek`, `latte`, `wiecej`, `zwrot`, `kredyt`, `nadplata`); the
+> three later retirement tabs (`emerytura`, `barista`, `krach`) are outside this
+> plan's scope and get no scenarios card. Two adaptations vs the text below:
+> `mergeSeries` emits rows keyed `ym` (what `chartSVG` consumes) rather than `x`,
+> and `normalize` is idempotent (accepts both raw-field and canonical keys) so
+> `readSnapshot`'s re-validation of stored inputs round-trips. Projection-tab
+> overlays run the series with `stopAtFire:false` so an earlier-FIRE scenario's
+> line doesn't cliff to zero.
 
 ## Goal
 
